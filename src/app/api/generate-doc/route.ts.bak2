@@ -1,0 +1,1025 @@
+import { NextRequest, NextResponse } from 'next/server';
+import type { MeetingSummary } from '@/types';
+import OpenAI from 'openai';
+
+export const runtime = 'nodejs';
+
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
+
+type DocType =
+  | 'prd'
+  | 'feature-list'
+  | 'screen-list'
+  | 'ia'
+  | 'wireframe'
+  | 'storyboard'
+  | 'user-story'
+  | 'wbs'
+  | 'api-spec'
+  | 'test-plan'
+  | 'deployment';
+
+const DOCUMENT_TITLES: Record<DocType, string> = {
+  prd: 'PRD (Product Requirements Document)',
+  'feature-list': '기능 목록 정의서',
+  'screen-list': '화면 목록 정의서',
+  ia: 'IA (정보구조도)',
+  wireframe: '와이어프레임 문서',
+  storyboard: 'SB (스토리보드)',
+  'user-story': '사용자 스토리 문서',
+  wbs: 'WBS (Work Breakdown Structure)',
+  'api-spec': 'API 명세서',
+  'test-plan': '테스트 계획서',
+  deployment: '배포 가이드',
+};
+
+async function generateDocument(
+  docType: DocType,
+  summary: MeetingSummary,
+  transcript: string,
+  meetingInfo: { title: string; date: string }
+): Promise<string> {
+  const prompt = getPromptForDocType(docType, summary, transcript, meetingInfo);
+
+  try {
+    const response = await openai.chat.completions.create({
+      model: 'gpt-4o',
+      messages: [{ role: 'user', content: prompt }],
+      max_tokens: 16384,
+    });
+
+    return response.choices[0]?.message?.content || '';
+  } catch (error) {
+    console.error('OpenAI API 오류:', error);
+    return getMockDoc(docType, summary, meetingInfo);
+  }
+}
+
+function getPromptForDocType(
+  docType: DocType,
+  summary: MeetingSummary,
+  transcript: string,
+  meetingInfo: { title: string; date: string }
+): string {
+  const baseInfo = `
+## 회의 정보
+- 제목: ${meetingInfo.title}
+- 날짜: ${meetingInfo.date}
+
+## 회의 요약
+- 개요: ${summary.overview}
+- 핵심 사항: ${summary.keyPoints.join(', ')}
+- 의사결정: ${summary.decisions.join(', ')}
+`;
+
+  if (docType === 'wireframe') {
+    return `당신은 UI/UX 디자이너입니다. 다음 회의 내용을 바탕으로 **상세한 와이어프레임 문서**를 작성해주세요.
+
+${baseInfo}
+
+## 원본 회의 내용 (분석 대상)
+${transcript}
+
+---
+
+## 작성 가이드
+
+**중요**: 위 회의 내용에서 실제 논의된 화면, 기능, 요소들을 **추출**하여 작성하세요.
+회의 내용에 없는 내용을 지어내지 말고, 논의된 내용을 바탕으로 구조화하세요.
+
+### 1. 화면 구성도 (Screen Map)
+회의에서 논의된 화면들을 표로 정리하세요:
+| 화면ID | 화면명 | 목적 | 주요 기능 |
+
+### 2. 사용자 플로우 (User Flow)
+회의에서 논의된 주요 시나리오를 Mermaid flowchart로 표현하세요:
+\`\`\`mermaid
+flowchart TD
+    A[시작] --> B[첫 번째 화면]
+    ...
+\`\`\`
+
+### 3. 주요 화면 상세
+각 화면별로 회의에서 언급된 요소들을 배치하세요:
+
+#### 3.1 [화면명]
+- **목적**: 화면의 용도
+- **레이아웃**:
+  - 헤더: (구체적 요소)
+  - 본문: (구체적 요소)
+  - 사이드바/풋터: (구체적 요소)
+- **주요 요소**: 버튼, 입력폼, 카드 등
+- **상태별 UI**: normal, hover, active, disabled, error, empty
+
+### 4. 컴포넌트 명세
+\`\`\`
+App
+├── Layout (Header, Sidebar, Footer)
+├── [페이지1]
+│   └── [컴포넌트들]
+└── [페이지2]
+\`\`\`
+
+### 5. 디자인 시스템
+- 색상: Primary, Secondary, Success, Warning, Error (구체적 hex 코드 추천)
+- 타이포그래피: 제목, 본문, 캡션 (폰트 사이즈 포함)
+- 간격: 4px, 8px, 16px, 24px, 32px 기준
+- 라운드: sm(4px), md(8px), lg(12px)
+- 그림자: elevation 단계별
+
+### 6. 반응형 대응
+- Desktop (1280px+)
+- Tablet (768px - 1279px)
+- Mobile (< 768px)
+
+회의 내용을 바탕으로 구체적이고 실제 개발에 바로 사용할 수 있도록 작성하세요.`;
+  }
+
+  if (docType === 'user-story') {
+    return `당신은 애자일 코치입니다. 다음 회의 내용을 바탕으로 **사용자 스토리 문서**를 작성해주세요.
+
+${baseInfo}
+
+## 원본 회의 내용 (분석 대상)
+${transcript}
+
+---
+
+## 작성 가이드
+
+**중요**: 위 회의 내용에서 실제 논의된 기능, 사용자 유형, 시나리오를 **추출**하여 작성하세요.
+회의 내용에 없는 내용을 지어내지 말고, 논의된 내용을 바탕으로 구조화하세요.
+
+### 1. 사용자 페르소나 정의
+회의에서 언급된 타겟 사용자별로 정의:
+
+#### 페르소나 1: [이름]
+- **인구통계**: 연령, 성별, 직업
+- **기술 수준**: 높음/중간/낮음
+- **목표**: 사용자가 달성하고자 하는 것
+- **페인 포인트**: 현재 겪고 있는 문제
+- **동기**: 왜 이 서비스를 이용하는가
+
+### 2. 에픽 (Epic)
+회의에서 논의된 기능들을 그룹화하여 대규모 에픽으로 정의:
+
+#### Epic 1: [에픽명]
+- **설명**: 에픽의 목적과 범위
+- **관련 스토리**: US-XXX, US-XXX
+
+### 3. 사용자 스토리 (User Story)
+각 기능별로 Given-When-Then 형식으로 작성:
+
+#### US-001: [스토리명]
+- **As a** [사용자 페르소나]
+- **I want** [원하는 행동/기능]
+- **So that** [얻고자 하는 가치/목적]
+
+**수용 조건 (Acceptance Criteria):**
+- **Given** [전제 조건]
+- **When** [행동]
+- **Then** [기대 결과]
+- **And** [추가 조건]
+
+### 4. 스토리 포인트
+복잡도 기반 추정 (1, 2, 3, 5, 8, 13)
+
+### 5. 우선순위
+- **P0 (Must-have)**: MVP 필수
+- **P1 (Should-have)**: 초기 릴리스 포함
+- **P2 (Nice-to-have)**: 이후 릴리스
+
+### 6. 사용자 시나리오 (User Journey)
+주요 사용자 경로 단계별 매핑:
+1. [단계1] → 2. [단계2] → 3. [단계3]`;
+  }
+
+  if (docType === 'api-spec') {
+    return `당신은 백엔드 아키텍트입니다. 다음 회의 내용을 바탕으로 **API 명세서**를 작성해주세요.
+
+${baseInfo}
+
+## 원본 회의 내용 (분석 대상)
+${transcript}
+
+---
+
+## 작성 가이드
+
+**중요**: 위 회의 내용에서 실제 논의된 기능, 데이터, 엔티티를 **추출**하여 API를 설계하세요.
+회의 내용에 없는 내용을 지어내지 말고, 논의된 기능을 바탕으로 API를 구조화하세요.
+
+### 1. API 개요
+- **목적**: 회의에서 논의된 기능을 위한 API 설계
+- **Base URL**: \`https://api.example.com/v1\`
+- **인증 방식**: Bearer Token (JWT) / API Key / Session Cookie
+- **데이터 포맷**: JSON
+
+### 2. 엔드포인트 목록
+회의에서 논의된 기능별로 엔드포인트 정의:
+
+| Method | Path | 설명 | 인증 |
+|--------|------|------|------|
+| GET | /api/resources | 리소스 목록 조회 | O |
+| POST | /api/resources | 리소스 생성 | O |
+| GET | /api/resources/:id | 리소스 상세 조회 | O |
+| PUT | /api/resources/:id | 리소스 수정 | O |
+| DELETE | /api/resources/:id | 리소스 삭제 | O |
+
+### 3. 상세 명세
+
+#### 3.1 리소스 목록 조회
+**GET** \`/api/resources\`
+
+**Query Parameters:**
+| 파라미터 | 타입 | 필수 | 설명 |
+|---------|------|------|------|
+| page | number | X | 페이지 번호 (기본값: 1) |
+| limit | number | X | 페이지 크기 (기본값: 20) |
+| sort | string | X | 정렬 기준 |
+
+**Response (200 OK):**
+\`\`\`json
+{
+  "success": true,
+  "data": [...],
+  "pagination": {
+    "page": 1,
+    "limit": 20,
+    "total": 100
+  }
+}
+\`\`\`
+
+**Error Response:**
+\`\`\`json
+{
+  "success": false,
+  "error": {
+    "code": "INVALID_PARAMS",
+    "message": "잘못된 파라미터입니다"
+  }
+}
+\`\`\`
+
+#### 3.2 리소스 생성
+**POST** \`/api/resources\`
+
+**Request Body:**
+\`\`\`json
+{
+  "name": "string",
+  "description": "string",
+  "options": {}
+}
+\`\`\`
+
+**Response (201 Created):**
+\`\`\`json
+{
+  "success": true,
+  "data": {
+    "id": "uuid",
+    "name": "string",
+    "createdAt": "2024-01-01T00:00:00Z"
+  }
+}
+\`\`\`
+
+### 4. 데이터 모델
+
+#### Resource
+\`\`\`typescript
+interface Resource {
+  id: string;        // UUID
+  name: string;      // 이름
+  description?: string; // 설명
+  status: 'active' | 'inactive';
+  createdAt: Date;
+  updatedAt: Date;
+}
+\`\`\`
+
+### 5. 에러 코드
+| 코드 | 설명 | 해결 방법 |
+|------|------|----------|
+| 400 | 잘못된 요청 | 파라미터 확인 |
+| 401 | 인증 실패 | 토큰 갱신 |
+| 403 | 권한 없음 | 권한 확인 |
+| 404 | 리소스 없음 | 경로 확인 |
+| 409 | 중복 데이터 | 이미 존재하는 데이터 확인 |
+| 500 | 서버 오류 | 잠시 후 다시 시도 |
+
+회의에서 논의된 실제 데이터 구조와 기능을 바탕으로 작성하세요.`;
+  }
+
+  if (docType === 'test-plan') {
+    return `당신은 QA 리드입니다. 다음 회의 내용을 바탕으로 **테스트 계획서**를 작성해주세요.
+
+${baseInfo}
+
+## 원본 회의 내용 (분석 대상)
+${transcript}
+
+---
+
+## 작성 가이드
+
+**중요**: 위 회의 내용에서 실제 논의된 기능을 **추출**하여 테스트 시나리오를 작성하세요.
+회의 내용에 없는 내용을 지어내지 말고, 논의된 기능을 바탕으로 테스트를 설계하세요.
+
+### 1. 테스트 개요
+- **테스트 목표**: 회의에서 논의된 기능의 품질 보증
+- **테스트 범위**: [논의된 기능 목록]
+- **테스트 기간**: X주 (개발 기간의 30%)
+- **테스트 리드**: [담당자]
+
+### 2. 테스트 전략
+| 테스트 유형 | 도구 | 담당자 | 비고 |
+|-------------|------|---------|------|
+| 단위 테스트 | Jest, Vitest | 개발자 | 커버리지 80% 목표 |
+| 통합 테스트 | Supertest | 개발자 | API 연계 |
+| E2E 테스트 | Playwright, Cypress | QA | 주요 시나리오 |
+| 성능 테스트 | k6 | QA | 부하 테스트 |
+| 보안 테스트 | OWASP ZAP | 보안 | 취약점 점검 |
+
+### 3. 테스트 시나리오
+회의에서 논의된 각 기능별 테스트 케이스:
+
+| TC-ID | 기능 | 시나리오 | 전제 조건 | 테스트 단계 | 기대 결과 | 우선순위 |
+|-------|------|----------|-----------|-----------|-----------|----------|
+| TC-001 | [기능명] | [시나리오] | [조건] | [단계] | [결과] | P0 |
+
+**TC-001 예시:**
+- **기능**: 로그인
+- **시나리오**: 정상적인 아이디/비밀번호로 로그인
+- **전제 조건**: 회원가입 완료된 계정 존재
+- **테스트 단계**:
+  1. 로그인 페이지 접속
+  2. 아이디/비밀번호 입력
+  3. 로그인 버튼 클릭
+- **기대 결과**: 메인 화면으로 이동, 사용자 정보 표시
+- **우선순위**: P0
+
+### 4. 단위 테스트 계획
+- **컴포넌트 테스트**: UI 컴포넌트 별 테스트
+- **비즈니스 로직 테스트**: 핵심 로직 테스트
+- **커버리지 목표**: 80% 이상
+
+### 5. 통합 테스트 계획
+- **API 연계 테스트**: 프론트엔드 ↔ 백엔드
+- **DB 연계 테스트**: 데이터 CRUD 정상 동작
+- **외부 서비스 연계**: 결제, 알림 등
+
+### 6. E2E 테스트 계획
+주요 사용자 시나리오:
+1. [시나리오 1]: 회원가입 → 로그인 → 첫 이용
+2. [시나리오 2]: [회의에서 논의된 주요 흐름]
+
+### 7. 성능 테스트
+- **응답 시간 목표**: API < 200ms (p95)
+- **동시 사용자**: 1000명 동시 접속
+- **부하 테스트**: 1분간 100 req/s
+
+### 8. 테스트 일정
+| 단계 | 기간 | 담당자 | 비고 |
+|------|------|--------|------|
+| 테스트 계획 | 1주 | QA 리드 | |
+| 테스트 케이스 작성 | 1주 | QA | |
+| 단위/통합 테스트 | 개발 병행 | 개발자 | |
+| E2E 테스트 | 1주 | QA | |
+| 성능 테스트 | 3일 | QA | |
+
+### 9. 입수 기준 (Definition of Done)
+- [ ] 모든 P0 테스트 케이스 통과
+- [ ] 버그 0개 (P0, P1)
+- [ ] 커버리지 80% 이상
+- [ ] 성능 기준 충족
+- [ ] 보안 점검 완료`;
+  }
+
+  if (docType === 'deployment') {
+    return `당신은 DevOps 엔지니어입니다. 다음 회의 내용을 바탕으로 **배포 가이드**를 작성해주세요.
+
+${baseInfo}
+
+## 원본 회의 내용 (분석 대상)
+${transcript}
+
+---
+
+## 작성 가이드
+
+**중요**: 위 회의 내용에서 논의된 기술 스택, 인프라, 환경을 **반영**하여 작성하세요.
+
+### 1. 배포 개요
+- **프로젝트**: ${meetingInfo.title}
+- **배포 환경**:
+  - **Development**: 로컬 개발 환경
+  - **Staging**: 사전 테스트 환경 (staging.example.com)
+  - **Production**: 운영 환경 (app.example.com)
+- **배포 전략**: Blue-Green 배포 (무중단 배포)
+- **배포 주기**: 주 1회 정기 배포 (핫픽스 제외)
+
+### 2. 사전 요구사항
+
+#### 서버 사양
+| 환경 | CPU | 메모리 | 디스크 | 비고 |
+|------|-----|--------|--------|------|
+| Staging | 2 Core | 4GB | 40GB | 테스트용 |
+| Production | 4 Core | 8GB | 100GB | 운영용 |
+
+#### 소프트웨어 요구사항
+- **Node.js**: v18 이상
+- **npm**: v9 이상
+- **Git**: 버전 관리
+
+#### 외부 서비스
+- **데이터베이스**: PostgreSQL / MongoDB (회의 내용 반영)
+- **CDN**: Cloudflare / AWS CloudFront
+- **Storage**: AWS S3 / Firebase Storage
+
+#### 환경 변수 목록
+\`\`\`bash
+# API
+API_URL=https://api.example.com
+API_KEY=your-api-key
+
+# Database
+DATABASE_URL=postgresql://user:pass@host:5432/dbname
+
+# Auth
+JWT_SECRET=your-secret-key
+JWT_EXPIRES_IN=7d
+
+# OAuth
+GITHUB_CLIENT_ID=xxx
+GITHUB_CLIENT_SECRET=xxx
+
+# 외부 서비스
+AWS_S3_BUCKET=your-bucket
+AWS_ACCESS_KEY=xxx
+AWS_SECRET_KEY=xxx
+\`\`\`
+
+### 3. 빌드 절차
+\`\`\`bash
+# 1. 최신 코드 가져오기
+git pull origin main
+
+# 2. 의존성 설치
+npm ci
+
+# 3. 환경 변수 설정
+cp .env.example .env.production
+# .env.production에 실제 값 입력
+
+# 4. 타입 체크
+npm run type-check
+
+# 5. 테스트
+npm run test
+
+# 6. 빌드
+npm run build
+
+# 7. 빌드 결과 확인
+ls -la .next
+\`\`\`
+
+### 4. 배포 절차
+
+#### Vercel 배포 (권장)
+\`\`\`bash
+# Vercel CLI 설치
+npm i -g vercel
+
+# 프로젝트 연결
+vercel link
+
+# Staging 배포
+vercel
+
+# Production 배포
+vercel --prod
+\`\`\`
+
+### 5. 배포 후 점검 Checklist
+- [ ] 서비스 상태 확인 (\`curl https://app.example.com/api/health\`)
+- [ ] 헬스 체크 API 정상 응답
+- [ ] 주요 기능 동작 테스트
+- [ ] 로그 확인 (에러 없는지)
+- [ ] 모니터링 대시보드 확인
+- [ ] 알림 설정 동작 확인
+
+### 6. 롤백 절차
+\`\`\`bash
+# Vercel 롤백
+vercel rollback
+
+# 이전 버전 지정
+vercel rollback <deployment-url>
+\`\`\`
+
+### 7. 모니터링
+
+#### 모니터링 항목
+- **서버**: CPU, 메모리, 디스크 사용량
+- **애플리케이션**: 응답 시간, 에러율, 트래픽
+- **비즈니스**: DAU, PV, 전환율
+
+#### 알림 조건
+- **Critical**: 서버 다운, 에러율 5% 이상
+- **Warning**: 응답 시간 2초 이상, 디스크 80% 이상
+
+### 8. 유지보수
+- **정기 점검**: 월 1회 (로그, 성능, 보안)
+- **백업**: 매일 새벽 2시간 (DB 전체 백업)
+- **보안 패치**: 취약점 발견 시 즉시 적용`;
+  }
+
+  // Default: PRD
+  return `당신은 시니어 기획자입니다. 다음 회의 내용을 바탕으로 **상세한 PRD**를 작성해주세요.
+
+${baseInfo}
+
+## 원본 회의 내용 (분석 대상)
+${transcript}
+
+---
+
+## 작성 가이드
+
+**중요**: 위 회의 내용에서 실제 논의된 비즈니스, 사용자, 기능을 **추출**하여 구조화하세요.
+회의 내용에 없는 내용을 지어내지 말고, 논의된 내용을 바탕으로 작성하세요.
+
+## PRD 구조
+
+### 1. 문서 정보
+- **PRD 버전**: v1.0
+- **작성일**: ${meetingInfo.date}
+- **작성자**: [작성자]
+- **검토자**: [검토자]
+- **변경 이력**:
+  - v1.0: 초기 작성 (${meetingInfo.date})
+
+### 2. 개요 (Executive Summary)
+
+#### 2.1 프로젝트 배경 및 동기
+회의에서 논의된 프로젝트 배경과 시작 동기를 상세히 기술하세요.
+
+#### 2.2 비즈니스 문제 정의
+현재 해결하려는 비즈니스 문제를 명확히 정의하세요.
+
+#### 2.3 해결 방안 개요
+제품/서비스를 통해 어떻게 문제를 해결할지 기술하세요.
+
+#### 2.4 기대 효과 및 성공 지표 (KPI)
+| 지표 | 현재 | 목표 | 측정 시점 |
+|------|------|------|----------|
+| 사용자 수 | - | X명 | X개월 후 |
+| 전환율 | - | X% | X개월 후 |
+
+### 3. 문제 정의 (Problem Statement)
+
+#### 3.1 현재 문제 상황
+사용자가 현재 겪고 있는 구체적인 문제를 기술하세요.
+
+#### 3.2 사용자 페인 포인트
+- **페인 포인트 1**: [구체적 내용]
+- **페인 포인트 2**: [구체적 내용]
+
+#### 3.3 시장 분석 및 경쟁사 현황
+유사 제품/서비스와의 차별점을 기술하세요.
+
+### 4. 목표 (Goals)
+
+#### 4.1 비즈니스 목표
+- 목표 1: [구체적 목표]
+- 목표 2: [구체적 목표]
+
+#### 4.2 사용자 경험 목표
+- 목표 1: [구체적 목표]
+- 목표 2: [구체적 목표]
+
+#### 4.3 기술적 목표
+- 목표 1: [구체적 목표]
+- 목표 2: [구체적 목표]
+
+#### 4.4 성공 지표 (SMART)
+| 지표 | 구체적(S) | 측정가능(M) | 달성가능(A) | 관련성(R) | 시한(T) |
+|------|-----------|-------------|-------------|-----------|---------|
+
+### 5. 타겟 사용자 (Target Audience)
+
+#### 5.1 사용자 페르소나
+
+#### 페르소나 1: [이름]
+- **인구통계**: 연령, 성별, 직업, 지역
+- **기술 수준**: 높음/중간/낮음
+- **목표**: 사용자가 달성하고자 하는 것
+- **페인 포인트**: 현재 겪는 문제
+- **동기**: 왜 이 서비스를 이용하는가
+
+#### 5.2 사용자 시나리오 (User Journey)
+1. [단계1] → 2. [단계2] → 3. [단계3]
+
+### 6. 기능 요구사항 (Functional Requirements)
+
+#### 6.1 핵심 기능 (Must-Have) - P0
+회의에서 논의된 필수 기능을 상세히 기술하세요:
+
+**기능 1: [기능명]**
+- **설명**: 기능의 목적과 동작
+- **상세 요구사항**:
+  - 요구사항 1
+  - 요구사항 2
+
+#### 6.2 추가 기능 (Should-Have) - P1
+
+#### 6.3 향후 기능 (Nice-to-Have) - P2
+
+#### 6.4 비기능 요구사항
+- **성능**: API 응답 시간 < 200ms (p95)
+- **보안**: JWT 인증, HTTPS, 데이터 암호화
+- **확장성**: 동시 사용자 1,000명 지원
+- **호환성**: iOS 15+, Android 12+, Chrome 최신 버전
+
+### 7. 기술 요구사항
+
+#### 7.1 기술 스택 상세
+| 영역 | 기술 | 사유 |
+|------|------|------|
+| 프론트엔드 | React, Next.js | SSR, SEO 최적화 |
+| 백엔드 | Node.js, Express | 빠른 개발, 생태계 |
+| 데이터베이스 | PostgreSQL | 안정성, ACID |
+| 인프라 | Vercel, AWS | 무중단 배포 |
+
+#### 7.2 아키텍처 다이어그램
+\`\`\`mermaid
+graph TD
+    A[User] -->|HTTPS| B[Load Balancer]
+    B --> C[Next.js Server]
+    C -->|API Call| D[Node.js API]
+    C -->|SSR| D
+    D -->|Query| E[(PostgreSQL)]
+    D -->|Upload| F[AWS S3]
+\`\`\`
+
+#### 7.3 데이터베이스 설계
+주요 테이블과 관계를 기술하세요.
+
+#### 7.4 API 설계
+| Method | Path | 설명 |
+|--------|------|------|
+| GET | /api/resources | 목록 조회 |
+| POST | /api/resources | 생성 |
+
+### 8. UI/UX 가이드라인
+
+#### 8.1 디자인 원칙
+- **간결성**: 최소한의 클릭으로 목적 달성
+- **일관성**: 전체 화면 동일한 패턴 사용
+- **피드백**: 모든 동작에 즉시 피드백 제공
+
+#### 8.2 와이어프레임 개요
+주요 화면별 구성을 기술하세요.
+
+### 9. 릴리스 계획
+| 단계 | 버전 | 기능 | 기간 | 담당자 |
+|------|------|------|------|--------|
+| 1단계 | v0.1 | [핵심 기능] | X주 | - |
+| 2단계 | v0.5 | [추가 기능] | X주 | - |
+| 3단계 | v1.0 | [정식 릴리스] | X주 | - |
+
+### 10. 리스크 및 대응
+| 리스크 | 영향도 | 발생확률 | 대응 방안 | 담당자 |
+|--------|--------|----------|----------|--------|
+| [리스크 1] | 높음 | 중간 | [대응] | - |
+
+### 11. 성공 기준
+- [ ] P0 기능 100% 구현
+- [ ] 성능 기준 충족
+- [ ] 보안 점검 통과
+- [ ] 베타 테스터 N명 만족도 80% 이상
+
+### 12. 부록
+- 참고 자료
+- 관련 문서 링크`;
+}
+}
+
+function getMockDoc(docType: DocType, summary: MeetingSummary, meetingInfo: { title: string; date: string }): string {
+  const title = DOCUMENT_TITLES[docType];
+  const baseInfo = `# ${title}
+
+> 작성일: ${meetingInfo.date}
+> 회의: ${meetingInfo.title}
+
+---`;
+
+  if (docType === 'prd') {
+    return `${baseInfo}
+
+## 1. 개요
+${summary.overview}
+
+## 2. 핵심 기능
+${summary.keyPoints.map((p, i) => `${i + 1}. ${p}`).join('\n')}
+
+## 3. 의사결정
+${summary.decisions.map((d, i) => `${i + 1}. ${d}`).join('\n')}
+
+## 4. Action Items
+${summary.actionItems.map((a, i) => `${i + 1}. **${a.task}** (${a.assignee || '미정'}) [${a.priority || 'medium'}]${a.deadline ? ` - ${a.deadline}` : ''}`).join('\n')}
+
+---
+
+*이 문서는 회의 녹음을 바탕으로 AI가 자동 생성했습니다.*`;
+  }
+
+  if (docType === 'wireframe') {
+    return `${baseInfo}
+
+## 1. 화면 구성도
+
+| 화면 | 설명 |
+|------|------|
+| 대시보드 | 주요 데이터 시각화 |
+| 설정 | 사용자 설정 및 환경 설정 |
+| 상세 | 데이터 상세 보기 |
+
+## 2. 사용자 플로우
+
+\`\`\`mermaid
+flowchart TD
+    A[시작] --> B[로그인]
+    B --> C[대시보드]
+    C --> D[데이터 조회]
+    D --> E[필터 적용]
+    E --> F[결과 표시]
+\`\`\`
+
+## 3. 주요 화면
+
+### 대시보드
+- 헤더: 로고, 사용자 정보
+- 사이드바: 네비게이션
+- 메인: 위젯 영역
+- 실시간 데이터 업데이트
+
+### 설정 화면
+- 계정 정보
+- 알림 설정
+- 테마 설정
+
+## 4. 컴포넌트 구조
+\`\`\`
+App
+├── Layout
+│   ├── Header
+│   ├── Sidebar
+│   └── Footer
+├── Dashboard
+│   ├── WidgetContainer
+│   ├── Chart
+│   └── DataTable
+└── Settings
+\`\`\`
+
+## 5. 디자인 시스템
+- Primary: #3B82F6
+- Secondary: #64748B
+- Success: #10B981
+- Warning: #F59E0B
+- Error: #EF4444
+
+## 6. 반응형
+- Desktop: 1280px+
+- Tablet: 768px - 1279px
+- Mobile: < 768px`;
+  }
+
+  if (docType === 'user-story') {
+    return `${baseInfo}
+
+## 사용자 페르소나
+
+### 1. 데이터 분석가
+- 직군: 데이터 분석가
+- 목표: 실시간 데이터 모니터링
+- 기술 수준: 높음
+- 페인 포인트: 데이터 로딩 지연
+
+### 2. 경영진
+- 직군: 경영진
+- 목표: KPI 확인
+- 기술 수준: 낮음
+- 페인 포인트: 복잡한 리포트
+
+## 에픽
+
+### Epic 1: 실시간 대시보드
+사용자가 실시간으로 변하는 데이터를 모니터링할 수 있다.
+
+## 사용자 스토리
+
+### US-001: 대시보드 조회
+**As a** 데이터 분석가
+**I want** 실시간으로 업데이트되는 대시보드를 보고 싶다
+**So that** 즉시 데이터 변화를 감지하고 대응할 수 있다
+
+**Acceptance Criteria:**
+- **Given** 사용자가 로그인되어 있고
+- **When** 대시보드 화면에 접속하면
+- **Then** 1초 이내에 최신 데이터가 표시되어야 한다
+
+### US-002: 위젯 커스터마이징
+**As a** 데이터 분석가
+**I want** 위젯을 드래그하여 배치하고 싶다
+**So that** 내가 원하는 대로 화면을 구성할 수 있다
+
+**Acceptance Criteria:**
+- **Given** 사용자가 편집 모드이고
+- **When** 위젯을 드래그하면
+- **Then** 위젯이 새 위치에 배치되고 저장되어야 한다
+
+## 스토리 포인트
+- US-001: 3포인트
+- US-002: 5포인트
+
+## 우선순위
+- P0: US-001, US-002`;
+  }
+
+  if (docType === 'api-spec') {
+    return `${baseInfo}
+
+## 1. API 개요
+- 기본 URL: \`https://api.example.com/v1\`
+- 인증: Bearer Token (JWT)
+
+## 2. 엔드포인트 목록
+
+### 2.1 대시보드
+
+#### GET /api/dashboard
+대시보드 데이터 조회
+
+**Request Headers:**
+\`\`\`
+Authorization: Bearer <token>
+\`\`\`
+
+**Response (200 OK):**
+\`\`\`json
+{
+  "widgets": [...],
+  "summary": {...}
+}
+\`\`\`
+
+#### POST /api/widgets
+위젯 생성
+
+**Request Body:**
+\`\`\`json
+{
+  "type": "chart",
+  "title": "매출 추이",
+  "dataSource": "sales"
+}
+\`\`\`
+
+### 2.2 사용자
+
+#### GET /api/users/me
+현재 사용자 정보
+
+## 3. 에러 코드
+| 코드 | 설명 |
+|------|------|
+| 400 | 잘못된 요청 |
+| 401 | 인증 실패 |
+| 403 | 권한 없음 |
+| 404 | 리소스 없음 |
+| 500 | 서버 오류 |`;
+  }
+
+  if (docType === 'test-plan') {
+    return `${baseInfo}
+
+## 1. 테스트 개요
+- 목적: 신규 대시보드 기능 품질 보증
+- 범위: 전체 기능
+- 기간: 4주
+
+## 2. 테스트 시나리오
+
+| TC-ID | 시나리오 | 전제 조건 | 테스트 단계 | 기대 결과 | 우선순위 |
+|-------|----------|-----------|-----------|-----------|----------|
+| TC-001 | 대시보드 접속 | 로그인 완료 | 대시보드 메뉴 클릭 | 대시보드 표시 | P0 |
+| TC-002 | 위젯 드래그 | 위젯 2개 존재 | 위젯 드래그 이동 | 위치 변경됨 | P0 |
+| TC-003 | 실시간 업데이트 | 웹소켓 연결 | 데이터 변경 | 1초 내 반영 | P0 |
+
+## 3. 단위 테스트
+- 컴포넌트별 테스트
+- 커버리지 목표: 80%
+
+## 4. 통합 테스트
+- API 연계 테스트
+- 데이터 흐름 테스트
+
+## 5. E2E 테스트
+- Cypress로 주요 시나리오 자동화
+
+## 6. 입수 기준
+- 모든 P0 테스트 케이스 통과
+- 버그 0개
+- 성능 기준 충족`;
+  }
+
+  if (docType === 'deployment') {
+    return `${baseInfo}
+
+## 1. 배포 환경
+- **Staging**: staging.example.com
+- **Production**: app.example.com
+
+## 2. 사전 요구사항
+- **Node.js**: v18 이상
+- **메모리**: 2GB 이상
+- **디스크**: 20GB 이상
+
+## 3. 환경 변수
+\`\`\`bash
+NODE_ENV=production
+API_URL=https://api.example.com
+DATABASE_URL=postgresql://...
+JWT_SECRET=your-secret-key
+\`\`\`
+
+## 4. 빌드 절차
+\`\`\`bash
+# 1. 의존성 설치
+npm ci
+
+# 2. 빌드
+npm run build
+
+# 3. 빌드 결과 확인
+ls -la .next
+\`\`\`
+
+## 5. 배포 절차 (Vercel)
+\`\`\`bash
+# Vercel CLI 설치
+npm i -g vercel
+
+# 배포
+vercel --prod
+\`\`\`
+
+## 6. 배포 후 점검
+- [ ] 서비스 상태 확인
+- [ ] 헬스 체크: \`curl https://app.example.com/api/health\`
+- [ ] 로그 확인: \`vercel logs\`
+
+## 7. 롤백 절차
+\`\`\`bash
+# 이전 버전으로 롤백
+vercel rollback
+\`\`\`
+
+## 8. 모니터링
+- Vercel Analytics
+- Sentry (에러 추적)`;
+  }
+
+  return baseInfo;
+}
+
+export async function POST(request: NextRequest) {
+  try {
+    const { docType, summary, transcript, meetingInfo } = await request.json();
+
+    if (!docType || !summary || !meetingInfo) {
+      return NextResponse.json(
+        { error: 'docType, summary, meetingInfo가 필요합니다.' },
+        { status: 400 }
+      );
+    }
+
+    const content = await generateDocument(docType, summary, transcript || '', meetingInfo);
+
+    return NextResponse.json({ content });
+  } catch (error) {
+    console.error('Generate doc API 오류:', error);
+    return NextResponse.json(
+      { error: '문서 생성에 실패했습니다.' },
+      { status: 500 }
+    );
+  }
+}

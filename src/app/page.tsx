@@ -1,65 +1,383 @@
-import Image from "next/image";
+'use client';
+
+import { useState, useRef, useEffect } from 'react';
+import { Mic, Square, Play, Pause, Upload, FileText, Download, FileUp, FolderOpen, X, Plus } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Progress } from '@/components/ui/progress';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Badge } from '@/components/ui/badge';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { useRecorder } from '@/hooks/useRecorder';
+import { useMeetingStore } from '@/store/meetingStore';
+import { MeetingStep } from '@/types';
+import MeetingRecorder from '@/components/MeetingRecorder';
+import TranscriptViewer from '@/components/TranscriptViewer';
+import SummaryViewer from '@/components/SummaryViewer';
+import PrdViewer from '@/components/PrdViewer';
+import { ProjectList } from '@/components/ProjectList';
+import { DateFormat } from '@/components/DateFormat';
 
 export default function Home() {
+  const { currentMeeting, currentStep, createMeeting, updateCurrentMeeting, updateMeetingStep, meetings, setCurrentMeeting } = useMeetingStore();
+  const [meetingTitle, setMeetingTitle] = useState('');
+  const [mounted, setMounted] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [showProjectList, setShowProjectList] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  // 페이지 이탈 방지 (파일 업로드 중)
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (uploading) {
+        const message = '파일 처리 중입니다. 페이지를 나가시면 처리가 취소됩니다.';
+        e.preventDefault();
+        e.returnValue = message;
+        return message;
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [uploading]);
+
+  const handleTabChange = (value: string) => {
+    if (currentMeeting) {
+      updateMeetingStep(value as MeetingStep);
+    }
+  };
+
+  const handleStartMeeting = () => {
+    const title = meetingTitle.trim() || `회의 #${Date.now()}`;
+    createMeeting(title);
+    setMeetingTitle('');
+  };
+
+  const handleFileUpload = async (file: File) => {
+    setUploading(true);
+    setUploadProgress(0);
+
+    const title = meetingTitle.trim() || file.name.replace(/\.[^/.]+$/, '');
+    createMeeting(title);
+    setMeetingTitle('');
+
+    // 진행률 시뮬레이션
+    const interval = setInterval(() => {
+      setUploadProgress((prev) => {
+        if (prev >= 90) {
+          clearInterval(interval);
+          return 90;
+        }
+        return prev + 15;
+      });
+    }, 200);
+
+    try {
+      const formData = new FormData();
+      formData.append('document', file);
+
+      const response = await fetch('/api/extract-text', {
+        method: 'POST',
+        body: formData,
+      });
+
+      clearInterval(interval);
+      setUploadProgress(100);
+
+      if (!response.ok) throw new Error('파일 처리 실패');
+
+      const { text } = await response.json();
+
+      updateCurrentMeeting({ transcript: text });
+      updateMeetingStep('transcribing');
+    } catch (error) {
+      console.error('File upload error:', error);
+      alert('파일 처리에 실패했습니다.');
+      setUploading(false);
+      setUploadProgress(0);
+    } finally {
+      clearInterval(interval);
+      setUploading(false);
+      setUploadProgress(0);
+    }
+  };
+
+  const steps = [
+    { id: 'idle', label: '대기', icon: Mic },
+    { id: 'recording', label: '녹음', icon: Play },
+    { id: 'transcribing', label: '변환', icon: Upload },
+    { id: 'summarizing', label: '요약', icon: FileText },
+    { id: 'done', label: '완료', icon: Download },
+  ] as const;
+
+  const getCurrentStepIndex = () => {
+    return steps.findIndex((s) => s.id === currentStep);
+  };
+
+  // Hydration 방지 - 클라이언트 마운트 전까지 로딩 표시
+  if (!mounted) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-50 via-slate-100 to-slate-200 dark:from-slate-950 dark:via-slate-900 dark:to-slate-900 flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+          <p className="text-slate-600 dark:text-slate-400">로딩 중...</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-slate-100 to-slate-200 dark:from-slate-950 dark:via-slate-900 dark:to-slate-900">
+      <div className="container mx-auto px-4 sm:px-6 py-6 sm:py-8 max-w-6xl">
+        {/* 헤더 */}
+        <header className="mb-8">
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
+            <div className="text-center sm:text-left">
+              <h1 className="text-3xl sm:text-4xl font-bold tracking-tight text-slate-900 dark:text-slate-50 mb-2">
+                MeetingAutoDocs
+              </h1>
+              <p className="text-sm sm:text-base text-slate-600 dark:text-slate-400">
+                회의 녹음 → 요약 → 기획 문서 자동 생성
+              </p>
+            </div>
+            <div className="flex flex-wrap justify-center gap-2">
+              {currentMeeting && (
+                <Button
+                  onClick={() => {
+                    if (confirm('새 회의를 시작하시겠습니까? 현재 회의는 저장됩니다.')) {
+                      setCurrentMeeting(null);
+                    }
+                  }}
+                  variant="default"
+                  size="sm"
+                  className="gap-2"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span className="hidden sm:inline">새 회의</span>
+                </Button>
+              )}
+              <Button
+                onClick={() => setShowProjectList(true)}
+                variant="outline"
+                size="sm"
+                className="gap-2"
+              >
+                <FolderOpen className="w-4 h-4" />
+                <span className="hidden sm:inline">프로젝트 리스트</span>
+                {meetings.length > 0 && (
+                  <Badge variant="secondary" className="ml-1 px-1.5 py-0 text-xs">{meetings.length}</Badge>
+                )}
+              </Button>
+            </div>
+          </div>
+        </header>
+
+        {/* 단계 진행 바 */}
+        <div className="mb-8">
+          <div className="flex items-center justify-between gap-1 sm:gap-2 mb-4">
+            {steps.map((step, index) => {
+              const Icon = step.icon;
+              const isActive = step.id === currentStep;
+              const isPast = getCurrentStepIndex() > index;
+              const isClickable = currentMeeting && step.id !== 'idle';
+
+              return (
+                <div key={step.id} className="flex flex-col items-center flex-1 min-w-0">
+                  <div
+                    className={`
+                      w-10 h-10 sm:w-12 sm:h-12 rounded-full flex items-center justify-center mb-1.5 sm:mb-2 transition-all shrink-0
+                      ${isActive ? 'bg-blue-500 text-white scale-110 shadow-lg shadow-blue-500/30' : ''}
+                      ${isPast ? 'bg-green-500 text-white' : ''}
+                      ${!isActive && !isPast ? 'bg-slate-200 dark:bg-slate-700 text-slate-500 dark:text-slate-400' : ''}
+                    `}
+                  >
+                    <Icon className="w-4 h-4 sm:w-5 sm:h-5" />
+                  </div>
+                  <span className={`text-xs sm:text-sm font-medium truncate w-full text-center ${isActive ? 'text-blue-600 dark:text-blue-400' : 'text-slate-600 dark:text-slate-400'}`}>
+                    {step.label}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+          <Progress value={(getCurrentStepIndex() / (steps.length - 1)) * 100} className="h-2" />
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
+
+        {/* 메인 콘텐츠 */}
+        {!currentMeeting ? (
+          /* 새 회의 시작 카드 */
+          <Card className="max-w-lg mx-auto shadow-lg border-slate-200 dark:border-slate-700">
+            <CardHeader>
+              <CardTitle>새 회의 시작</CardTitle>
+              <CardDescription>녹음 또는 파일 업로드로 회의를 시작하세요</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                  회의 제목 (선택사항)
+                </label>
+                <input
+                  type="text"
+                  placeholder="회의 제목을 입력하세요"
+                  value={meetingTitle}
+                  onChange={(e) => setMeetingTitle(e.target.value)}
+                  className="w-full px-4 py-2.5 border border-slate-300 dark:border-slate-600 rounded-lg bg-transparent focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+                />
+              </div>
+
+              <Tabs defaultValue="record" className="w-full">
+                <TabsList className="grid w-full grid-cols-2 h-auto p-1">
+                  <TabsTrigger value="record" className="gap-2">
+                    <Mic className="w-4 h-4" />
+                    녹음 시작
+                  </TabsTrigger>
+                  <TabsTrigger value="upload" className="gap-2">
+                    <FileUp className="w-4 h-4" />
+                    파일 업로드
+                  </TabsTrigger>
+                </TabsList>
+
+                <TabsContent value="record" className="mt-6 space-y-4">
+                  <Button onClick={handleStartMeeting} className="w-full h-12 text-base" size="lg">
+                    <Mic className="w-5 h-5 mr-2" />
+                    회의 시작하기
+                  </Button>
+                  <p className="text-xs text-center text-slate-500 dark:text-slate-400">
+                    마이크로 실시간 녹음 (Safari 권장)
+                  </p>
+                </TabsContent>
+
+                <TabsContent value="upload" className="mt-6 space-y-4">
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".txt,.md,.pdf,audio/*"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) handleFileUpload(file);
+                    }}
+                    disabled={uploading}
+                    className="hidden"
+                    id="quick-file-upload"
+                  />
+                  <label htmlFor="quick-file-upload">
+                    <Button
+                      type="button"
+                      disabled={uploading}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        document.getElementById('quick-file-upload')?.click();
+                      }}
+                      className="w-full h-12 text-base"
+                      size="lg"
+                    >
+                      {uploading ? '처리 중...' : <><Upload className="w-5 h-5 mr-2" />파일 선택</>}
+                    </Button>
+                  </label>
+                  <p className="text-xs text-center text-slate-500 dark:text-slate-400">
+                    지원: TXT, PDF, 음성파일
+                  </p>
+
+                  {uploading && (
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="text-slate-600 dark:text-slate-400">파일 처리 중...</span>
+                        <span className="font-bold text-blue-600 dark:text-blue-400">{uploadProgress}%</span>
+                      </div>
+                      <Progress value={uploadProgress} className="h-2" />
+                    </div>
+                  )}
+                </TabsContent>
+              </Tabs>
+            </CardContent>
+          </Card>
+        ) : (
+          /* 회의 진행 화면 */
+          <div className="space-y-6">
+            {/* 현재 회의 정보 */}
+            <Card className="shadow-sm border-slate-200 dark:border-slate-700">
+              <CardHeader className="pb-4">
+                <div className="flex items-start sm:items-center justify-between gap-3">
+                  <div className="flex-1 min-w-0">
+                    <CardTitle className="text-xl sm:text-2xl truncate">{currentMeeting.title}</CardTitle>
+                    <CardDescription className="mt-1">
+                      <DateFormat date={currentMeeting.createdAt} />
+                    </CardDescription>
+                  </div>
+                  <Badge variant={currentStep === 'done' ? 'default' : 'secondary'} className="shrink-0">
+                    {steps.find((s) => s.id === currentStep)?.label}
+                  </Badge>
+                </div>
+              </CardHeader>
+            </Card>
+
+            {/* 단계별 컴포넌트 렌더링 */}
+            <Tabs value={currentStep} onValueChange={handleTabChange} className="w-full">
+              <TabsList className="grid w-full grid-cols-4 h-auto p-1 bg-slate-100 dark:bg-slate-800">
+                <TabsTrigger value="recording" className="gap-1.5 data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm dark:data-[state=active]:bg-slate-700 dark:data-[state=active]:text-blue-400">
+                  <Mic className="w-4 h-4" />
+                  <span className="hidden sm:inline">녹음</span>
+                </TabsTrigger>
+                <TabsTrigger value="transcribing" className="gap-1.5 data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm dark:data-[state=active]:bg-slate-700 dark:data-[state=active]:text-blue-400">
+                  <Upload className="w-4 h-4" />
+                  <span className="hidden sm:inline">변환</span>
+                </TabsTrigger>
+                <TabsTrigger value="summarizing" className="gap-1.5 data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm dark:data-[state=active]:bg-slate-700 dark:data-[state=active]:text-blue-400">
+                  <FileText className="w-4 h-4" />
+                  <span className="hidden sm:inline">요약</span>
+                </TabsTrigger>
+                <TabsTrigger value="done" className="gap-1.5 data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm dark:data-[state=active]:bg-slate-700 dark:data-[state=active]:text-blue-400">
+                  <Download className="w-4 h-4" />
+                  <span className="hidden sm:inline">문서</span>
+                </TabsTrigger>
+              </TabsList>
+
+              <TabsContent value="recording" className="mt-6">
+                <MeetingRecorder />
+              </TabsContent>
+
+              <TabsContent value="transcribing" className="mt-6">
+                <TranscriptViewer />
+              </TabsContent>
+
+              <TabsContent value="summarizing" className="mt-6">
+                <SummaryViewer />
+              </TabsContent>
+
+              <TabsContent value="done" className="mt-6">
+                <PrdViewer />
+              </TabsContent>
+            </Tabs>
+          </div>
+        )}
+
+        {/* 프로젝트 목록 모달 */}
+        {showProjectList && (
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in fade-in duration-200">
+            <div className="bg-white dark:bg-slate-900 rounded-xl shadow-2xl max-w-2xl w-full max-h-[85vh] overflow-hidden flex flex-col animate-in zoom-in-95 duration-200">
+              <div className="flex items-center justify-between p-4 border-b border-slate-200 dark:border-slate-700">
+                <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-50">프로젝트 목록</h2>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => setShowProjectList(false)}
+                  className="h-8 w-8"
+                >
+                  <X className="h-4 w-4" />
+                </Button>
+              </div>
+              <div className="flex-1 overflow-y-auto p-4">
+                <ProjectList onClose={() => setShowProjectList(false)} />
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
