@@ -937,42 +937,85 @@ export function PrdViewer() {
 
   return (
     <div className="space-y-4">
-      {/* 전체 생성 버튼 영역 */}
-      <Card>
-        <CardContent className="pt-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <h3 className="font-medium">문서 생성 현황</h3>
-              <p className="text-sm text-slate-500 mt-1">
-                {generatedCount} / {totalCount}개 문서 생성됨
-              </p>
+      {/* 플로팅 상단 바 - 문서 생성 현황 + 네비게이션 */}
+      <div className="fixed top-0 left-0 right-0 z-50 bg-white/95 dark:bg-slate-900/95 backdrop-blur-sm border-b border-slate-200 dark:border-slate-700 shadow-sm">
+        <div className="flex items-center justify-between gap-6 px-6 py-3">
+          {/* 왼쪽: 문서 생성 현황 */}
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                문서 생성 현황
+              </span>
+              <span className="text-sm text-slate-500 dark:text-slate-400">
+                {generatedCount} / {totalCount}개
+              </span>
             </div>
+            {/* 진행도 바 */}
+            <div className="w-32 h-2 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-gradient-to-r from-blue-500 to-purple-500 transition-all duration-300"
+                style={{ width: `${(generatedCount / totalCount) * 100}%` }}
+              />
+            </div>
+          </div>
+
+          {/* 중앙: 네비게이션 (이전/다음) */}
+          <div className="flex items-center gap-2">
             <Button
-              onClick={handleGenerateAll}
-              disabled={isGenerating || !currentMeeting?.summary}
-              size="lg"
+              onClick={handlePreviousDoc}
+              disabled={flatIndex === 0}
+              variant="outline"
+              size="sm"
+              className="h-8"
             >
-              {isGenerating ? (
-                <>
-                  <Loader2 className="w-5 h-5 mr-2 animate-spin" />
-                  생성 중...
-                </>
-              ) : (
-                <>
-                  <Plus className="w-5 h-5 mr-2" />
-                  전체 문서 생성
-                </>
-              )}
+              <ChevronLeft className="w-4 h-4 mr-1" />
+              이전
+            </Button>
+            <span className="text-sm font-medium text-slate-700 dark:text-slate-300 min-w-[120px] text-center">
+              {doc?.title || activeDoc}
+            </span>
+            <Button
+              onClick={handleNextDoc}
+              disabled={flatIndex === FLAT_DOCUMENTS.length - 1}
+              variant="outline"
+              size="sm"
+              className="h-8"
+            >
+              다음
+              <ChevronRight className="w-4 h-4 ml-1" />
             </Button>
           </div>
-        </CardContent>
-      </Card>
+
+          {/* 오른쪽: 전체 생성 버튼 */}
+          <Button
+            onClick={handleGenerateAll}
+            disabled={isGenerating || !currentMeeting?.summary}
+            size="sm"
+            className="h-8"
+          >
+            {isGenerating ? (
+              <>
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                생성 중...
+              </>
+            ) : (
+              <>
+                <Plus className="w-4 h-4 mr-2" />
+                전체 생성
+              </>
+            )}
+          </Button>
+        </div>
+      </div>
+
+      {/* 상단 바 높이만큼 여백 */}
+      <div className="h-16" />
 
       {/* 문서 영역: Grid 레이아웃으로 트리와 컨텐츠 분리 */}
       <div className="grid grid-cols-[400px_1fr] gap-0">
         {/* 트리 네비게이션 영역 */}
-        <div className="border-r border-slate-200 dark:border-slate-700 pr-4 pt-16">
-          <div style={{ height: '600px', overflowY: 'auto', overflowX: 'hidden' }}>
+        <div className="border-r border-slate-200 dark:border-slate-700 pr-4">
+          <div style={{ height: 'calc(100vh - 200px)', overflowY: 'auto', overflowX: 'hidden' }}>
               <Tabs value={activeDoc} onValueChange={(v) => setActiveDoc(v as DocType)}>
                 <TabsList className="bg-transparent border-none p-0 h-auto flex flex-col items-start gap-0.5 rounded-none w-full">
             {visibleNodes.map(({ node, level }, index) => {
