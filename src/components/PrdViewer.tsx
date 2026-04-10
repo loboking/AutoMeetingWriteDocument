@@ -1,14 +1,14 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { FileText, Download, Copy, Check, Loader2, Plus, Edit, Save, Eye, File, Code, BookOpen, Presentation, Printer, ChevronLeft, ChevronRight } from 'lucide-react';
+import { FileText, Download, Copy, Check, Loader2, Plus, Edit, Save, Eye, File, Code, BookOpen, Presentation, Printer, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Folder } from 'lucide-react';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { saveAs } from 'file-saver';
 import * as XLSX from 'xlsx';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import PptxGenJS from 'pptxgenjs';
-import { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, Table, TableRow, TableCell, WidthType, BorderStyle } from 'docx';
+import { Document as DocxDocument, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, Table, TableRow, TableCell, WidthType, BorderStyle } from 'docx';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -22,8 +22,27 @@ import { WBSViewer } from '@/components/WBSViewer';
 
 // 마크다운에서 mermaid 코드 추출
 function extractMermaidCode(content: string): string {
-  const match = content.match(/```mermaid\n([\s\S]+?)```/);
-  return match ? match[1].trim() : content;
+  // 먼저 ```mermaid 블록 추출 시도
+  const codeBlockMatch = content.match(/```mermaid\n([\s\S]+?)```/);
+  if (codeBlockMatch) {
+    return codeBlockMatch[1].trim();
+  }
+
+  // 블록이 없으면 전체 텍스트가 mermaid인지 확인 후 반환
+  const trimmedContent = content.trim();
+  const hasMermaidKeyword = /\b(flowchart|graph|sequenceDiagram|classDiagram|stateDiagram|erDiagram|gantt|pie|mindmap)\b/i.test(trimmedContent);
+
+  if (hasMermaidKeyword) {
+    // mermaid 키워드부터 시작하는 부분만 추출
+    const lines = trimmedContent.split('\n');
+    const startIdx = lines.findIndex(line => /\b(flowchart|graph|sequenceDiagram|classDiagram|stateDiagram|erDiagram|gantt|pie|mindmap)\b/i.test(line));
+    if (startIdx >= 0) {
+      return lines.slice(startIdx).join('\n').trim();
+    }
+    return trimmedContent;
+  }
+
+  return ''; // mermaid 코드 없음
 }
 
 // DocType을 Meeting 필드 이름으로 변환
@@ -74,6 +93,173 @@ const DOCUMENTS: { key: DocType; title: string; icon: string; description: strin
   { key: 'deployment', title: '배포가이드', icon: '🚀', description: '릴리스 및 배포 절차' },
 ];
 
+// 문서 의존성 정의
+const DEPENDENCIES: Record<DocType, DocType[]> = {
+  'prd': [], // 기반 문서
+  'user-story': [], // 기반 문서
+  'feature-list': [], // 기반 문서
+  'screen-list': ['feature-list'], // 기능목록 필요
+  'ia': ['screen-list'], // 화면목록 필요
+  'flowchart': ['user-story', 'screen-list'], // 시나리오 또는 화면목록 필요
+  'storyboard': ['user-story', 'flowchart'], // 시나리오, 플로우차트 필요
+  'wireframe': ['ia', 'screen-list'], // IA, 화면목록 필요
+  'api-spec': ['feature-list'], // 기능목록 필요
+  'test-plan': ['feature-list', 'api-spec'], // 기능목록, API명세 필요
+  'wbs': ['feature-list', 'api-spec', 'wireframe'], // 기능목록, API명세, 와이어프레임 필요
+  'deployment': ['prd', 'feature-list', 'api-spec'], // PRD, 기능목록, API명세 필요
+};
+
+// 의존성 체크
+function canGenerateDoc(
+  docType: DocType,
+  documents: Record<DocType, string>
+): { canGenerate: boolean; missing: DocType[] } {
+  const deps = DEPENDENCIES[docType] || [];
+  const missing = deps.filter(dep => !documents[dep]);
+
+  return {
+    canGenerate: missing.length === 0,
+    missing,
+  };
+}
+
+// 의존성 문서 이름 가져오기
+function getDependencyNames(docType: DocType): string[] {
+  const deps = DEPENDENCIES[docType] || [];
+  return deps.map(dep => DOCUMENTS.find(d => d.key === dep)?.title || dep);
+}
+
+// 트리 구조 정의
+interface TreeNode {
+  key: DocType;
+  title: string;
+  icon: string;
+  description: string;
+  children: TreeNode[];
+  isParent: boolean;
+}
+
+// 문서 트리 구조 생성
+const DOCUMENT_TREE: TreeNode[] = [
+  {
+    key: 'prd',
+    title: 'PRD',
+    icon: '📋',
+    description: '제품 요구사항 문서',
+    isParent: true,
+    children: [],
+  },
+  {
+    key: 'user-story',
+    title: '시나리오 정의서',
+    icon: '👤',
+    description: '사용자 시나리오 정의',
+    isParent: true,
+    children: [],
+  },
+  {
+    key: 'feature-list',
+    title: '기능목록',
+    icon: '📝',
+    description: '기능 목록 정의서',
+    isParent: true,
+    children: [
+      {
+        key: 'screen-list',
+        title: '화면목록',
+        icon: '📱',
+        description: '화면 목록 정의서',
+        isParent: true,
+        children: [
+          {
+            key: 'ia',
+            title: 'IA',
+            icon: '🗂️',
+            description: '정보구조도',
+            isParent: true,
+            children: [],
+          },
+        ],
+      },
+      {
+        key: 'api-spec',
+        title: 'API명세',
+        icon: '🔌',
+        description: 'API 인터페이스 설계',
+        isParent: true,
+        children: [
+          {
+            key: 'test-plan',
+            title: '테스트계획',
+            icon: '🧪',
+            description: '테스트 시나리오 및 계획',
+            isParent: true,
+            children: [],
+          },
+        ],
+      },
+      {
+        key: 'flowchart',
+        title: '플로우차트',
+        icon: '🔄',
+        description: '사용자 플로우 및 프로세스',
+        isParent: true,
+        children: [
+          {
+            key: 'storyboard',
+            title: '스토리보드',
+            icon: '🎬',
+            description: '사용자 시나리오 흐름',
+            isParent: true,
+            children: [],
+          },
+        ],
+      },
+      {
+        key: 'wireframe',
+        title: '와이어프레임',
+        icon: '🎨',
+        description: '화면 설계 및 플로우',
+        isParent: true,
+        children: [
+          {
+            key: 'wbs',
+            title: 'WBS',
+            icon: '📊',
+            description: '작업 분류 구조',
+            isParent: true,
+            children: [],
+          },
+        ],
+      },
+    ],
+  },
+  {
+    key: 'deployment',
+    title: '배포가이드',
+    icon: '🚀',
+    description: '릴리스 및 배포 절차',
+    isParent: true,
+    children: [],
+  },
+];
+
+// 트리를 평탄화하는 함수 (탭 렌더링용)
+function flattenTree(nodes: TreeNode[], parentKey: string | null = null): Array<TreeNode & { level: number; parentKey: string | null }> {
+  const result: Array<TreeNode & { level: number; parentKey: string | null }> = [];
+
+  for (const node of nodes) {
+    result.push({ ...node, level: parentKey === null ? 0 : 1, parentKey });
+    if (node.children.length > 0) {
+      result.push(...flattenTree(node.children, node.key).map(n => ({ ...n, level: (parentKey === null ? 0 : 1) + 1, parentKey: node.key })));
+    }
+  }
+
+  return result;
+}
+
+const FLAT_DOCUMENTS = flattenTree(DOCUMENT_TREE);
+
 export function PrdViewer() {
   const { currentMeeting, updateCurrentMeeting } = useMeetingStore();
   const [activeDoc, setActiveDoc] = useState<DocType>('prd');
@@ -97,6 +283,7 @@ export function PrdViewer() {
   const [documents, setDocuments] = useState<Record<DocType, string>>(getDocumentsFromMeeting);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
+  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set(['prd', 'user-story', 'feature-list', 'screen-list', 'api-spec', 'flowchart', 'wireframe', 'deploy-guide'])); // 모든 상위 노드 기본 펼침
   const [editedContent, setEditedContent] = useState('');
   const [copied, setCopied] = useState(false);
   const [viewMode, setViewMode] = useState<'raw' | 'preview' | 'visual'>('visual'); // 기본을 시각화로 변경
@@ -109,6 +296,14 @@ export function PrdViewer() {
   const handleGenerateDoc = async (docType: DocType) => {
     if (!currentMeeting?.summary) {
       alert('먼저 요약을 생성해주세요.');
+      return;
+    }
+
+    // 의존성 체크
+    const { canGenerate, missing } = canGenerateDoc(docType, documents);
+    if (!canGenerate) {
+      const missingNames = missing.map(dep => DOCUMENTS.find(d => d.key === dep)?.title || dep).join(', ');
+      alert(`먼저 다음 문서를 생성해주세요:\n\n${missingNames}`);
       return;
     }
 
@@ -147,15 +342,31 @@ export function PrdViewer() {
       return;
     }
 
-    if (!confirm('전체 문서를 생성하시겠습니까?\\n로컬 서버가 실행 중이어야 합니다.')) {
+    // 의존성이 충족된 문서만 필터링
+    const availableDocs = DOCUMENTS.filter(doc => {
+      const { canGenerate } = canGenerateDoc(doc.key, documents);
+      return canGenerate || documents[doc.key]; // 이미 생성된 것도 포함
+    });
+
+    const alreadyGenerated = availableDocs.filter(doc => documents[doc.key]).length;
+    const docsToGenerate = availableDocs.filter(doc => !documents[doc.key]);
+    const toGenerateCount = docsToGenerate.length;
+
+    if (toGenerateCount === 0) {
+      alert('모든 문서가 이미 생성되었습니다.\n재생성을 원하시면 개별 문서의 "다시 생성" 버튼을 사용해주세요.');
+      return;
+    }
+
+    if (!confirm(`${toGenerateCount}개 문서를 생성하시겠습니까?\n(의존성이 충족된 문서만 생성됩니다)`)) {
       return;
     }
 
     setIsGenerating(true);
-    const docTypes: DocType[] = DOCUMENTS.map(d => d.key);
     const results: Record<DocType, string> = { ...documents };
 
-    for (const docType of docTypes) {
+    // 병렬 처리로 속도 개선 (의존성 충족된 문서만 생성)
+    const generatePromises = docsToGenerate.map(async (doc) => {
+      const docType = doc.key;
       try {
         const response = await fetch('/api/generate-doc', {
           method: 'POST',
@@ -175,15 +386,35 @@ export function PrdViewer() {
           const { content } = await response.json();
           results[docType] = content;
           updateCurrentMeeting({ [docTypeToField(docType)]: content });
+          return { success: true, docType };
         }
+        return { success: false, docType, error: 'Response not ok' };
       } catch (error) {
         console.error(`${docType} 생성 실패:`, error);
+        return { success: false, docType, error };
       }
-    }
+    });
+
+    const outcomes = await Promise.allSettled(generatePromises);
+    const successCount = outcomes.filter(o => o.status === 'fulfilled' && o.value.success).length;
+    const failCount = outcomes.length - successCount;
+
+    // 의존성으로 생성되지 않은 문서 안내
+    const skippedCount = DOCUMENTS.length - availableDocs.length;
 
     setDocuments(results);
     setIsGenerating(false);
-    alert('전체 문서 생성이 완료되었습니다.');
+
+    if (failCount > 0 || skippedCount > 0) {
+      let message = `문서 생성 완료:\n`;
+      message += `- 생성 가능: ${toGenerateCount}개 중 ${successCount}개 성공\n`;
+      if (failCount > 0) message += `- 생성 실패: ${failCount}개\n`;
+      if (skippedCount > 0) message += `- 의존성 미충족 (생성 불가): ${skippedCount}개\n`;
+      message += `\n의존성이 있는 문서는 먼저 선행 문서를 생성해주세요.`;
+      alert(message);
+    } else {
+      alert(`${successCount}개 문서 생성이 완료되었습니다.`);
+    }
   };
 
   const handleSaveEdit = () => {
@@ -192,21 +423,66 @@ export function PrdViewer() {
     setIsEditing(false);
   };
 
+  // 트리 노드 토글
+  const toggleNode = (key: string) => {
+    setExpandedNodes(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(key)) {
+        newSet.delete(key);
+      } else {
+        newSet.add(key);
+      }
+      return newSet;
+    });
+  };
+
+  // 트리에서 문서 찾기
+  const findNodeInTree = (nodes: TreeNode[], key: string): TreeNode | null => {
+    for (const node of nodes) {
+      if (node.key === key) return node;
+      if (node.children.length > 0) {
+        const found = findNodeInTree(node.children, key);
+        if (found) return found;
+      }
+    }
+    return null;
+  };
+
   const currentContent = documents[activeDoc] || '';
   const hasContent = !!currentContent;
-  const doc = DOCUMENTS.find(d => d.key === activeDoc);
-  const currentIndex = DOCUMENTS.findIndex(d => d.key === activeDoc);
+  const doc = findNodeInTree(DOCUMENT_TREE, activeDoc) || DOCUMENTS.find(d => d.key === activeDoc);
+  const flatIndex = FLAT_DOCUMENTS.findIndex(d => d.key === activeDoc);
+
+  // 트리에서 보여질 노드 목록 생성 (펼쳐진 노드만 포함)
+  const getVisibleNodes = (): Array<{ node: TreeNode; level: number }> => {
+    const result: Array<{ node: TreeNode; level: number }> = [];
+
+    const traverse = (nodes: TreeNode[], level: number = 0) => {
+      for (const node of nodes) {
+        result.push({ node, level });
+        // 펼쳐져 있으면 자식들도 추가
+        if (node.children.length > 0 && expandedNodes.has(node.key)) {
+          traverse(node.children, level + 1);
+        }
+      }
+    };
+
+    traverse(DOCUMENT_TREE);
+    return result;
+  };
+
+  const visibleNodes = getVisibleNodes();
 
   // 문서 네비게이션
   const handlePreviousDoc = () => {
-    if (currentIndex > 0) {
-      setActiveDoc(DOCUMENTS[currentIndex - 1].key);
+    if (flatIndex > 0) {
+      setActiveDoc(FLAT_DOCUMENTS[flatIndex - 1].key);
     }
   };
 
   const handleNextDoc = () => {
-    if (currentIndex < DOCUMENTS.length - 1) {
-      setActiveDoc(DOCUMENTS[currentIndex + 1].key);
+    if (flatIndex < FLAT_DOCUMENTS.length - 1) {
+      setActiveDoc(FLAT_DOCUMENTS[flatIndex + 1].key);
     }
   };
 
@@ -446,9 +722,9 @@ export function PrdViewer() {
       // 헤더 처리 (# ## ### #### ##### ######)
       const headerMatch = trimmed.match(/^(#{1,6})\s+(.+)$/);
       if (headerMatch) {
-        const level = parseInt(headerMatch[1].length);
+        const level = headerMatch[1].length;
         const text = headerMatch[2];
-        let headingLevel: HeadingLevel;
+        let headingLevel: typeof HeadingLevel[keyof typeof HeadingLevel];
 
         switch (level) {
           case 1: headingLevel = HeadingLevel.HEADING_1; break;
@@ -510,7 +786,7 @@ export function PrdViewer() {
       }));
     });
 
-    const doc = new Document({
+    const doc = new DocxDocument({
       sections: [{
         properties: {},
         children: paragraphs
@@ -536,7 +812,7 @@ export function PrdViewer() {
       }
       // 리스트 처리 (-, *, 1.)
       else if (line.match(/^[\-\*\+]\s/) || line.match(/^\d+\.\s/)) {
-        worksheetData.push([{ v: line.trim().replace(/^[\-\*\+\d\.]\s/, '• ') }]);
+        worksheetData.push([{ v: line.trim().replace(/^[\-\*\+\d\.]\s/, '• '), s: { font: { bold: false } } }]);
       }
       // 테이블 처리 (|)
       else if (line.includes('|') && !line.match(/^#{1,6}\s/)) {
@@ -635,7 +911,7 @@ export function PrdViewer() {
       else if (trimmed.includes('|') && !trimmed.match(/^#/)) {
         const cells = trimmed.split('|').filter((_, i, arr) => i > 0 && i < arr.length - 1);
         if (cells.length > 1 && !trimmed.includes('---')) {
-          currentSlide.addTable([cells.map(c => c.trim())], {
+          currentSlide.addTable([cells.map(c => c.trim())] as any, {
             x: 0.5, y: yPosition, w: 9,
             border: { pt: 1, color: 'CCCCCC' }
           });
@@ -660,7 +936,7 @@ export function PrdViewer() {
   const totalCount = DOCUMENTS.length;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       {/* 전체 생성 버튼 영역 */}
       <Card>
         <CardContent className="pt-6">
@@ -689,84 +965,177 @@ export function PrdViewer() {
               )}
             </Button>
           </div>
-          {generatedCount > 0 && (
-            <div className="mt-4">
-              <div className="flex flex-wrap gap-2">
-                {DOCUMENTS.filter(d => documents[d.key]).map(d => (
-                  <Badge key={d.key} variant="secondary" className="gap-1">
-                    {d.icon} {d.title} <Check className="w-3 h-3" />
-                  </Badge>
-                ))}
-              </div>
-            </div>
-          )}
         </CardContent>
       </Card>
 
-      {/* 문서 선택 탭 */}
-      <Tabs value={activeDoc} onValueChange={(v) => setActiveDoc(v as DocType)}>
-        <TabsList className="grid w-full grid-cols-3 lg:grid-cols-4 xl:grid-cols-11 gap-1">
-          {DOCUMENTS.map((doc) => {
-            const hasDoc = !!documents[doc.key];
-            return (
-              <TabsTrigger key={doc.key} value={doc.key} className="gap-1 text-xs">
-                <span>{doc.icon}</span>
-                <span className="hidden xl:inline">{doc.title}</span>
-                {hasDoc && <span className="w-2 h-2 rounded-full bg-green-500" />}
-              </TabsTrigger>
-            );
-          })}
-        </TabsList>
+      {/* 문서 영역: Grid 레이아웃으로 트리와 컨텐츠 분리 */}
+      <div className="grid grid-cols-[400px_1fr] gap-0">
+        {/* 트리 네비게이션 영역 */}
+        <div className="border-r border-slate-200 dark:border-slate-700 pr-4 pt-16">
+          <div style={{ height: '600px', overflowY: 'auto', overflowX: 'hidden' }}>
+              <Tabs value={activeDoc} onValueChange={(v) => setActiveDoc(v as DocType)}>
+                <TabsList className="bg-transparent border-none p-0 h-auto flex flex-col items-start gap-0.5 rounded-none w-full">
+            {visibleNodes.map(({ node, level }, index) => {
+              const hasDoc = !!documents[node.key];
+              const { canGenerate } = canGenerateDoc(node.key, documents);
+              const isDisabled = !hasDoc && !canGenerate;
+              const isExpanded = expandedNodes.has(node.key);
+              const hasChildren = node.children.length > 0;
+              const hasNextSibling = index < visibleNodes.length - 1 &&
+                                     visibleNodes[index + 1].level <= level;
 
-        {DOCUMENTS.map((doc) => (
-          <TabsContent key={doc.key} value={doc.key} className="mt-6 space-y-4">
-            {/* 문서 헤더 */}
-            <Card>
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <CardTitle className="flex items-center gap-2">
-                      <span className="text-2xl">{doc.icon}</span>
-                      {doc.title}
-                    </CardTitle>
-                    <p className="text-sm text-slate-500 mt-1">{doc.description}</p>
-                  </div>
-                  <div className="flex gap-2">
-                    {hasContent ? (
-                      <>
-                        <Button onClick={handleCopy} variant="outline" size="sm" title="복사">
-                          {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
-                        </Button>
-                        <Button
-                          onClick={() => {
-                            if (viewMode === 'raw') setViewMode('preview');
-                            else if (viewMode === 'preview') setViewMode('visual');
-                            else setViewMode('raw');
-                          }}
-                          variant="outline"
-                          size="sm"
-                          title="보기 모드"
-                        >
-                          {viewMode === 'raw' ? <BookOpen className="w-4 h-4" /> : viewMode === 'preview' ? <Eye className="w-4 h-4" /> : <Code className="w-4 h-4" />}
-                        </Button>
-                        <Button onClick={handlePrint} variant="outline" size="sm" title="인쇄">
-                          <Printer className="w-4 h-4" />
-                        </Button>
-                        {!isEditing && viewMode === 'raw' && (
-                          <Button onClick={() => setIsEditing(true)} variant="outline" size="sm" title="편집">
-                            <Edit className="w-4 h-4" />
-                          </Button>
+              return (
+                <div key={node.key} className="relative w-full">
+                  {/* 트리 연결선 */}
+                  {level > 0 && (
+                    <div
+                      className="absolute left-0 top-0 bottom-0 w-px bg-slate-200 dark:bg-slate-700"
+                      style={{
+                        left: `${level * 20 - 8}px`,
+                        height: hasNextSibling ? '100%' : '24px'
+                      }}
+                    />
+                  )}
+                  {level > 0 && (
+                    <div
+                      className="absolute left-0 top-3 w-4 h-px bg-slate-200 dark:bg-slate-700"
+                      style={{ left: `${level * 20 - 8}px` }}
+                    />
+                  )}
+
+                  <TabsTrigger
+                    value={node.key}
+                    className="gap-2 text-sm w-full justify-start px-3 py-2 h-auto rounded-md
+                             text-slate-900 dark:text-slate-100
+                             data-[state=active]:bg-white dark:data-[state=active]:bg-slate-800
+                             data-[state=active]:shadow-sm
+                             hover:bg-slate-100 dark:hover:bg-slate-800
+                             transition-all duration-150 ease-in-out
+                             border border-transparent
+                             data-[state=active]:border-slate-200 dark:data-[state=active]:border-slate-700
+                             relative group"
+                    disabled={isDisabled}
+                    style={{ paddingLeft: `${level * 20 + 12}px` }}
+                  >
+                    {/* 펼침/접힘 버튼 - div로 변경하여 중첩 버튼 문제 해결 */}
+                    {hasChildren ? (
+                      <div
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          toggleNode(node.key);
+                        }}
+                        className="p-0 h-5 w-5 flex items-center justify-center
+                               hover:bg-slate-200 dark:hover:bg-slate-700
+                               rounded transition-colors duration-150
+                               cursor-pointer select-none
+                               flex-shrink-0 -ml-6 mr-1
+                               group-hover:bg-slate-200 dark:group-hover:bg-slate-700"
+                        style={{ marginLeft: `${level * 20 - 28}px` }}
+                      >
+                        {isExpanded ? (
+                          <ChevronDown className="w-3.5 h-3.5 text-slate-600 dark:text-slate-400 pointer-events-none" />
+                        ) : (
+                          <ChevronRight className="w-3.5 h-3.5 text-slate-600 dark:text-slate-400 pointer-events-none" />
                         )}
-                        {isEditing && (
-                          <Button onClick={() => setIsEditing(false)} variant="outline" size="sm" title="미리보기">
-                            <Eye className="w-4 h-4" />
+                      </div>
+                    ) : (
+                      <span
+                        className="h-5 w-5 inline-block flex-shrink-0"
+                        style={{ marginLeft: `${level * 20 - 28}px` }}
+                      />
+                    )}
+
+                    {/* 아이콘과 제목 */}
+                    <span className="text-base flex-shrink-0 opacity-80 group-hover:opacity-100 transition-opacity">
+                      {node.icon}
+                    </span>
+                    <span className="truncate flex-1 text-left text-slate-900 dark:text-slate-100">
+                      {node.title}
+                    </span>
+
+                    {/* 상태 표시 - 개선된 디자인 */}
+                    <span className="ml-auto flex-shrink-0 flex items-center gap-2">
+                      {hasDoc && (
+                        <span className="relative flex h-2.5 w-2.5">
+                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                          <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-green-500"></span>
+                        </span>
+                      )}
+                      {!hasDoc && !canGenerate && (
+                        <span className="w-2.5 h-2.5 rounded-full bg-slate-300 dark:bg-slate-600" />
+                      )}
+                    </span>
+                  </TabsTrigger>
+                </div>
+              );
+            })}
+            </TabsList>
+              </Tabs>
+            </div>
+          </div>
+
+        {/* 컨텐츠 영역 - flex-1로 나머지 공간 차지 */}
+        <div className="min-w-0">
+          {DOCUMENTS.map((doc) => {
+            const docContent = documents[doc.key] || '';
+            const docHasContent = !!docContent;
+            const docIsEditing = isEditing && activeDoc === doc.key;
+            const docViewMode = activeDoc === doc.key ? viewMode : 'raw';
+
+            // 활성 탭만 렌더링
+            if (activeDoc !== doc.key) return null;
+
+            return (
+              <div key={doc.key} className="space-y-4">
+                {/* 문서 헤더 */}
+                <Card>
+                <CardHeader>
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="min-w-0 flex-1">
+                      <CardTitle className="flex items-center gap-2">
+                        <span className="text-2xl flex-shrink-0">{doc.icon}</span>
+                        <span className="truncate">{doc.title}</span>
+                      </CardTitle>
+                      <p className="text-sm text-slate-500 mt-1">{doc.description}</p>
+                    </div>
+                    <div className="flex flex-wrap gap-2 flex-shrink-0">
+                      {docHasContent ? (
+                        <>
+                          <Button onClick={handleCopy} variant="outline" size="sm" title="복사">
+                            {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
                           </Button>
-                        )}
-                        <DropdownMenu>
-                          <DropdownMenuTrigger className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 bg-primary text-primary-foreground shadow hover:bg-primary/90 h-8 px-3 py-2">
-                            <Download className="w-4 h-4" />
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
+                          <Button
+                            onClick={() => {
+                              if (docViewMode === 'raw') setViewMode('preview');
+                              else if (docViewMode === 'preview') setViewMode('visual');
+                              else setViewMode('raw');
+                            }}
+                            variant="outline"
+                            size="sm"
+                            title="보기 모드"
+                          >
+                            {docViewMode === 'raw' ? <BookOpen className="w-4 h-4" /> : docViewMode === 'preview' ? <Eye className="w-4 h-4" /> : <Code className="w-4 h-4" />}
+                          </Button>
+                          <Button onClick={handlePrint} variant="outline" size="sm" title="인쇄">
+                            <Printer className="w-4 h-4" />
+                          </Button>
+                          {!docIsEditing && docViewMode === 'raw' && (
+                            <Button onClick={() => setIsEditing(true)} variant="outline" size="sm" title="편집">
+                              <Edit className="w-4 h-4" />
+                            </Button>
+                          )}
+                          {docIsEditing && (
+                            <Button onClick={() => setIsEditing(false)} variant="outline" size="sm" title="미리보기">
+                              <Eye className="w-4 h-4" />
+                            </Button>
+                          )}
+                          <DropdownMenu>
+                            <DropdownMenuTrigger className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 bg-primary text-primary-foreground shadow hover:bg-primary/90 h-8 px-3 py-2">
+                              <Download className="w-4 h-4 mr-2" />
+                              내보내기
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
                             <DropdownMenuItem onClick={() => handleDownload('md')}>
                               <File className="w-4 h-4 mr-2" />
                               Markdown (.md)
@@ -793,6 +1162,22 @@ export function PrdViewer() {
                             </DropdownMenuItem>
                           </DropdownMenuContent>
                         </DropdownMenu>
+                        <Button
+                          onClick={() => handleGenerateDoc(doc.key)}
+                          disabled={isGenerating}
+                          variant="outline"
+                          size="sm"
+                          title="다시 생성"
+                        >
+                          {isGenerating ? (
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                          ) : (
+                            <>
+                              <Edit className="w-4 h-4 mr-1" />
+                              다시 생성
+                            </>
+                          )}
+                        </Button>
                       </>
                     ) : (
                       <Button
@@ -803,9 +1188,11 @@ export function PrdViewer() {
                         {isGenerating ? (
                           <Loader2 className="w-4 h-4 animate-spin" />
                         ) : (
-                          <Plus className="w-4 h-4" />
+                          <>
+                            <Plus className="w-4 h-4" />
+                            생성
+                          </>
                         )}
-                        생성
                       </Button>
                     )}
                   </div>
@@ -814,13 +1201,13 @@ export function PrdViewer() {
             </Card>
 
             {/* 문서 내용 */}
-            {hasContent ? (
+            {docHasContent ? (
               <>
                 {/* 플로팅 네비게이션 화살표 */}
-                <div className="fixed left-1/2 -translate-x-1/2 z-10 flex items-center gap-3 bg-white/90 dark:bg-slate-900/90 backdrop-blur-sm rounded-full shadow-lg border border-slate-200 dark:border-slate-700 px-4 py-2 mb-4">
+                <div className="sticky top-0 z-10 flex items-center gap-3 bg-white/90 dark:bg-slate-900/90 backdrop-blur-sm rounded-b-lg shadow-lg border border-slate-200 dark:border-slate-700 px-4 py-2 mb-4 -mx-4">
                   <Button
                     onClick={handlePreviousDoc}
-                    disabled={currentIndex === 0}
+                    disabled={flatIndex === 0}
                     variant="ghost"
                     size="sm"
                     className="gap-1 h-8 rounded-full"
@@ -830,18 +1217,18 @@ export function PrdViewer() {
                   </Button>
                   <div className="flex items-center gap-2 px-3">
                     <span className="text-sm font-medium text-slate-700 dark:text-slate-300">
-                      {DOCUMENTS[currentIndex]?.icon}
+                      {FLAT_DOCUMENTS[flatIndex]?.icon}
                     </span>
                     <span className="text-xs text-slate-500 dark:text-slate-400">
-                      {currentIndex + 1} / {DOCUMENTS.length}
+                      {flatIndex + 1} / {FLAT_DOCUMENTS.length}
                     </span>
                     <span className="text-sm font-medium text-slate-700 dark:text-slate-300">
-                      {DOCUMENTS[currentIndex]?.title}
+                      {FLAT_DOCUMENTS[flatIndex]?.title}
                     </span>
                   </div>
                   <Button
                     onClick={handleNextDoc}
-                    disabled={currentIndex === DOCUMENTS.length - 1}
+                    disabled={flatIndex === FLAT_DOCUMENTS.length - 1}
                     variant="ghost"
                     size="sm"
                     className="gap-1 h-8 rounded-full"
@@ -858,7 +1245,7 @@ export function PrdViewer() {
                 <Card>
                   <CardContent className="pt-6">
                     <Textarea
-                      value={editedContent || currentContent}
+                      value={editedContent || docContent}
                       onChange={(e) => setEditedContent(e.target.value)}
                       className="min-h-[500px] font-mono text-sm"
                       placeholder="문서 내용을 입력하세요..."
@@ -887,12 +1274,22 @@ export function PrdViewer() {
                     </CardTitle>
                   </CardHeader>
                   <CardContent className="p-6">
-                    {activeDoc === 'ia' && <ScreenDiagram content={currentContent} type="ia" />}
-                    {activeDoc === 'flowchart' && <MermaidDiagram chart={extractMermaidCode(currentContent)} />}
-                    {activeDoc === 'wireframe' && <ScreenDiagram content={currentContent} type="wireframe" />}
-                    {activeDoc === 'storyboard' && <StoryboardViewer content={currentContent} />}
-                    {activeDoc === 'test-plan' && <TestPlanViewer content={currentContent} />}
-                    {activeDoc === 'wbs' && <WBSViewer content={currentContent} />}
+                    {activeDoc === 'ia' && <ScreenDiagram content={docContent} type="ia" />}
+                    {activeDoc === 'flowchart' && (
+                      !docContent.trim() ? (
+                        <div className="text-center p-8 text-slate-500 dark:text-slate-400">
+                          <FileText className="w-12 h-12 mx-auto mb-4 opacity-50" />
+                          <p className="mb-2">아직 플로우차트 문서가 생성되지 않았습니다.</p>
+                          <p className="text-sm">먼저 문서를 생성해주세요.</p>
+                        </div>
+                      ) : (
+                        <MermaidDiagram chart={extractMermaidCode(docContent)} />
+                      )
+                    )}
+                    {activeDoc === 'wireframe' && <ScreenDiagram content={docContent} type="wireframe" />}
+                    {activeDoc === 'storyboard' && <StoryboardViewer content={docContent} />}
+                    {activeDoc === 'test-plan' && <TestPlanViewer content={docContent} />}
+                    {activeDoc === 'wbs' && <WBSViewer content={docContent} />}
                     {['prd', 'feature-list', 'screen-list', 'user-story', 'api-spec', 'deployment'].includes(activeDoc) && (
                       <div className="text-center p-8 text-slate-500 dark:text-slate-400">
                         <p className="mb-4">{doc?.title} 문서는 시각화를 지원하지 않습니다.</p>
@@ -970,7 +1367,7 @@ export function PrdViewer() {
                           ),
                         }}
                       >
-                        {currentContent}
+                        {docContent}
                       </ReactMarkdown>
                     </div>
                   </CardContent>
@@ -979,12 +1376,11 @@ export function PrdViewer() {
                 <Card>
                   <CardContent className="p-6">
                     <pre className="whitespace-pre-wrap font-sans text-sm leading-relaxed text-slate-700 dark:text-slate-300">
-                      {currentContent}
+                      {docContent}
                     </pre>
                   </CardContent>
                 </Card>
-              )
-              }
+              )}
             </>
             ) : (
               <Card>
@@ -1011,9 +1407,11 @@ export function PrdViewer() {
                 </CardContent>
               </Card>
             )}
-          </TabsContent>
-        ))}
-      </Tabs>
+            </div>
+          );
+        })}
+      </div>
+      </div>
     </div>
   );
 }

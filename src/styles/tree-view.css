@@ -1,0 +1,440 @@
+/* Enhanced Tree Navigation Styles */
+
+/* Spacing system */
+:root {
+  --tree-spacing-xs: 4px;
+  --tree-spacing-sm: 8px;
+  --tree-spacing-md: 12px;
+  --tree-spacing-lg: 16px;
+  --tree-spacing-xl: 24px;
+
+  /* Status colors */
+  --status-completed-bg: oklch(0.92 0.05 145);
+  --status-completed-fg: oklch(0.45 0.15 145);
+  --status-completed-border: oklch(0.75 0.12 145);
+
+  --status-available-bg: oklch(0.92 0.05 250);
+  --status-available-fg: oklch(0.55 0.20 250);
+  --status-available-border: oklch(0.75 0.15 250);
+
+  --status-pending-bg: oklch(0.96 0.01 0);
+  --status-pending-fg: oklch(0.50 0.05 0);
+  --status-pending-border: oklch(0.85 0.02 0);
+
+  /* Tree colors */
+  --tree-line-color: oklch(0.88 0 0);
+  --tree-hover-bg: oklch(0.96 0.01 0);
+  --tree-active-bg: oklch(0.92 0.02 250);
+
+  --shadow-subtle: 0 1px 3px 0 oklch(0 0 0 / 0.05);
+  --shadow-elevated: 0 4px 8px -2px oklch(0 0 0 / 0.1);
+}
+
+.dark {
+  --status-completed-bg: oklch(0.30 0.08 145 / 0.3);
+  --status-completed-fg: oklch(0.75 0.15 145);
+  --status-completed-border: oklch(0.55 0.12 145 / 0.5);
+
+  --status-available-bg: oklch(0.30 0.08 250 / 0.3);
+  --status-available-fg: oklch(0.75 0.15 250);
+  --status-available-border: oklch(0.55 0.15 250 / 0.5);
+
+  --status-pending-bg: oklch(0.28 0.02 0 / 0.5);
+  --status-pending-fg: oklch(0.65 0.05 0);
+  --status-pending-border: oklch(0.40 0.03 0 / 0.5);
+
+  --tree-line-color: oklch(1 0 0 / 0.1);
+  --tree-hover-bg: oklch(0.28 0.02 0);
+  --tree-active-bg: oklch(0.35 0.08 250 / 0.2);
+}
+
+/* Tree container */
+.tree-nav {
+  display: flex;
+  flex-direction: column;
+  gap: var(--tree-spacing-sm);
+  position: relative;
+}
+
+/* Tree node wrapper */
+.tree-node {
+  position: relative;
+}
+
+/* Connection lines */
+.tree-node::before {
+  /* Vertical line */
+  content: '';
+  position: absolute;
+  left: 20px;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: linear-gradient(
+    to bottom,
+    var(--tree-line-color) 0%,
+    var(--tree-line-color) 50%,
+    transparent 100%
+  );
+  z-index: 0;
+}
+
+.tree-node:last-child::before {
+  /* Stop vertical line at node height for last child */
+  height: 24px;
+  bottom: auto;
+}
+
+.tree-node::after {
+  /* Horizontal connector */
+  content: '';
+  position: absolute;
+  left: 12px;
+  top: 24px;
+  width: 9px;
+  height: 1px;
+  background: var(--tree-line-color);
+  z-index: 0;
+}
+
+/* Root nodes don't need connectors */
+.tree-node[data-level="0"]::before,
+.tree-node[data-level="0"]::after {
+  display: none;
+}
+
+/* Tree node trigger button */
+.tree-node-trigger {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--tree-spacing-sm);
+  width: 100%;
+  padding: var(--tree-spacing-md);
+  border-radius: 8px;
+  background: transparent;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: all 180ms ease;
+  user-select: none;
+  z-index: 1;
+}
+
+.tree-node-trigger:hover {
+  background: var(--tree-hover-bg);
+  border-color: var(--tree-line-color);
+  transform: translateX(2px);
+}
+
+.tree-node-trigger:focus-visible {
+  outline: 2px solid var(--status-available-fg);
+  outline-offset: 2px;
+}
+
+.tree-node-trigger[data-state="active"] {
+  background: var(--tree-active-bg);
+  border-color: var(--status-available-border);
+  font-weight: 600;
+}
+
+.tree-node-trigger:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.tree-node-trigger:disabled:hover {
+  background: transparent;
+  border-color: transparent;
+  transform: none;
+}
+
+/* Expand/collapse button */
+.tree-expand-btn {
+  position: absolute;
+  left: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 4px;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  color: oklch(0.50 0.02 0);
+  transition: all 150ms ease;
+  z-index: 2;
+}
+
+.dark .tree-expand-btn {
+  color: oklch(0.65 0.02 0);
+}
+
+.tree-expand-btn:hover {
+  background: oklch(0.90 0.01 0);
+  color: oklch(0.30 0 0);
+}
+
+.dark .tree-expand-btn:hover {
+  background: oklch(0.35 0.02 0);
+  color: oklch(0.80 0 0);
+}
+
+.tree-expand-btn svg {
+  width: 16px;
+  height: 16px;
+  transition: transform 200ms ease;
+}
+
+.tree-expand-btn[data-expanded="true"] svg {
+  transform: rotate(90deg);
+}
+
+/* Document icon */
+.tree-node-icon {
+  font-size: 18px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+/* Document title */
+.tree-node-title {
+  flex: 1;
+  font-size: 14px;
+  font-weight: 500;
+  text-align: left;
+  color: oklch(0.30 0 0);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dark .tree-node-title {
+  color: oklch(0.90 0 0);
+}
+
+.tree-node-trigger[data-state="active"] .tree-node-title {
+  color: var(--status-available-fg);
+}
+
+/* Status badge */
+.tree-status-badge {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: all 180ms ease;
+}
+
+.tree-status-badge.completed {
+  background: var(--status-completed-bg);
+  color: var(--status-completed-fg);
+  border: 1px solid var(--status-completed-border);
+}
+
+.tree-status-badge.available {
+  background: var(--status-available-bg);
+  color: var(--status-available-fg);
+  border: 1px solid var(--status-available-border);
+}
+
+.tree-status-badge.pending {
+  background: var(--status-pending-bg);
+  color: var(--status-pending-fg);
+  border: 1px solid var(--status-pending-border);
+}
+
+.tree-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  animation: pulse 2s ease-in-out infinite;
+}
+
+.tree-status-badge.completed .tree-status-dot {
+  background: var(--status-completed-fg);
+  animation: none;
+}
+
+.tree-status-badge.available .tree-status-dot {
+  background: var(--status-available-fg);
+}
+
+.tree-status-badge.pending .tree-status-dot {
+  background: var(--status-pending-fg);
+}
+
+/* Tree children container */
+.tree-children {
+  overflow: hidden;
+  transition: max-height 300ms cubic-bezier(0.4, 0, 0.2, 1),
+              opacity 250ms ease-out,
+              margin-top 300ms cubic-bezier(0.4, 0, 0.2, 1);
+  max-height: 2000px;
+  opacity: 1;
+  margin-top: var(--tree-spacing-sm);
+}
+
+.tree-children[data-collapsed="true"] {
+  max-height: 0;
+  opacity: 0;
+  margin-top: 0;
+}
+
+/* Progress indicator */
+.document-progress {
+  margin-bottom: var(--tree-spacing-xl);
+}
+
+.document-progress-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--tree-spacing-sm);
+}
+
+.document-progress-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: oklch(0.30 0 0);
+}
+
+.dark .document-progress-title {
+  color: oklch(0.90 0 0);
+}
+
+.document-progress-count {
+  font-size: 14px;
+  font-weight: 500;
+  color: oklch(0.50 0.02 0);
+}
+
+.dark .document-progress-count {
+  color: oklch(0.65 0.02 0);
+}
+
+.document-progress-bar {
+  height: 8px;
+  background: oklch(0.92 0 0);
+  border-radius: 9999px;
+  overflow: hidden;
+  position: relative;
+}
+
+.dark .document-progress-bar {
+  background: oklch(0.30 0.02 0);
+}
+
+.document-progress-fill {
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    oklch(0.55 0.20 250) 0%,
+    oklch(0.65 0.20 280) 50%,
+    oklch(0.70 0.15 145) 100%
+  );
+  border-radius: 9999px;
+  transition: width 500ms cubic-bezier(0.4, 0, 0.2, 1);
+  position: relative;
+  overflow: hidden;
+}
+
+/* Animated shine effect */
+.document-progress-fill::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    oklch(1 0 0 / 0.3) 50%,
+    transparent 100%
+  );
+  animation: shine 2s ease-in-out infinite;
+}
+
+/* Animations */
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.6;
+  }
+}
+
+@keyframes shine {
+  0% {
+    left: -100%;
+  }
+  100% {
+    left: 200%;
+  }
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.tree-node {
+  animation: slideIn 200ms ease-out;
+}
+
+/* Responsive adjustments */
+@media (max-width: 1024px) {
+  .tree-node-trigger {
+    padding: var(--tree-spacing-sm) var(--tree-spacing-md);
+  }
+
+  .tree-status-badge span:not(.tree-status-dot) {
+    display: none;
+  }
+
+  .tree-status-badge {
+    padding: 2px 6px;
+  }
+}
+
+/* Reduced motion support */
+@media (prefers-reduced-motion: reduce) {
+  .tree-node-trigger,
+  .tree-expand-btn,
+  .tree-children,
+  .tree-status-dot,
+  .document-progress-fill,
+  .document-progress-fill::after {
+    animation: none;
+    transition: none;
+  }
+
+  .tree-expand-btn[data-expanded="true"] svg {
+    transform: rotate(90deg);
+  }
+}
+
+/* Print styles */
+@media print {
+  .tree-expand-btn,
+  .tree-status-badge {
+    display: none;
+  }
+}

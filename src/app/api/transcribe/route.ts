@@ -2,9 +2,16 @@ import { NextRequest, NextResponse } from 'next/server';
 
 export const runtime = 'nodejs';
 
+// Z.ai 또는 OpenAI 설정
+const API_BASE = process.env.ZAI_BASE_URL || 'https://api.openai.com';
+const API_KEY = process.env.ZAI_API_KEY || process.env.OPENAI_API_KEY;
+const API_ENDPOINT = process.env.ZAI_BASE_URL
+  ? `${API_BASE}/v1/audio/transcriptions`
+  : 'https://api.openai.com/v1/audio/transcriptions';
+
 // Whisper API를 사용한 STT
 async function transcribeWithWhisper(audioBuffer: Buffer): Promise<{ text: string; duration: number }> {
-  if (!process.env.OPENAI_API_KEY) {
+  if (!API_KEY) {
     throw new Error('OPENAI_API_KEY_MISSING');
   }
 
@@ -16,10 +23,10 @@ async function transcribeWithWhisper(audioBuffer: Buffer): Promise<{ text: strin
     formData.append('model', 'whisper-1');
     formData.append('language', 'ko');
 
-    const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+    const response = await fetch(API_ENDPOINT, {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+        Authorization: `Bearer ${API_KEY}`,
       },
       body: formData,
     });

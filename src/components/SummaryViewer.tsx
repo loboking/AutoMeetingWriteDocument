@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { FileText, Loader2, CheckCircle, Clock, User, AlertCircle } from 'lucide-react';
+import { FileText, Loader2, CheckCircle, Clock, User, AlertCircle, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -12,6 +12,34 @@ export function SummaryViewer() {
   const { currentMeeting, updateCurrentMeeting, updateMeetingStep } = useMeetingStore();
   const summary = currentMeeting?.summary;
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isRegenerating, setIsRegenerating] = useState(false);
+
+  // 요약 재생성
+  const handleRegenerateSummary = async () => {
+    if (!currentMeeting?.transcript) return;
+
+    setIsRegenerating(true);
+    try {
+      const response = await fetch('/api/summarize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: currentMeeting.transcript,
+          context: `${currentMeeting.title} 회의`,
+        }),
+      });
+
+      if (!response.ok) throw new Error('요약 재생성 실패');
+
+      const { summary: newSummary } = await response.json();
+      updateCurrentMeeting({ summary: newSummary });
+    } catch (error) {
+      console.error('Summary regenerate error:', error);
+      alert('요약 재생성에 실패했습니다.');
+    } finally {
+      setIsRegenerating(false);
+    }
+  };
 
   // 페이지 이탈 방지 (PRD 생성 중)
   useEffect(() => {
@@ -85,6 +113,28 @@ export function SummaryViewer() {
 
   return (
     <div className="space-y-6">
+      {/* 요약 재생성 버튼 */}
+      <div className="flex justify-end">
+        <Button
+          onClick={handleRegenerateSummary}
+          disabled={isRegenerating}
+          variant="outline"
+          size="sm"
+        >
+          {isRegenerating ? (
+            <>
+              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              재생성 중...
+            </>
+          ) : (
+            <>
+              <RefreshCw className="w-4 h-4 mr-2" />
+              요약 재생성
+            </>
+          )}
+        </Button>
+      </div>
+
       {/* 개요 */}
       <Card>
         <CardHeader>

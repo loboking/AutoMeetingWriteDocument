@@ -4,8 +4,13 @@ import OpenAI from 'openai';
 
 export const runtime = 'nodejs';
 
+// 코딩 플랜 API 또는 OpenAI 설정
+const API_BASE = process.env.ZAI_BASE_URL || 'https://open.bigmodel.cn/api/coding/paas/v4';
+const API_KEY = process.env.ZAI_API_KEY || process.env.OPENAI_API_KEY;
+
 const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
+  apiKey: API_KEY,
+  baseURL: API_BASE,
 });
 
 type DocType =
@@ -43,18 +48,23 @@ async function generateDocument(
   transcript: string,
   meetingInfo: { title: string; date: string }
 ): Promise<string> {
-  const prompt = getPromptForDocType(docType, summary, transcript, meetingInfo);
+  const prompt = getPromptForDocType(docType, summary, transcript, meetingInfo) ||
+                 `회의 내용을 바탕으로 ${docType} 문서를 작성해주세요.\n\n${transcript}`;
 
   try {
     const response = await openai.chat.completions.create({
-      model: 'gpt-4o',
+      model: 'glm-5',
       messages: [{ role: 'user', content: prompt }],
       max_tokens: 16384,
     });
 
-    return response.choices[0]?.message?.content || '';
+    // 코딩 플랜 추론 모델은 content 또는 reasoning_content를 확인
+    const message = response.choices[0]?.message as any;
+    const content = message?.content || message?.reasoning_content || '';
+
+    return content;
   } catch (error) {
-    console.error('OpenAI API 오류:', error);
+    console.error('코딩 플랜 API 오류:', error);
     return getMockDoc(docType, summary, meetingInfo);
   }
 }
@@ -64,7 +74,7 @@ function getPromptForDocType(
   summary: MeetingSummary,
   transcript: string,
   meetingInfo: { title: string; date: string }
-): string {
+) {
   const baseInfo = `
 ## 회의 정보
 - 제목: ${meetingInfo.title}
@@ -1512,7 +1522,8 @@ vercel rollback
 - Sentry (에러 추적)`;
   }
 
-  return baseInfo;
+  // 기본 응답 (처리되지 않은 문서 타입)
+  return baseInfo + '\n\n## 원본 회의 내용\n\n위 회의 내용을 바탕으로 ' + docType + ' 문서를 작성해주세요.';
 }
 
 export async function POST(request: NextRequest) {

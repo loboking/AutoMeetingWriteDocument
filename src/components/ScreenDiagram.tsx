@@ -209,7 +209,7 @@ export function StoryboardViewer({ content }: { content: string }) {
 
       <div className="flex gap-4 overflow-x-auto pb-4">
         {frames.map((frame, idx) => (
-          <div key={frame.step} className="flex-shrink-0 w-64">
+          <div key={`frame-${frame.step}-${idx}`} className="flex-shrink-0 w-64">
             {/* 프레임 카드 */}
             <div className="bg-white dark:bg-slate-950 rounded-xl shadow-lg overflow-hidden border-2 border-slate-200 dark:border-slate-700">
               {/* 화면 영역 */}

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { FileText, Loader2, Sparkles } from 'lucide-react';
+import { FileText, Loader2, Sparkles, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Textarea } from '@/components/ui/textarea';
@@ -10,7 +10,46 @@ import { useMeetingStore } from '@/store/meetingStore';
 export function TranscriptViewer() {
   const { currentMeeting, updateCurrentMeeting, updateMeetingStep } = useMeetingStore();
   const [isSummarizing, setIsSummarizing] = useState(false);
+  const [isRegenerating, setIsRegenerating] = useState(false);
   const [editedTranscript, setEditedTranscript] = useState(currentMeeting?.transcript || '');
+
+  // 변환 재생성 (오디오 파일 필요)
+  const handleRegenerateTranscript = async () => {
+    const audioUrl = currentMeeting?.audioUrl;
+    if (!audioUrl) {
+      alert('녹음 파일이 없어서 재변환할 수 없습니다.\n오디오 파일을 다시 녹음하거나 업로드해주세요.');
+      return;
+    }
+
+    setIsRegenerating(true);
+    try {
+      // 오디오 URL에서 Blob을 가져와서 File로 변환
+      const response = await fetch(audioUrl);
+      const blob = await response.blob();
+      const audioFile = new File([blob], 'audio.webm', { type: 'audio/webm' });
+
+      const formData = new FormData();
+      formData.append('audioFile', audioFile);
+      formData.append('language', 'ko');
+
+      const res = await fetch('/api/transcribe', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!res.ok) throw new Error('변환 실패');
+
+      const { text } = await res.json();
+
+      setEditedTranscript(text);
+      updateCurrentMeeting({ transcript: text });
+    } catch (error) {
+      console.error('Transcribe regenerate error:', error);
+      alert('재변환에 실패했습니다.');
+    } finally {
+      setIsRegenerating(false);
+    }
+  };
 
   const handleSummarize = async () => {
     if (!editedTranscript.trim()) return;
@@ -63,10 +102,30 @@ export function TranscriptViewer() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <FileText className="w-5 h-5" />
-          변환된 텍스트
-        </CardTitle>
+        <div className="flex items-center justify-between">
+          <CardTitle className="flex items-center gap-2">
+            <FileText className="w-5 h-5" />
+            변환된 텍스트
+          </CardTitle>
+          <Button
+            onClick={handleRegenerateTranscript}
+            disabled={isRegenerating || !currentMeeting?.audioUrl}
+            variant="outline"
+            size="sm"
+          >
+            {isRegenerating ? (
+              <>
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                재변환 중...
+              </>
+            ) : (
+              <>
+                <RefreshCw className="w-4 h-4 mr-2" />
+                변환 재생성
+              </>
+            )}
+          </Button>
+        </div>
       </CardHeader>
       <CardContent className="space-y-4">
         <Textarea

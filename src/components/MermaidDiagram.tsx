@@ -14,7 +14,6 @@ let mermaidInitialized = false;
 export function MermaidDiagram({ chart, id = 'mermaid' }: MermaidDiagramProps) {
   const ref = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
-  const [showRaw, setShowRaw] = useState(false);
 
   useEffect(() => {
     if (!mermaidInitialized) {
@@ -23,10 +22,12 @@ export function MermaidDiagram({ chart, id = 'mermaid' }: MermaidDiagramProps) {
           startOnLoad: false,
           theme: 'default',
           securityLevel: 'loose',
-          // 최소한의 설정만 사용
+          // 더 관대적인 설정
           flowchart: {
             useMaxWidth: true,
+            htmlLabels: true,
           },
+          logLevel: 'fatal', // 에러만 표시
         });
         mermaidInitialized = true;
       } catch (e) {
@@ -37,22 +38,20 @@ export function MermaidDiagram({ chart, id = 'mermaid' }: MermaidDiagramProps) {
 
   useEffect(() => {
     setError(null);
-    setShowRaw(false);
 
     if (!ref.current || !chart.trim()) {
       return;
     }
 
-    // 빈 텍스트 체크
     const trimmedChart = chart.trim();
     if (!trimmedChart) {
       if (ref.current) {
-        ref.current.innerHTML = '<span class="text-slate-400">빈 다이어그램</span>';
+        ref.current.innerHTML = '<span class="text-slate-400 text-sm">빈 다이어그램</span>';
       }
       return;
     }
 
-    // mermaid 키워드 확인
+    // mermaid 키워드 확인 (더 관대하게)
     const mermaidPatterns = [
       /\bgraph\s+(?:TD|LR|RL)/i,
       /\bflowchart\s+(?:TD|LR|RL)/i,
@@ -63,6 +62,9 @@ export function MermaidDiagram({ chart, id = 'mermaid' }: MermaidDiagramProps) {
       /\bgantt\b/i,
       /\bpie\b/i,
       /\bmindmap\b/i,
+      /\bjourney\b/i,
+      /\berDiagram\b/i,
+      /\bc4model\b/i,
     ];
 
     const hasValidMermaid = mermaidPatterns.some(p => p.test(trimmedChart));
@@ -72,53 +74,53 @@ export function MermaidDiagram({ chart, id = 'mermaid' }: MermaidDiagramProps) {
         ref.current.innerHTML = `
           <div class="text-center p-4">
             <p class="text-amber-600 dark:text-amber-400 text-sm mb-2">유효한 Mermaid 다이어그램이 아닙니다</p>
-            <button
-              onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='block'?'none':'block'"
-              class="text-xs text-blue-600 dark:text-blue-400 underline"
-            >
-              원본 텍스트 보기
-            </button>
-            <pre class="hidden mt-2 p-3 bg-slate-100 dark:bg-slate-900 rounded text-xs overflow-x-auto"><code>${trimmedChart.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</code></pre>
+            <p class="text-xs text-slate-500 dark:text-slate-400">flowchart TD, sequenceDiagram 등 키워드가 필요합니다</p>
           </div>
         `;
       }
       return;
     }
 
-    // 유효한 mermaid 코드만 추출 (이미 블록 제외된 코드라고 가정)
-    const codeToRender = trimmedChart;
+    // 코드 정제 (불노이즈 제거, 빈 줄 제거)
+    const lines = trimmedChart.split('\n').filter(line => line.trim());
+    const cleanCode = lines.join('\n').trim();
+
+    if (!cleanCode) {
+      if (ref.current) {
+        ref.current.innerHTML = '<span class="text-slate-400 text-sm">비어있음</span>';
+      }
+      return;
+    }
 
     // 고유 ID 생성
     const uniqueId = `mermaid-${id}-${Date.now()}-${Math.random().toString(36).substring(7)}`;
 
     mermaid
-      .render(uniqueId, codeToRender)
+      .render(uniqueId, cleanCode)
       .then((result) => {
         if (ref.current) {
-          ref.current.innerHTML = `
-            <div class="mermaid-container flex justify-center">
-              ${result.svg}
-            </div>
-          `;
+          ref.current.innerHTML = result.svg;
         }
       })
       .catch((err: any) => {
         console.error('Mermaid render error:', err);
-        const errorMsg = err?.message || err?.str || '알 수 없는 오류';
+        const errorMsg = err?.message || err?.str || '렌더링 오류';
         setError(errorMsg);
 
         if (ref.current) {
+          // 첫 200자만 표시
+          const previewCode = cleanCode.length > 200
+            ? cleanCode.substring(0, 200) + '...'
+            : cleanCode;
+
           ref.current.innerHTML = `
             <div class="text-center p-4">
-              <p class="text-red-600 dark:text-red-400 text-sm mb-2">다이어그램 렌더링 실패</p>
+              <p class="text-red-600 dark:text-red-400 text-sm mb-2">⚠️ 다이어그램 렌더링 실패</p>
               <p class="text-xs text-slate-500 dark:text-slate-400 mb-2">${errorMsg}</p>
-              <button
-                onclick="this.nextElementSibling.classList.toggle('hidden')"
-                class="text-xs text-blue-600 dark:text-blue-400 underline"
-              >
-                원본 코드 보기
-              </button>
-              <pre class="hidden mt-2 p-3 bg-slate-100 dark:bg-slate-900 rounded text-xs overflow-x-auto max-h-40"><code>${codeToRender.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</code></pre>
+              <details class="text-left">
+                <summary class="cursor-pointer text-xs text-blue-600 dark:text-blue-400 hover:underline">원본 코드 보기</summary>
+                <pre class="mt-2 p-3 bg-slate-100 dark:bg-slate-900 rounded text-xs overflow-x-auto max-h-40 overflow-y-auto"><code>${previewCode.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</code></pre>
+              </details>
             </div>
           `;
         }

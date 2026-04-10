@@ -4,11 +4,16 @@ import OpenAI from 'openai';
 
 export const runtime = 'nodejs';
 
+// Z.ai 또는 OpenAI 설정
+const API_BASE = process.env.ZAI_BASE_URL || 'https://api.openai.com/v1';
+const API_KEY = process.env.ZAI_API_KEY || process.env.OPENAI_API_KEY;
+
 const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
+  apiKey: API_KEY,
+  baseURL: API_BASE,
 });
 
-// OpenAI GPT-4o를 통한 요약 생성
+// 코딩 플랜 GLM API를 통한 요약 생성
 async function summarizeWithGPT(text: string, context?: string): Promise<MeetingSummary> {
   const prompt = `당신은 회의록 전문가입니다. 다음 회의 내용을 **상세하게 분석**하여 구조화된 요약을 제공해주세요.
 
@@ -53,16 +58,23 @@ ${context ? `## 추가 맥락\n${context}` : ''}
 
   try {
     const response = await openai.chat.completions.create({
-      model: 'gpt-4o',
+      model: 'glm-5',
       messages: [{ role: 'user', content: prompt }],
-      max_tokens: 4096,
-      response_format: { type: 'json_object' },
+      max_tokens: 8192,
     });
 
-    const content = response.choices[0]?.message?.content || '{}';
+    // 코딩 플랜 추론 모델은 content 또는 reasoning_content를 확인
+    const message = response.choices[0]?.message as any;
+    const content = message?.content || message?.reasoning_content || '{}';
+
+    // JSON 파싱: reasoning_content에서 JSON 부분 추출
+    let jsonMatch = content.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      return JSON.parse(jsonMatch[0]);
+    }
     return JSON.parse(content);
   } catch (error) {
-    console.error('OpenAI API 오류:', error);
+    console.error('코딩 플랜 API 오류:', error);
     return getMockSummary();
   }
 }
