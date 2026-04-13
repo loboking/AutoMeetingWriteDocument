@@ -4,14 +4,20 @@ import OpenAI from 'openai';
 
 export const runtime = 'nodejs';
 
-// 코딩 플랜 API 또는 OpenAI 설정
-const API_BASE = process.env.ZAI_BASE_URL || 'https://open.bigmodel.cn/api/coding/paas/v4';
-const API_KEY = process.env.ZAI_API_KEY || process.env.OPENAI_API_KEY;
+// OpenAI 클라이언트 초기화 함수 (빌드 시 실행 방지)
+function createOpenAIClient() {
+  const API_BASE = process.env.ZAI_BASE_URL || 'https://open.bigmodel.cn/api/coding/paas/v4';
+  const API_KEY = process.env.ZAI_API_KEY || process.env.OPENAI_API_KEY;
 
-const openai = new OpenAI({
-  apiKey: API_KEY,
-  baseURL: API_BASE,
-});
+  if (!API_KEY) {
+    throw new Error('API_KEY가 필요합니다. ZAI_API_KEY 또는 OPENAI_API_KEY 환경변수를 설정하세요.');
+  }
+
+  return new OpenAI({
+    apiKey: API_KEY,
+    baseURL: API_BASE,
+  });
+}
 
 type DocType =
   | 'prd'
@@ -52,6 +58,7 @@ async function generateDocument(
                  `회의 내용을 바탕으로 ${docType} 문서를 작성해주세요.\n\n${transcript}`;
 
   try {
+    const openai = createOpenAIClient();
     const response = await openai.chat.completions.create({
       model: 'glm-5',
       messages: [{ role: 'user', content: prompt }],

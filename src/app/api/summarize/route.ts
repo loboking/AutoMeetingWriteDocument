@@ -4,14 +4,20 @@ import OpenAI from 'openai';
 
 export const runtime = 'nodejs';
 
-// Z.ai 또는 OpenAI 설정
-const API_BASE = process.env.ZAI_BASE_URL || 'https://api.openai.com/v1';
-const API_KEY = process.env.ZAI_API_KEY || process.env.OPENAI_API_KEY;
+// OpenAI 클라이언트 초기화 함수 (빌드 시 실행 방지)
+function createOpenAIClient() {
+  const API_BASE = process.env.ZAI_BASE_URL || 'https://api.openai.com/v1';
+  const API_KEY = process.env.ZAI_API_KEY || process.env.OPENAI_API_KEY;
 
-const openai = new OpenAI({
-  apiKey: API_KEY,
-  baseURL: API_BASE,
-});
+  if (!API_KEY) {
+    throw new Error('API_KEY가 필요합니다. ZAI_API_KEY 또는 OPENAI_API_KEY 환경변수를 설정하세요.');
+  }
+
+  return new OpenAI({
+    apiKey: API_KEY,
+    baseURL: API_BASE,
+  });
+}
 
 // 코딩 플랜 GLM API를 통한 요약 생성
 async function summarizeWithGPT(text: string, context?: string): Promise<MeetingSummary> {
@@ -57,6 +63,7 @@ ${context ? `## 추가 맥락\n${context}` : ''}
 분석하여 JSON만 반환해주세요.`;
 
   try {
+    const openai = createOpenAIClient();
     const response = await openai.chat.completions.create({
       model: 'glm-5',
       messages: [{ role: 'user', content: prompt }],
