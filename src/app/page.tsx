@@ -8,6 +8,16 @@ import { Progress } from '@/components/ui/progress';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { useRecorder } from '@/hooks/useRecorder';
 import { useMeetingStore } from '@/store/meetingStore';
 import { MeetingStep } from '@/types';
@@ -58,13 +68,23 @@ export default function Home() {
     setMeetingTitle('');
   };
 
+  const [uploadError, setUploadError] = useState('');
+
+  const [showNewMeetingConfirm, setShowNewMeetingConfirm] = useState(false);
   const handleFileUpload = async (file: File) => {
+    setUploadError('');
     setUploading(true);
     setUploadProgress(0);
 
+    // 파일 크기 검증 (최대 50MB)
+    const MAX_SIZE = 50 * 1024 * 1024;
+    if (file.size > MAX_SIZE) {
+      setUploadError('파일 크기는 50MB 이하여야 합니다.');
+      setUploading(false);
+      return;
+    }
+
     const title = meetingTitle.trim() || file.name.replace(/\.[^/.]+$/, '');
-    createMeeting(title);
-    setMeetingTitle('');
 
     // 진행률 시뮬레이션
     const interval = setInterval(() => {
@@ -89,17 +109,21 @@ export default function Home() {
       clearInterval(interval);
       setUploadProgress(100);
 
-      if (!response.ok) throw new Error('파일 처리 실패');
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: '파일 처리 실패' }));
+        throw new Error(errorData.error || '파일 처리 실패');
+      }
 
       const { text } = await response.json();
 
+      // 업로드 성공 후에만 회의 생성
+      createMeeting(title);
+      setMeetingTitle('');
       updateCurrentMeeting({ transcript: text });
       updateMeetingStep('transcribing');
     } catch (error) {
       console.error('File upload error:', error);
-      alert('파일 처리에 실패했습니다.');
-      setUploading(false);
-      setUploadProgress(0);
+      setUploadError(error instanceof Error ? error.message : '파일 처리에 실패했습니다.');
     } finally {
       clearInterval(interval);
       setUploading(false);
@@ -117,6 +141,35 @@ export default function Home() {
 
   const getCurrentStepIndex = () => {
     return steps.findIndex((s) => s.id === currentStep);
+  };
+
+  const isTabDisabled = (stepValue: string) => {
+    if (!currentMeeting) return true;
+
+    // 실제 데이터 존재 여부를 기준으로 판단 (단계 기반 + 데이터 기반)
+    const hasRecording = !!currentMeeting.audioUrl;
+    const hasTranscript = !!currentMeeting.transcript?.trim();
+    const hasSummary = !!currentMeeting.summary;
+    const hasDocuments = !!currentMeeting.prd || !!currentMeeting.userStory ||
+                        !!currentMeeting.featureList || !!currentMeeting.screenList ||
+                        !!currentMeeting.apiSpec || !!currentMeeting.wireframe ||
+                        !!currentMeeting.storyboard || !!currentMeeting.testPlan ||
+                        !!currentMeeting.testCase || !!currentMeeting.database ||
+                        !!currentMeeting.wbs || !!currentMeeting.deployment ||
+                        !!currentMeeting.flowchart || !!currentMeeting.ia;
+
+    switch (stepValue) {
+      case 'recording':
+        return false; // 항상 활성화
+      case 'transcribing':
+        return !hasRecording && !hasTranscript && !hasSummary && !hasDocuments;
+      case 'summarizing':
+        return !hasTranscript && !hasSummary && !hasDocuments;
+      case 'done':
+        return !hasSummary && !hasDocuments;
+      default:
+        return true;
+    }
   };
 
   // Hydration 방지 - 클라이언트 마운트 전까지 로딩 표시
@@ -292,6 +345,12 @@ export default function Home() {
                       <Progress value={uploadProgress} className="h-2" />
                     </div>
                   )}
+
+                  {uploadError && (
+                    <Alert variant="destructive">
+                      <AlertDescription>{uploadError}</AlertDescription>
+                    </Alert>
+                  )}
                 </TabsContent>
               </Tabs>
             </CardContent>
@@ -319,19 +378,19 @@ export default function Home() {
             {/* 단계별 컴포넌트 렌더링 */}
             <Tabs value={currentStep} onValueChange={handleTabChange} className="w-full">
               <TabsList className="grid w-full grid-cols-4 h-auto p-1 bg-slate-100 dark:bg-slate-800">
-                <TabsTrigger value="recording" className="gap-1.5 data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm dark:data-[state=active]:bg-slate-700 dark:data-[state=active]:text-blue-400">
+                <TabsTrigger value="recording" disabled={isTabDisabled('recording')} className="gap-1.5 data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm dark:data-[state=active]:bg-slate-700 dark:data-[state=active]:text-blue-400">
                   <Mic className="w-4 h-4" />
                   <span className="hidden sm:inline">녹음</span>
                 </TabsTrigger>
-                <TabsTrigger value="transcribing" className="gap-1.5 data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm dark:data-[state=active]:bg-slate-700 dark:data-[state=active]:text-blue-400">
+                <TabsTrigger value="transcribing" disabled={isTabDisabled('transcribing')} className="gap-1.5 data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm dark:data-[state=active]:bg-slate-700 dark:data-[state=active]:text-blue-400">
                   <Upload className="w-4 h-4" />
                   <span className="hidden sm:inline">변환</span>
                 </TabsTrigger>
-                <TabsTrigger value="summarizing" className="gap-1.5 data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm dark:data-[state=active]:bg-slate-700 dark:data-[state=active]:text-blue-400">
+                <TabsTrigger value="summarizing" disabled={isTabDisabled('summarizing')} className="gap-1.5 data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm dark:data-[state=active]:bg-slate-700 dark:data-[state=active]:text-blue-400">
                   <FileText className="w-4 h-4" />
                   <span className="hidden sm:inline">요약</span>
                 </TabsTrigger>
-                <TabsTrigger value="done" className="gap-1.5 data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm dark:data-[state=active]:bg-slate-700 dark:data-[state=active]:text-blue-400">
+                <TabsTrigger value="done" disabled={isTabDisabled('done')} className="gap-1.5 data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm dark:data-[state=active]:bg-slate-700 dark:data-[state=active]:text-blue-400">
                   <Download className="w-4 h-4" />
                   <span className="hidden sm:inline">문서</span>
                 </TabsTrigger>
@@ -378,6 +437,31 @@ export default function Home() {
           </div>
         )}
       </div>
+
+        {/* 새 회의 확인 다이얼로그 */}
+        {showNewMeetingConfirm && (
+          <AlertDialog open={showNewMeetingConfirm} onOpenChange={setShowNewMeetingConfirm}>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>새 회의 시작</AlertDialogTitle>
+                <AlertDialogDescription>
+                  현재 회의 내용은 자동 저장됩니다. 새 회의를 시작하시겠습니까?
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>취소</AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={() => {
+                    setCurrentMeeting(null);
+                    setShowNewMeetingConfirm(false);
+                  }}
+                >
+                  시작하기
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        )}
     </div>
   );
 }

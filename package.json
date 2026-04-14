@@ -11,6 +11,9 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.85.0",
     "@base-ui/react": "^1.3.0",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/addon-web-links": "^0.12.0",
+    "@xterm/xterm": "^6.0.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "date-fns": "^4.1.0",
@@ -36,7 +39,7 @@
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
     "@types/file-saver": "^2.0.7",
-    "@types/node": "^20",
+    "@types/node": "^20.19.39",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",

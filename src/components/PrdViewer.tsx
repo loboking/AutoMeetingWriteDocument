@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { FileText, Download, Copy, Check, Loader2, Plus, Edit, Save, Eye, File, Code, BookOpen, Presentation, Printer, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Folder } from 'lucide-react';
+import { FileText, Download, Copy, Check, Loader2, Plus, Edit, Save, Eye, File, Code, BookOpen, Presentation, Printer, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Folder, Terminal } from 'lucide-react';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { saveAs } from 'file-saver';
 import * as XLSX from 'xlsx';
@@ -14,11 +14,23 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { useMeetingStore } from '@/store/meetingStore';
 import { MermaidDiagram } from '@/components/MermaidDiagram';
 import { ScreenDiagram, StoryboardViewer } from '@/components/ScreenDiagram';
 import { TestPlanViewer } from '@/components/TestPlanViewer';
 import { WBSViewer } from '@/components/WBSViewer';
+import { InAppTerminal } from '@/components/InAppTerminal';
+import { CommandPanel } from '@/components/CommandPanel';
 
 // 마크다운에서 mermaid 코드 추출
 function extractMermaidCode(content: string): string {
@@ -69,6 +81,8 @@ type DocType =
   | 'wbs'
   | 'api-spec'
   | 'test-plan'
+  | 'test-case'
+  | 'database'
   | 'deployment';
 
 interface Document {
@@ -89,6 +103,8 @@ const DOCUMENTS: { key: DocType; title: string; icon: string; description: strin
   { key: 'wireframe', title: '와이어프레임', icon: '🎨', description: '화면 설계 및 플로우' },
   { key: 'api-spec', title: 'API명세', icon: '🔌', description: 'API 인터페이스 설계' },
   { key: 'test-plan', title: '테스트계획', icon: '🧪', description: '테스트 시나리오 및 계획' },
+  { key: 'test-case', title: '테스트케이스', icon: '✅', description: '상세 테스트 케이스 목록' },
+  { key: 'database', title: 'DB설계', icon: '🗄️', description: '데이터베이스 스키마 및 ERD' },
   { key: 'wbs', title: 'WBS', icon: '📊', description: '작업 분류 구조' },
   { key: 'deployment', title: '배포가이드', icon: '🚀', description: '릴리스 및 배포 절차' },
 ];
@@ -105,6 +121,8 @@ const DEPENDENCIES: Record<DocType, DocType[]> = {
   'wireframe': ['ia', 'screen-list'], // IA, 화면목록 필요
   'api-spec': ['feature-list'], // 기능목록 필요
   'test-plan': ['feature-list', 'api-spec'], // 기능목록, API명세 필요
+  'test-case': ['feature-list', 'api-spec', 'test-plan'], // 기능목록, API명세, 테스트계획 필요
+  'database': ['feature-list', 'api-spec'], // 기능목록, API명세 필요
   'wbs': ['feature-list', 'api-spec', 'wireframe'], // 기능목록, API명세, 와이어프레임 필요
   'deployment': ['prd', 'feature-list', 'api-spec'], // PRD, 기능목록, API명세 필요
 };
@@ -180,6 +198,14 @@ const DOCUMENT_TREE: TreeNode[] = [
             children: [],
           },
         ],
+      },
+      {
+        key: 'database',
+        title: 'DB설계',
+        icon: '🗄️',
+        description: '데이터베이스 스키마 및 ERD',
+        isParent: true,
+        children: [],
       },
       {
         key: 'api-spec',
@@ -277,16 +303,21 @@ export function PrdViewer() {
     wbs: currentMeeting?.wbs || '',
     'api-spec': currentMeeting?.apiSpec || '',
     'test-plan': currentMeeting?.testPlan || '',
+    'test-case': currentMeeting?.testCase || '',
+    database: currentMeeting?.database || '',
     deployment: currentMeeting?.deployment || '',
   });
 
   const [documents, setDocuments] = useState<Record<DocType, string>>(getDocumentsFromMeeting);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [showGenerateConfirm, setShowGenerateConfirm] = useState(false);
+  const [generateConfirmData, setGenerateConfirmData] = useState<{ count: number; isRegenerate: boolean; docsToRegenerate: DocType[] } | null>(null);
   const [isEditing, setIsEditing] = useState(false);
-  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set(['prd', 'user-story', 'feature-list', 'screen-list', 'api-spec', 'flowchart', 'wireframe', 'deployment'])); // 모든 상위 노드 기본 펼침
+  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set(['prd'])); // 모든 상위 노드 기본 펼침
   const [editedContent, setEditedContent] = useState('');
   const [copied, setCopied] = useState(false);
-  const [viewMode, setViewMode] = useState<'raw' | 'preview' | 'visual'>('visual'); // 기본을 시각화로 변경
+  const [viewMode, setViewMode] = useState<'raw' | 'preview' | 'visual' | 'terminal'>('visual'); // 기본을 시각화로 변경
+  const [terminalCommands, setTerminalCommands] = useState<string[]>([]);
   const treeRef = useRef<HTMLDivElement>(null);
 
   // currentMeeting 변경 시 documents 동기화
@@ -294,12 +325,41 @@ export function PrdViewer() {
     setDocuments(getDocumentsFromMeeting());
   }, [currentMeeting]);
 
-  // 트리 스크롤을 맨 위로 초기화
+  // 컴포넌트 마운트 시 강제 스크롤 리셋 (항상 PRD가 최상단에 보이도록)
+  useEffect(() => {
+    const forceScrollToTop = () => {
+      if (treeRef.current) {
+        treeRef.current.scrollTop = 0;
+        // requestAnimationFrame으로 다시 시도
+        requestAnimationFrame(() => {
+          if (treeRef.current) {
+            treeRef.current.scrollTop = 0;
+          }
+        });
+      }
+    };
+    
+    // 즉시 실행 + 여러 지연 타이밍에서 재시도
+    forceScrollToTop();
+    const timeouts = [50, 100, 200, 300].map(delay => 
+      setTimeout(forceScrollToTop, delay)
+    );
+    
+    return () => timeouts.forEach(clearTimeout);
+  }, []);
+
+  // currentMeeting 또는 activeDoc 변경 시 스크롤 리셋
   useEffect(() => {
     if (treeRef.current) {
       treeRef.current.scrollTop = 0;
+      requestAnimationFrame(() => {
+        if (treeRef.current) {
+          treeRef.current.scrollTop = 0;
+        }
+      });
     }
-  }, []);
+  }, [currentMeeting, activeDoc]);
+
 
   const handleGenerateDoc = async (docType: DocType) => {
     if (!currentMeeting?.summary) {
@@ -338,7 +398,7 @@ export function PrdViewer() {
       updateCurrentMeeting({ [docTypeToField(docType)]: content });
     } catch (error) {
       console.error('Doc generation error:', error);
-      alert('문서 생성에 실패했습니다.');
+      // 에러는 UI에서 자연스럽게 처리 (버튼 상태 등)
     } finally {
       setIsGenerating(false);
     }
@@ -346,7 +406,12 @@ export function PrdViewer() {
 
   const handleGenerateAll = async () => {
     if (!currentMeeting?.summary) {
-      alert('먼저 요약을 생성해주세요.');
+      setShowGenerateConfirm(true);
+      setGenerateConfirmData({
+        count: 0,
+        isRegenerate: false,
+        docsToRegenerate: []
+      });
       return;
     }
 
@@ -356,23 +421,52 @@ export function PrdViewer() {
       return canGenerate || documents[doc.key]; // 이미 생성된 것도 포함
     });
 
-    const alreadyGenerated = availableDocs.filter(doc => documents[doc.key]).length;
     const docsToGenerate = availableDocs.filter(doc => !documents[doc.key]);
     const toGenerateCount = docsToGenerate.length;
 
+    // 모든 문서가 이미 생성된 경우 - 재생성 확인
     if (toGenerateCount === 0) {
-      alert('모든 문서가 이미 생성되었습니다.\n재생성을 원하시면 개별 문서의 "다시 생성" 버튼을 사용해주세요.');
+      const allDocTypes = availableDocs.map(d => d.key) as DocType[];
+      setShowGenerateConfirm(true);
+      setGenerateConfirmData({
+        count: allDocTypes.length,
+        isRegenerate: true,
+        docsToRegenerate: allDocTypes
+      });
       return;
     }
 
-    if (!confirm(`${toGenerateCount}개 문서를 생성하시겠습니까?\n(의존성이 충족된 문서만 생성됩니다)`)) {
-      return;
+    // 일부만 생성된 경우 - 일반 생성 확인
+    setShowGenerateConfirm(true);
+    setGenerateConfirmData({
+      count: toGenerateCount,
+      isRegenerate: false,
+      docsToRegenerate: docsToGenerate.map(d => d.key)
+    });
+  };
+
+  const confirmGenerateAll = async () => {
+    setShowGenerateConfirm(false);
+    if (!generateConfirmData || !currentMeeting?.summary) return;
+
+    const { isRegenerate, docsToRegenerate } = generateConfirmData;
+
+    // 재생성인 경우: docsToRegenerate 사용
+    // 일반 생성인 경우: docsToGenerate 로직 재사용
+    let docsToGenerate: typeof DOCUMENTS;
+
+    if (isRegenerate) {
+      docsToGenerate = DOCUMENTS.filter(doc => docsToRegenerate.includes(doc.key as DocType));
+    } else {
+      docsToGenerate = DOCUMENTS.filter(doc => {
+        const { canGenerate } = canGenerateDoc(doc.key, documents);
+        return canGenerate && !documents[doc.key];
+      });
     }
 
     setIsGenerating(true);
     const results: Record<DocType, string> = { ...documents };
 
-    // 병렬 처리로 속도 개선 (의존성 충족된 문서만 생성)
     const generatePromises = docsToGenerate.map(async (doc) => {
       const docType = doc.key;
       try {
@@ -407,22 +501,40 @@ export function PrdViewer() {
     const successCount = outcomes.filter(o => o.status === 'fulfilled' && o.value.success).length;
     const failCount = outcomes.length - successCount;
 
-    // 의존성으로 생성되지 않은 문서 안내
-    const skippedCount = DOCUMENTS.length - availableDocs.length;
-
     setDocuments(results);
     setIsGenerating(false);
+    setGenerateConfirmData(null);
+  };
 
-    if (failCount > 0 || skippedCount > 0) {
-      let message = `문서 생성 완료:\n`;
-      message += `- 생성 가능: ${toGenerateCount}개 중 ${successCount}개 성공\n`;
-      if (failCount > 0) message += `- 생성 실패: ${failCount}개\n`;
-      if (skippedCount > 0) message += `- 의존성 미충족 (생성 불가): ${skippedCount}개\n`;
-      message += `\n의존성이 있는 문서는 먼저 선행 문서를 생성해주세요.`;
-      alert(message);
-    } else {
-      alert(`${successCount}개 문서 생성이 완료되었습니다.`);
+
+  const handleDownloadAll = () => {
+    if (!currentMeeting) return;
+
+    const generatedDocs = DOCUMENTS.filter(doc => documents[doc.key]);
+
+    if (generatedDocs.length === 0) {
+      return; // 문서 없으면 조용히 종료
     }
+
+    const safeTitle = currentMeeting.title.replace(/\s+/g, '-');
+    const timestamp = new Date().toISOString().slice(0, 10);
+
+    let combinedContent = `# ${currentMeeting.title} - 전체 기획 문서\n\n`;
+    combinedContent += `> 생성일: ${new Date(currentMeeting.createdAt).toLocaleDateString('ko-KR')}\n`;
+    combinedContent += `> 내보내기일: ${new Date().toLocaleDateString('ko-KR')}\n\n`;
+    combinedContent += `---\n\n`;
+
+    generatedDocs.forEach((doc) => {
+      const docContent = documents[doc.key];
+      if (docContent) {
+        combinedContent += `\n\n## ${doc.title}\n\n`;
+        combinedContent += docContent;
+        combinedContent += '\n\n---\n\n';
+      }
+    });
+
+    const blob = new Blob([combinedContent], { type: 'text/markdown' });
+    saveAs(blob, `${safeTitle}-전체문서-${timestamp}.md`);
   };
 
   const handleSaveEdit = () => {
@@ -1125,6 +1237,18 @@ export function PrdViewer() {
                 </>
               )}
             </Button>
+
+            {/* 모두 내보내기 버튼 */}
+            <Button
+              onClick={handleDownloadAll}
+              disabled={Object.keys(documents).filter(k => documents[k as DocType]).length === 0}
+              size="sm"
+              variant="outline"
+              className="h-8"
+            >
+              <Download className="w-4 h-4 mr-2" />
+              모두 내보내기
+            </Button>
           </div>
         </div>
 
@@ -1163,13 +1287,14 @@ export function PrdViewer() {
                             onClick={() => {
                               if (docViewMode === 'raw') setViewMode('preview');
                               else if (docViewMode === 'preview') setViewMode('visual');
+                              else if (docViewMode === 'visual') setViewMode('terminal');
                               else setViewMode('raw');
                             }}
                             variant="outline"
                             size="sm"
                             title="보기 모드"
                           >
-                            {docViewMode === 'raw' ? <BookOpen className="w-4 h-4" /> : docViewMode === 'preview' ? <Eye className="w-4 h-4" /> : <Code className="w-4 h-4" />}
+                            {docViewMode === 'raw' ? <BookOpen className="w-4 h-4" /> : docViewMode === 'preview' ? <Eye className="w-4 h-4" /> : docViewMode === 'visual' ? <Terminal className="w-4 h-4" /> : <Code className="w-4 h-4" />}
                           </Button>
                           <Button onClick={handlePrint} variant="outline" size="sm" title="인쇄">
                             <Printer className="w-4 h-4" />
@@ -1355,6 +1480,56 @@ export function PrdViewer() {
                     )}
                   </CardContent>
                 </Card>
+              ) : viewMode === 'terminal' ? (
+                /* 터미널 모드 */
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 h-[600px]">
+                  {/* 명령어 패널 */}
+                  <div className="lg:col-span-1 overflow-hidden">
+                    <Card className="h-full">
+                      <CardHeader className="pb-3">
+                        <CardTitle className="text-sm flex items-center gap-2">
+                          <Terminal className="w-4 h-4" />
+                          명령어 패널
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent className="p-0 h-[calc(100%-60px)]">
+                        <div className="h-full overflow-y-auto">
+                          <CommandPanel />
+                        </div>
+                      </CardContent>
+                    </Card>
+                  </div>
+
+                  {/* 터미널 */}
+                  <div className="lg:col-span-2">
+                    <Card className="h-full">
+                      <CardHeader className="pb-3">
+                        <CardTitle className="text-sm flex items-center justify-between">
+                          <span className="flex items-center gap-2">
+                            <Terminal className="w-4 h-4" />
+                            터미널
+                          </span>
+                          <Button
+                            onClick={() => setViewMode('visual')}
+                            variant="outline"
+                            size="sm"
+                          >
+                            <Eye className="w-4 h-4 mr-2" />
+                            문서 보기
+                          </Button>
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent className="p-3 h-[calc(100%-60px)]">
+                        <InAppTerminal
+                          commands={terminalCommands}
+                          onCommandExecute={(cmd) => {
+                            setTerminalCommands(prev => [...prev, cmd]);
+                          }}
+                        />
+                      </CardContent>
+                    </Card>
+                  </div>
+                </div>
               ) : viewMode === 'preview' ? (
                 <Card>
                   <CardContent className="p-8">
@@ -1467,6 +1642,53 @@ export function PrdViewer() {
         </div>
         </div>
       </div>
+
+      {/* 전체 생성 확인 다이얼로그 */}
+      {!currentMeeting?.summary && (
+        <AlertDialog open={showGenerateConfirm} onOpenChange={setShowGenerateConfirm}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>요약 먼저 생성 필요</AlertDialogTitle>
+              <AlertDialogDescription>
+                문서를 생성하려면 먼저 요약을 생성해야 합니다. 요약 탭으로 이동하시겠습니까?
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>취소</AlertDialogCancel>
+              <AlertDialogAction onClick={() => {
+                setShowGenerateConfirm(false);
+                // 요약 탭으로 이동 - parent로 이벤트 전달 필요 시 추가
+              }}>
+                요약 탭으로 이동
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      )}
+
+      {currentMeeting?.summary && generateConfirmData && (
+        <AlertDialog open={showGenerateConfirm} onOpenChange={setShowGenerateConfirm}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>
+                {generateConfirmData.isRegenerate ? '전체 재생성' : '전체 생성'}
+              </AlertDialogTitle>
+              <AlertDialogDescription>
+                {generateConfirmData.isRegenerate
+                  ? `모든 문서(${generateConfirmData.count}개)가 이미 생성되어 있습니다.\n전체를 다시 생성하시겠습니까?`
+                  : `${generateConfirmData.count}개 문서를 생성하시겠습니까?\n(의존성이 충족된 문서만 생성됩니다)`
+                }
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>취소</AlertDialogCancel>
+              <AlertDialogAction onClick={confirmGenerateAll}>
+                {generateConfirmData.isRegenerate ? '재생성' : '생성'}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      )}
     </div>
   );
 }

@@ -14,6 +14,8 @@ export type DocType =
   | 'wbs'
   | 'api-spec'
   | 'test-plan'
+  | 'test-case'
+  | 'database'
   | 'deployment';
 
 // 회의 데이터 타입
@@ -39,6 +41,8 @@ export interface Meeting {
   wbs?: string;
   apiSpec?: string;
   testPlan?: string;
+  testCase?: string;
+  database?: string;
   deployment?: string;
   // 메타데이터
   isCompleted?: boolean;

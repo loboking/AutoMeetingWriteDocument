@@ -98,7 +98,34 @@ export const useMeetingStore = create<MeetingStore>()(
       },
 
       setCurrentMeeting: (meeting) => {
-        set({ currentMeeting: meeting, currentStep: meeting?.step || 'idle' });
+        if (!meeting) {
+          set({ currentMeeting: null, currentStep: 'idle' });
+          return;
+        }
+
+        // 실제 데이터를 기반으로 step 자동 추론
+        const hasDocuments = !!meeting.prd || !!meeting.userStory ||
+                            !!meeting.featureList || !!meeting.screenList ||
+                            !!meeting.apiSpec || !!meeting.wireframe ||
+                            !!meeting.storyboard || !!meeting.testPlan ||
+                            !!meeting.testCase || !!meeting.database ||
+                            !!meeting.wbs || !!meeting.deployment ||
+                            !!meeting.flowchart || !!meeting.ia;
+        const hasSummary = !!meeting.summary;
+        const hasTranscript = !!meeting.transcript?.trim();
+
+        let inferredStep: MeetingStep = 'idle';
+        if (hasDocuments || hasSummary) {
+          inferredStep = 'done';
+        } else if (hasTranscript) {
+          inferredStep = 'summarizing';
+        } else if (meeting.audioUrl) {
+          inferredStep = 'transcribing';
+        }
+
+        // 저장된 step이 있으면 우선, 없으면 추론된 step 사용
+        const step = meeting.step || inferredStep;
+        set({ currentMeeting: meeting, currentStep: step });
       },
 
       getMeeting: (id) => {
