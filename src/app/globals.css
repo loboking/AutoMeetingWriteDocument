@@ -5,16 +5,19 @@
 
 @custom-variant dark (&:is(.dark *));
 
-/* Add xs breakpoint for very small screens (375px and up) */
-@utility xs\:inline {
-  @media (min-width: 375px) {
+/* xs breakpoint utilities for very small screens (375px and up) */
+@media (min-width: 375px) {
+  .xs\:inline {
     display: inline;
   }
-}
-
-@utility xs\:hidden {
-  @media (min-width: 375px) {
+  .xs\:hidden {
     display: none;
+  }
+  .xs\:inline-flex {
+    display: inline-flex;
+  }
+  .xs\:block {
+    display: block;
   }
 }
 

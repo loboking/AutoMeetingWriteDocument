@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
+import { useBeforeUnload } from '@/hooks/useBeforeUnload';
 import { useMeetingStore } from '@/store/meetingStore';
 
 export function SummaryViewer() {
@@ -13,6 +14,9 @@ export function SummaryViewer() {
   const summary = currentMeeting?.summary;
   const [isGenerating, setIsGenerating] = useState(false);
   const [isRegenerating, setIsRegenerating] = useState(false);
+
+  // 페이지 이탈 방지 훅 사용
+  useBeforeUnload(isGenerating, '문서 생성 중입니다. 페이지를 나가시면 생성이 취소됩니다.');
 
   // 요약 재생성
   const handleRegenerateSummary = async () => {
@@ -40,21 +44,6 @@ export function SummaryViewer() {
       setIsRegenerating(false);
     }
   };
-
-  // 페이지 이탈 방지 (PRD 생성 중)
-  useEffect(() => {
-    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-      if (isGenerating) {
-        const message = '문서 생성 중입니다. 페이지를 나가시면 생성이 취소됩니다.';
-        e.preventDefault();
-        e.returnValue = message;
-        return message;
-      }
-    };
-
-    window.addEventListener('beforeunload', handleBeforeUnload);
-    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-  }, [isGenerating]);
 
   const handleGeneratePrd = async () => {
     if (!summary || !currentMeeting) return;

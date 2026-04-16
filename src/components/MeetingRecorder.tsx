@@ -8,6 +8,10 @@ import { Progress } from '@/components/ui/progress';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useRecorder } from '@/hooks/useRecorder';
+import { useBeforeUnload } from '@/hooks/useBeforeUnload';
+import { useProgressSimulation } from '@/hooks/useProgressSimulation';
+import { handleApiError } from '@/lib/apiUtils';
+import { formatTime } from '@/lib/timeUtils';
 import { useMeetingStore } from '@/store/meetingStore';
 import { FileUploader } from './FileUploader';
 
@@ -27,31 +31,19 @@ function VoiceRecorder() {
 
   const { updateCurrentMeeting, updateMeetingStep } = useMeetingStore();
   const [isUploading, setIsUploading] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState(0);
   const hasAutoTranscribed = useRef(false);
 
-  // 페이지 이탈 방지 (녹음/업�로드 중)
-  useEffect(() => {
-    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-      if (isRecording || isPaused || isUploading) {
-        const message = isRecording || isPaused
-          ? '녹음 중입니다. 페이지를 나가시면 녹음이 중단됩니다.'
-          : '음성 변환 중입니다. 페이지를 나가시면 변환이 취소됩니다.';
-        e.preventDefault();
-        e.returnValue = message;
-        return message;
-      }
-    };
+  // 진행률 시뮬레이션 훅 사용
+  const { progress: uploadProgress, startSimulation, stopSimulation, resetSimulation } = useProgressSimulation(300, 10, 90);
 
-    window.addEventListener('beforeunload', handleBeforeUnload);
-    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-  }, [isRecording, isPaused, isUploading]);
-
-  const formatTime = (seconds: number) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-  };
+  // 페이지 이탈 방지 훅 사용
+  const isUploadingOrRecording = isRecording || isPaused || isUploading;
+  useBeforeUnload(
+    isUploadingOrRecording,
+    isRecording || isPaused
+      ? '녹음 중입니다. 페이지를 나가시면 녹음이 중단됩니다.'
+      : '음성 변환 중입니다. 페이지를 나가시면 변환이 취소됩니다.'
+  );
 
   const handleStopRecording = async () => {
     stopRecording();
@@ -64,19 +56,9 @@ function VoiceRecorder() {
     if (!blob) return;
 
     setIsUploading(true);
-    setUploadProgress(0);
+    resetSimulation();
+    startSimulation();
     updateMeetingStep('transcribing');
-
-    // 진행률 시뮬레이션
-    const progressInterval = setInterval(() => {
-      setUploadProgress((prev) => {
-        if (prev >= 90) {
-          clearInterval(progressInterval);
-          return 90;
-        }
-        return prev + 10;
-      });
-    }, 300);
 
     try {
       const formData = new FormData();
@@ -89,24 +71,12 @@ function VoiceRecorder() {
       });
 
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ error: '변환 실패' }));
-
-        // API 키 누락 특별 처리
-        if (errorData.error === 'OPENAI_API_KEY_MISSING') {
-          alert('⚠️ OPENAI_API_KEY가 설정되지 않았습니다!\n\n' +
-                '.env.local 파일에 다음 내용을 추가하세요:\n' +
-                'OPENAI_API_KEY=sk-your-key-here\n\n' +
-                'API 키는 https://platform.openai.com/api-keys 에서 받을 수 있습니다.');
-          throw new Error('API 키 누락');
-        }
-
-        throw new Error(errorData.error || '변환 실패');
+        await handleApiError(response, '변환 실패');
       }
 
       const { text, duration: audioDuration } = await response.json();
 
-      clearInterval(progressInterval);
-      setUploadProgress(100);
+      stopSimulation();
 
       updateCurrentMeeting({
         transcript: text,
@@ -120,9 +90,8 @@ function VoiceRecorder() {
       alert('음성 변환에 실패했습니다.');
       updateMeetingStep('recording');
     } finally {
-      clearInterval(progressInterval);
+      stopSimulation();
       setIsUploading(false);
-      setUploadProgress(0);
     }
   };
 

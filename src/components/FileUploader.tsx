@@ -6,6 +6,8 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import { Badge } from '@/components/ui/badge';
+import { useProgressSimulation } from '@/hooks/useProgressSimulation';
+import { handleApiError } from '@/lib/apiUtils';
 import { useMeetingStore } from '@/store/meetingStore';
 
 type FileType = 'audio' | 'document';
@@ -17,15 +19,17 @@ interface FileUploaderProps {
 export function FileUploader({ onTranscriptComplete }: FileUploaderProps) {
   const { updateCurrentMeeting, updateMeetingStep } = useMeetingStore();
   const [uploading, setUploading] = useState(false);
-  const [progress, setProgress] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // 진행률 시뮬레이션 훅 사용
+  const { progress, startSimulation, stopSimulation, resetSimulation } = useProgressSimulation(200, 10, 90);
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     setUploading(true);
-    setProgress(0);
+    resetSimulation();
 
     const fileType = file.type.startsWith('audio/') ? 'audio' : 'document';
 
@@ -40,7 +44,7 @@ export function FileUploader({ onTranscriptComplete }: FileUploaderProps) {
       alert('파일 처리에 실패했습니다.');
     } finally {
       setUploading(false);
-      setProgress(0);
+      stopSimulation();
       if (fileInputRef.current) {
         fileInputRef.current.value = '';
       }
@@ -48,16 +52,7 @@ export function FileUploader({ onTranscriptComplete }: FileUploaderProps) {
   };
 
   const handleAudioFile = async (file: File) => {
-    // 진행률 시뮬레이션
-    const interval = setInterval(() => {
-      setProgress((prev) => {
-        if (prev >= 90) {
-          clearInterval(interval);
-          return 90;
-        }
-        return prev + 10;
-      });
-    }, 200);
+    startSimulation();
 
     const formData = new FormData();
     formData.append('audioFile', file);
@@ -68,24 +63,11 @@ export function FileUploader({ onTranscriptComplete }: FileUploaderProps) {
       body: formData,
     });
 
-    clearInterval(interval);
+    stopSimulation();
 
     if (!response.ok) {
-      const errorData = await response.json().catch(() => ({ error: '변환 실패' }));
-
-      // API 키 누락 특별 처리
-      if (errorData.error === 'OPENAI_API_KEY_MISSING') {
-        alert('⚠️ OPENAI_API_KEY가 설정되지 않았습니다!\n\n' +
-              '.env.local 파일에 다음 내용을 추가하세요:\n' +
-              'OPENAI_API_KEY=sk-your-key-here\n\n' +
-              'API 키는 https://platform.openai.com/api-keys 에서 받을 수 있습니다.');
-        throw new Error('API 키 누락');
-      }
-
-      throw new Error(errorData.error || '변환 실패');
+      await handleApiError(response, '변환 실패');
     }
-
-    setProgress(100);
 
     const { text } = await response.json();
 
@@ -99,16 +81,11 @@ export function FileUploader({ onTranscriptComplete }: FileUploaderProps) {
   };
 
   const handleDocumentFile = async (file: File) => {
-    // 진행률 시뮬레이션
-    const interval = setInterval(() => {
-      setProgress((prev) => {
-        if (prev >= 90) {
-          clearInterval(interval);
-          return 90;
-        }
-        return prev + 15;
-      });
-    }, 200);
+    // 문서 처리는 더 높은 증가분 사용
+    const { progress: docProgress, startSimulation: startDocSim, stopSimulation: stopDocSim, resetSimulation: resetDocSim } = useProgressSimulation(200, 15, 90);
+
+    resetDocSim();
+    startDocSim();
 
     const formData = new FormData();
     formData.append('document', file);
@@ -118,8 +95,7 @@ export function FileUploader({ onTranscriptComplete }: FileUploaderProps) {
       body: formData,
     });
 
-    clearInterval(interval);
-    setProgress(100);
+    stopDocSim();
 
     if (!response.ok) throw new Error('텍스트 추출 실패');
 

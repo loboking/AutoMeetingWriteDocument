@@ -20,6 +20,8 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { useRecorder } from '@/hooks/useRecorder';
+import { useBeforeUnload } from '@/hooks/useBeforeUnload';
+import { useProgressSimulation } from '@/hooks/useProgressSimulation';
 import { useMeetingStore } from '@/store/meetingStore';
 import { MeetingStep } from '@/types';
 import MeetingRecorder from '@/components/MeetingRecorder';
@@ -34,28 +36,18 @@ export default function Home() {
   const [meetingTitle, setMeetingTitle] = useState('');
   const [mounted, setMounted] = useState(false);
   const [uploading, setUploading] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState(0);
   const [showProjectList, setShowProjectList] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // 진행률 시뮬레이션 훅 사용
+  const { progress: uploadProgress, startSimulation, stopSimulation, resetSimulation } = useProgressSimulation(200, 15, 90);
 
   useEffect(() => {
     setMounted(true);
   }, []);
 
-  // 페이지 이탈 방지 (파일 업로드 중)
-  useEffect(() => {
-    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-      if (uploading) {
-        const message = '파일 처리 중입니다. 페이지를 나가시면 처리가 취소됩니다.';
-        e.preventDefault();
-        e.returnValue = message;
-        return message;
-      }
-    };
-
-    window.addEventListener('beforeunload', handleBeforeUnload);
-    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-  }, [uploading]);
+  // 페이지 이탈 방지 훅 사용
+  useBeforeUnload(uploading, '파일 처리 중입니다. 페이지를 나가시면 처리가 취소됩니다.');
 
   const handleTabChange = (value: string) => {
     if (currentMeeting) {
@@ -75,28 +67,19 @@ export default function Home() {
   const handleFileUpload = async (file: File) => {
     setUploadError('');
     setUploading(true);
-    setUploadProgress(0);
+    resetSimulation();
+    startSimulation();
 
     // 파일 크기 검증 (최대 50MB)
     const MAX_SIZE = 50 * 1024 * 1024;
     if (file.size > MAX_SIZE) {
       setUploadError('파일 크기는 50MB 이하여야 합니다.');
       setUploading(false);
+      stopSimulation();
       return;
     }
 
     const title = meetingTitle.trim() || file.name.replace(/\.[^/.]+$/, '');
-
-    // 진행률 시뮬레이션
-    const interval = setInterval(() => {
-      setUploadProgress((prev) => {
-        if (prev >= 90) {
-          clearInterval(interval);
-          return 90;
-        }
-        return prev + 15;
-      });
-    }, 200);
 
     try {
       const formData = new FormData();
@@ -107,8 +90,7 @@ export default function Home() {
         body: formData,
       });
 
-      clearInterval(interval);
-      setUploadProgress(100);
+      stopSimulation();
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({ error: '파일 처리 실패' }));
@@ -126,9 +108,8 @@ export default function Home() {
       console.error('File upload error:', error);
       setUploadError(error instanceof Error ? error.message : '파일 처리에 실패했습니다.');
     } finally {
-      clearInterval(interval);
+      stopSimulation();
       setUploading(false);
-      setUploadProgress(0);
     }
   };
 

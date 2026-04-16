@@ -24,6 +24,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
+import { useBeforeUnload } from '@/hooks/useBeforeUnload';
 import { useMeetingStore } from '@/store/meetingStore';
 import { MermaidDiagram } from '@/components/MermaidDiagram';
 import { ScreenDiagram, StoryboardViewer } from '@/components/ScreenDiagram';
@@ -327,6 +328,14 @@ export function PrdViewer() {
   const [terminalCommands, setTerminalCommands] = useState<string[]>([]);
   const treeRef = useRef<HTMLDivElement>(null);
 
+  // 페이지 이탈 방지 훅 사용 (문서 생성 중 또는 편집 중)
+  useBeforeUnload(
+    isGenerating || isEditing,
+    isGenerating
+      ? '문서 생성 중입니다. 페이지를 나가시면 생성이 취소됩니다.'
+      : '편집 중인 내용이 저장되지 않을 수 있습니다. 정말 나가시겠습니까?'
+  );
+
   // currentMeeting 변경 시 documents 동기화
   useEffect(() => {
     setDocuments(getDocumentsFromMeeting());
@@ -609,24 +618,6 @@ export function PrdViewer() {
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
-
-  // 페이지 이탈 방지
-  useEffect(() => {
-    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-      // 문서 생성 중이거나 편집 중이면 경고
-      if (isGenerating || isEditing) {
-        const message = isGenerating
-          ? '문서 생성 중입니다. 페이지를 나가시면 생성이 취소됩니다.'
-          : '편집 중인 내용이 저장되지 않을 수 있습니다. 정말 나가시겠습니까?';
-        e.preventDefault();
-        e.returnValue = message; // Chrome에서 필요
-        return message;
-      }
-    };
-
-    window.addEventListener('beforeunload', handleBeforeUnload);
-    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-  }, [isGenerating, isEditing]);
 
   const handlePrint = () => {
     if (!currentContent) return;
