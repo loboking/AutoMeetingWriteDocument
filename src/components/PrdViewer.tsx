@@ -321,7 +321,22 @@ export function PrdViewer() {
     completedDocs: string[];
     status: 'generating' | 'completed' | 'error';
   } | null>(null);
-  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set(['prd'])); // 모든 상위 노드 기본 펼침
+  // 모든 부모 노드의 key를 추출하는 함수
+  const getAllParentKeys = (): string[] => {
+    const parentKeys: string[] = [];
+    const traverse = (nodes: TreeNode[]) => {
+      for (const node of nodes) {
+        if (node.isParent || node.children.length > 0) {
+          parentKeys.push(node.key);
+          traverse(node.children);
+        }
+      }
+    };
+    traverse(DOCUMENT_TREE);
+    return parentKeys;
+  };
+
+  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set(getAllParentKeys())); // 모든 상위 노드 기본 펼침
   const [editedContent, setEditedContent] = useState('');
   const [copied, setCopied] = useState(false);
   const [viewMode, setViewMode] = useState<'raw' | 'preview' | 'visual' | 'terminal'>('visual'); // 기본을 시각화로 변경
