@@ -5,6 +5,19 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* Add xs breakpoint for very small screens (375px and up) */
+@utility xs\:inline {
+  @media (min-width: 375px) {
+    display: inline;
+  }
+}
+
+@utility xs\:hidden {
+  @media (min-width: 375px) {
+    display: none;
+  }
+}
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);

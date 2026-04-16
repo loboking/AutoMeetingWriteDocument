@@ -189,17 +189,17 @@ export default function Home() {
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-slate-100 to-slate-200 dark:from-slate-950 dark:via-slate-900 dark:to-slate-900">
       <div className="container mx-auto px-4 sm:px-6 py-6 sm:py-8 max-w-6xl">
         {/* 헤더 */}
-        <header className="mb-8">
-          <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
-            <div className="text-center sm:text-left">
-              <h1 className="text-3xl sm:text-4xl font-bold tracking-tight text-slate-900 dark:text-slate-50 mb-2">
+        <header className="mb-6 sm:mb-8">
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-3 sm:gap-4">
+            <div className="text-center sm:text-left flex-1 min-w-0">
+              <h1 className="text-2xl sm:text-3xl md:text-4xl font-bold tracking-tight text-slate-900 dark:text-slate-50 mb-1 sm:mb-2">
                 MeetingAutoDocs
               </h1>
-              <p className="text-sm sm:text-base text-slate-600 dark:text-slate-400">
+              <p className="text-xs sm:text-sm md:text-base text-slate-600 dark:text-slate-400">
                 회의 녹음 → 요약 → 기획 문서 자동 생성
               </p>
             </div>
-            <div className="flex flex-wrap justify-center gap-2">
+            <div className="flex flex-wrap justify-center gap-1.5 sm:gap-2 shrink-0">
               {currentMeeting && (
                 <Button
                   onClick={() => {
@@ -209,22 +209,22 @@ export default function Home() {
                   }}
                   variant="default"
                   size="sm"
-                  className="gap-2"
+                  className="gap-1.5 sm:gap-2 h-8 sm:h-9 px-2 sm:px-2.5"
                 >
-                  <Plus className="w-4 h-4" />
-                  <span className="hidden sm:inline">새 회의</span>
+                  <Plus className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                  <span className="hidden xs:inline">새 회의</span>
                 </Button>
               )}
               <Button
                 onClick={() => setShowProjectList(true)}
                 variant="outline"
                 size="sm"
-                className="gap-2"
+                className="gap-1.5 sm:gap-2 h-8 sm:h-9 px-2 sm:px-2.5"
               >
-                <FolderOpen className="w-4 h-4" />
-                <span className="hidden sm:inline">프로젝트 리스트</span>
+                <FolderOpen className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                <span className="hidden xs:inline">프로젝트 리스트</span>
                 {meetings.length > 0 && (
-                  <Badge variant="secondary" className="ml-1 px-1.5 py-0 text-xs">{meetings.length}</Badge>
+                  <Badge variant="secondary" className="ml-0.5 sm:ml-1 px-1 sm:px-1.5 py-0 text-[10px] sm:text-xs">{meetings.length}</Badge>
                 )}
               </Button>
             </div>
