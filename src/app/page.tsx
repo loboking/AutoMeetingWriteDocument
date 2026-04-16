@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { Mic, Square, Play, Pause, Upload, FileText, Download, FileUp, FolderOpen, X, Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -274,12 +275,12 @@ export default function Home() {
                 <label className="text-sm font-medium text-slate-700 dark:text-slate-300">
                   회의 제목 (선택사항)
                 </label>
-                <input
+                <Input
                   type="text"
                   placeholder="회의 제목을 입력하세요"
                   value={meetingTitle}
                   onChange={(e) => setMeetingTitle(e.target.value)}
-                  className="w-full px-4 py-2.5 border border-slate-300 dark:border-slate-600 rounded-lg bg-transparent focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+                  className="h-11"
                 />
               </div>
 
