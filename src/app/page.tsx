@@ -244,15 +244,15 @@ export default function Home() {
                 <div key={step.id} className="flex flex-col items-center flex-1 min-w-0">
                   <div
                     className={`
-                      w-10 h-10 sm:w-12 sm:h-12 rounded-full flex items-center justify-center mb-1.5 sm:mb-2 transition-all shrink-0
-                      ${isActive ? 'bg-blue-500 text-white scale-110 shadow-lg shadow-blue-500/30' : ''}
+                      w-8 h-8 sm:w-10 sm:h-10 md:w-12 md:h-12 rounded-full flex items-center justify-center mb-1 sm:mb-1.5 md:mb-2 transition-all shrink-0
+                      ${isActive ? 'bg-blue-500 text-white scale-105 sm:scale-110 shadow-lg shadow-blue-500/30' : ''}
                       ${isPast ? 'bg-green-500 text-white' : ''}
                       ${!isActive && !isPast ? 'bg-slate-200 dark:bg-slate-700 text-slate-500 dark:text-slate-400' : ''}
                     `}
                   >
-                    <Icon className="w-4 h-4 sm:w-5 sm:h-5" />
+                    <Icon className="w-3.5 h-3.5 sm:w-4 sm:h-4 md:w-5 md:h-5" />
                   </div>
-                  <span className={`text-xs sm:text-sm font-medium truncate w-full text-center ${isActive ? 'text-blue-600 dark:text-blue-400' : 'text-slate-600 dark:text-slate-400'}`}>
+                  <span className={`text-[10px] xs:text-xs sm:text-sm font-medium truncate w-full text-center ${isActive ? 'text-blue-600 dark:text-blue-400' : 'text-slate-600 dark:text-slate-400'}`}>
                     {step.label}
                   </span>
                 </div>
