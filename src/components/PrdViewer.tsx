@@ -271,6 +271,21 @@ const DOCUMENT_TREE: TreeNode[] = [
   },
 ];
 
+// 모든 부모 노드의 key를 추출하는 함수 (초기 펼침 상태용)
+function getAllParentKeys(): string[] {
+  const parentKeys: string[] = [];
+  const traverse = (nodes: TreeNode[]) => {
+    for (const node of nodes) {
+      if (node.isParent || node.children.length > 0) {
+        parentKeys.push(node.key);
+        traverse(node.children);
+      }
+    }
+  };
+  traverse(DOCUMENT_TREE);
+  return parentKeys;
+}
+
 // 트리를 평탄화하는 함수 (탭 렌더링용)
 function flattenTree(nodes: TreeNode[], parentKey: string | null = null): Array<TreeNode & { level: number; parentKey: string | null }> {
   const result: Array<TreeNode & { level: number; parentKey: string | null }> = [];
@@ -321,20 +336,6 @@ export function PrdViewer() {
     completedDocs: string[];
     status: 'generating' | 'completed' | 'error';
   } | null>(null);
-  // 모든 부모 노드의 key를 추출하는 함수
-  const getAllParentKeys = (): string[] => {
-    const parentKeys: string[] = [];
-    const traverse = (nodes: TreeNode[]) => {
-      for (const node of nodes) {
-        if (node.isParent || node.children.length > 0) {
-          parentKeys.push(node.key);
-          traverse(node.children);
-        }
-      }
-    };
-    traverse(DOCUMENT_TREE);
-    return parentKeys;
-  };
 
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set(getAllParentKeys())); // 모든 상위 노드 기본 펼침
   const [editedContent, setEditedContent] = useState('');
