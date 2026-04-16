@@ -266,11 +266,11 @@ export default function Home() {
         {!currentMeeting ? (
           /* 새 회의 시작 카드 */
           <Card className="max-w-lg mx-auto shadow-lg border-slate-200 dark:border-slate-700">
-            <CardHeader>
-              <CardTitle>새 회의 시작</CardTitle>
-              <CardDescription>녹음 또는 파일 업로드로 회의를 시작하세요</CardDescription>
+            <CardHeader className="pb-4 sm:pb-6">
+              <CardTitle className="text-lg sm:text-xl">새 회의 시작</CardTitle>
+              <CardDescription className="text-sm">녹음 또는 파일 업로드로 회의를 시작하세요</CardDescription>
             </CardHeader>
-            <CardContent className="space-y-6">
+            <CardContent className="space-y-4 sm:space-y-6 pt-2 sm:pt-0">
               <div className="space-y-2">
                 <label className="text-sm font-medium text-slate-700 dark:text-slate-300">
                   회의 제목 (선택사항)
@@ -361,15 +361,15 @@ export default function Home() {
           <div className="space-y-6">
             {/* 현재 회의 정보 */}
             <Card className="shadow-sm border-slate-200 dark:border-slate-700">
-              <CardHeader className="pb-4">
-                <div className="flex items-start sm:items-center justify-between gap-3">
+              <CardHeader className="pb-3 sm:pb-4">
+                <div className="flex items-start sm:items-center justify-between gap-2 sm:gap-3">
                   <div className="flex-1 min-w-0">
-                    <CardTitle className="text-xl sm:text-2xl truncate">{currentMeeting.title}</CardTitle>
-                    <CardDescription className="mt-1">
+                    <CardTitle className="text-lg sm:text-xl md:text-2xl truncate pr-2">{currentMeeting.title}</CardTitle>
+                    <CardDescription className="mt-0.5 sm:mt-1 text-xs sm:text-sm">
                       <DateFormat date={currentMeeting.createdAt} />
                     </CardDescription>
                   </div>
-                  <Badge variant={currentStep === 'done' ? 'default' : 'secondary'} className="shrink-0">
+                  <Badge variant={currentStep === 'done' ? 'default' : 'secondary'} className="shrink-0 text-xs">
                     {steps.find((s) => s.id === currentStep)?.label}
                   </Badge>
                 </div>
