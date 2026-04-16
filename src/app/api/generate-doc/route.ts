@@ -71,25 +71,12 @@ interface GeneratedDocs {
   [key: string]: string;
 }
 
-type DocType =
-  | 'prd'
-  | 'feature-list'
-  | 'screen-list'
-  | 'ia'
-  | 'wireframe'
-  | 'storyboard'
-  | 'user-story'
-  | 'wbs'
-  | 'api-spec'
-  | 'test-case'
-  | 'database'
-  | 'deployment';
-
 const DOCUMENT_TITLES: Record<DocType, string> = {
   prd: 'PRD (Product Requirements Document)',
   'feature-list': '기능 목록 정의서',
   'screen-list': '화면 목록 정의서',
   ia: 'IA (정보구조도)',
+  flowchart: '플로우차트',
   wireframe: '와이어프레임 문서',
   storyboard: 'SB (스토리보드)',
   'user-story': '사용자 스토리 문서',
@@ -98,6 +85,7 @@ const DOCUMENT_TITLES: Record<DocType, string> = {
   'test-case': '테스트 케이스 명세서',
   database: '데이터베이스 설계서',
   deployment: '배포 가이드',
+  'test-plan': '테스트 계획서',
 };
 
 async function generateDocument(
@@ -1290,4 +1278,5 @@ export async function POST(request: NextRequest) {
       { status: 500 }
     );
   }
+}
 }
