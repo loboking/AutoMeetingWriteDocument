@@ -115,10 +115,10 @@ const DEPENDENCIES: Record<DocType, DocType[]> = {
   'prd': [], // 기반 문서
   'user-story': [], // 기반 문서
   'feature-list': [], // 기반 문서
+  'flowchart': [], // 기반 문서 (독립 생성 가능)
   'screen-list': ['feature-list'], // 기능목록 필요
   'ia': ['screen-list'], // 화면목록 필요
-  'flowchart': ['user-story', 'screen-list'], // 시나리오 또는 화면목록 필요
-  'storyboard': ['user-story', 'flowchart'], // 시나리오, 플로우차트 필요
+  'storyboard': ['flowchart'], // 플로우차트 필요
   'wireframe': ['ia', 'screen-list'], // IA, 화면목록 필요
   'api-spec': ['feature-list'], // 기능목록 필요
   'test-plan': ['feature-list', 'api-spec'], // 기능목록, API명세 필요
