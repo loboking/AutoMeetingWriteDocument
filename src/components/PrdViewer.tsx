@@ -337,7 +337,7 @@ export function PrdViewer() {
     status: 'generating' | 'completed' | 'error';
   } | null>(null);
 
-  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set(['prd', 'user-story', 'feature-list', 'flowchart', 'screen-list', 'ia', 'storyboard', 'wireframe', 'api-spec', 'test-plan', 'test-case', 'database', 'wbs', 'deployment'])); // 모든 문서 기본 펼침
+  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set(getAllParentKeys())); // 모든 노드 기본 펼침 (자식 포함)
   const [editedContent, setEditedContent] = useState('');
   const [copied, setCopied] = useState(false);
   const [viewMode, setViewMode] = useState<'raw' | 'preview' | 'visual' | 'terminal'>('visual'); // 기본을 시각화로 변경
