@@ -313,6 +313,13 @@ export function PrdViewer() {
   const [showGenerateConfirm, setShowGenerateConfirm] = useState(false);
   const [generateConfirmData, setGenerateConfirmData] = useState<{ count: number; isRegenerate: boolean; docsToRegenerate: DocType[] } | null>(null);
   const [isEditing, setIsEditing] = useState(false);
+  const [generationProgress, setGenerationProgress] = useState<{
+    currentLevel: number;
+    totalLevels: number;
+    currentDoc: string;
+    completedDocs: string[];
+    status: 'generating' | 'completed' | 'error';
+  } | null>(null);
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set(['prd'])); // 모든 상위 노드 기본 펼침
   const [editedContent, setEditedContent] = useState('');
   const [copied, setCopied] = useState(false);
@@ -447,63 +454,53 @@ export function PrdViewer() {
 
   const confirmGenerateAll = async () => {
     setShowGenerateConfirm(false);
-    if (!generateConfirmData || !currentMeeting?.summary) return;
-
-    const { isRegenerate, docsToRegenerate } = generateConfirmData;
-
-    // 재생성인 경우: docsToRegenerate 사용
-    // 일반 생성인 경우: docsToGenerate 로직 재사용
-    let docsToGenerate: typeof DOCUMENTS;
-
-    if (isRegenerate) {
-      docsToGenerate = DOCUMENTS.filter(doc => docsToRegenerate.includes(doc.key as DocType));
-    } else {
-      docsToGenerate = DOCUMENTS.filter(doc => {
-        const { canGenerate } = canGenerateDoc(doc.key, documents);
-        return canGenerate && !documents[doc.key];
-      });
-    }
+    if (!currentMeeting?.summary) return;
 
     setIsGenerating(true);
-    const results: Record<DocType, string> = { ...documents };
-
-    const generatePromises = docsToGenerate.map(async (doc) => {
-      const docType = doc.key;
-      try {
-        const response = await fetch('/api/generate-doc', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            docType,
-            summary: currentMeeting.summary,
-            transcript: currentMeeting.transcript,
-            meetingInfo: {
-              title: currentMeeting.title,
-              date: new Date(currentMeeting.createdAt).toLocaleDateString('ko-KR'),
-            },
-          }),
-        });
-
-        if (response.ok) {
-          const { content } = await response.json();
-          results[docType] = content;
-          updateCurrentMeeting({ [docTypeToField(docType)]: content });
-          return { success: true, docType };
-        }
-        return { success: false, docType, error: 'Response not ok' };
-      } catch (error) {
-        console.error(`${docType} 생성 실패:`, error);
-        return { success: false, docType, error };
-      }
+    setGenerationProgress({
+      currentLevel: 0,
+      totalLevels: 5,
+      currentDoc: '',
+      completedDocs: [],
+      status: 'generating',
     });
 
-    const outcomes = await Promise.allSettled(generatePromises);
-    const successCount = outcomes.filter(o => o.status === 'fulfilled' && o.value.success).length;
-    const failCount = outcomes.length - successCount;
+    try {
+      const response = await fetch('/api/generate-doc', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mode: 'all',
+          summary: currentMeeting.summary,
+          transcript: currentMeeting.transcript,
+          meetingInfo: {
+            title: currentMeeting.title,
+            date: new Date(currentMeeting.createdAt).toLocaleDateString('ko-KR'),
+          },
+        }),
+      });
 
-    setDocuments(results);
-    setIsGenerating(false);
-    setGenerateConfirmData(null);
+      if (!response.ok) throw new Error('전체 생성 실패');
+
+      const { docs, progress } = await response.json();
+
+      // 생성된 문서들을 순차적으로 업데이트 (진행률 표시 효과)
+      for (const [docType, content] of Object.entries(docs)) {
+        if (content) {
+          setDocuments(prev => ({ ...prev, [docType]: content }));
+          updateCurrentMeeting({ [docTypeToField(docType)]: content });
+        }
+      }
+
+      setGenerationProgress(progress);
+    } catch (error) {
+      console.error('전체 생성 오류:', error);
+      setGenerationProgress(prev => prev ? { ...prev, status: 'error' } : null);
+    } finally {
+      setIsGenerating(false);
+      setGenerateConfirmData(null);
+      setTimeout(() => setGenerationProgress(null), 3000);
+    }
   };
 
 
@@ -1228,7 +1225,7 @@ export function PrdViewer() {
               {isGenerating ? (
                 <>
                   <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  생성 중...
+                  {generationProgress ? `${generationProgress.currentLevel}/${generationProgress.totalLevels}뎁스` : '생성 중...'}
                 </>
               ) : (
                 <>
@@ -1237,6 +1234,26 @@ export function PrdViewer() {
                 </>
               )}
             </Button>
+
+            {/* 진행률 표시 (생성 중일 때) */}
+            {generationProgress && generationProgress.status === 'generating' && (
+              <div className="absolute -bottom-16 left-0 right-0 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-3 shadow-lg">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs font-medium text-slate-700 dark:text-slate-300">
+                    {generationProgress.currentDoc ? `${DOCUMENTS.find(d => d.key === generationProgress.currentDoc)?.title || generationProgress.currentDoc} 생성 중...` : '준비 중...'}
+                  </span>
+                  <span className="text-xs text-slate-500">
+                    {generationProgress.completedDocs.length} / {totalCount}개 완료
+                  </span>
+                </div>
+                <div className="w-full h-1.5 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-gradient-to-r from-blue-500 to-purple-500 transition-all duration-300"
+                    style={{ width: `${(generationProgress.completedDocs.length / totalCount) * 100}%` }}
+                  />
+                </div>
+              </div>
+            )}
 
             {/* 모두 내보내기 버튼 */}
             <Button

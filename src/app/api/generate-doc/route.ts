@@ -5,8 +5,71 @@ import OpenAI from 'openai';
 export const runtime = 'nodejs';
 
 const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
+  apiKey: process.env.OPENAI_API_KEY || process.env.ZAI_API_KEY,
 });
+
+// 문서 의존 관계 (1뎁스 → 2뎁스 → 3뎁스...)
+type DocType =
+  | 'prd'
+  | 'feature-list'
+  | 'screen-list'
+  | 'ia'
+  | 'flowchart'
+  | 'wireframe'
+  | 'storyboard'
+  | 'user-story'
+  | 'wbs'
+  | 'api-spec'
+  | 'test-case'
+  | 'database'
+  | 'deployment'
+  | 'test-plan';
+
+interface DocLevel {
+  level: number;
+  docTypes: DocType[];
+  dependsOn?: DocType[]; // 이전 레벨에서 생성된 문서들을 참조
+}
+
+const DOCUMENT_DEPENDENCIES: DocLevel[] = [
+  {
+    level: 1,
+    docTypes: ['prd'],
+  },
+  {
+    level: 2,
+    docTypes: ['feature-list', 'screen-list', 'ia', 'flowchart'],
+    dependsOn: ['prd'],
+  },
+  {
+    level: 3,
+    docTypes: ['wireframe', 'storyboard', 'user-story'],
+    dependsOn: ['feature-list', 'screen-list', 'ia'],
+  },
+  {
+    level: 4,
+    docTypes: ['wbs', 'api-spec', 'database'],
+    dependsOn: ['feature-list', 'user-story'],
+  },
+  {
+    level: 5,
+    docTypes: ['test-plan', 'test-case', 'deployment'],
+    dependsOn: ['wbs', 'api-spec', 'database'],
+  },
+];
+
+interface GenerationProgress {
+  currentLevel: number;
+  totalLevels: number;
+  currentDoc: string;
+  completedDocs: string[];
+  status: 'generating' | 'completed' | 'error';
+  error?: string;
+}
+
+interface GeneratedDocs {
+  [key: string]: string;
+}
 
 type DocType =
   | 'prd'
@@ -56,6 +119,105 @@ async function generateDocument(
   } catch (error) {
     console.error('OpenAI API 오류:', error);
     return getMockDoc(docType, summary, meetingInfo);
+  }
+}
+
+// 연계 문서 생성 함수
+async function generateAllDocuments(
+  summary: MeetingSummary,
+  transcript: string,
+  meetingInfo: { title: string; date: string },
+  onProgress?: (progress: GenerationProgress) => void
+): Promise<{ docs: GeneratedDocs; progress: GenerationProgress }> {
+  const docs: GeneratedDocs = {};
+  const completedDocs: string[] = [];
+
+  for (const levelConfig of DOCUMENT_DEPENDENCIES) {
+    // 현재 레벨 진행 상황 알림
+    onProgress?.({
+      currentLevel: levelConfig.level,
+      totalLevels: DOCUMENT_DEPENDENCIES.length,
+      currentDoc: '',
+      completedDocs,
+      status: 'generating',
+    });
+
+    // 현재 레벨의 모든 문서 생성
+    for (const docType of levelConfig.docTypes) {
+      onProgress?.({
+        currentLevel: levelConfig.level,
+        totalLevels: DOCUMENT_DEPENDENCIES.length,
+        currentDoc: docType,
+        completedDocs,
+        status: 'generating',
+      });
+
+      try {
+        // 이전 레벨에서 생성된 문서들을 컨텍스트로 전달
+        const contextDocs = getContextDocs(levelConfig.dependsOn || [], docs);
+
+        const content = await generateDocumentWithContext(
+          docType,
+          summary,
+          transcript,
+          meetingInfo,
+          contextDocs
+        );
+
+        docs[docType] = content;
+        completedDocs.push(docType);
+      } catch (error) {
+        console.error(`${docType} 생성 실패:`, error);
+        // 실패해도 계속 진행
+        docs[docType] = getMockDoc(docType, summary, meetingInfo);
+      }
+    }
+  }
+
+  return {
+    docs,
+    progress: {
+      currentLevel: DOCUMENT_DEPENDENCIES.length,
+      totalLevels: DOCUMENT_DEPENDENCIES.length,
+      currentDoc: '',
+      completedDocs,
+      status: 'completed',
+    },
+  };
+}
+
+// 의존하는 문서들을 컨텍스트로 정리
+function getContextDocs(dependsOn: DocType[], docs: GeneratedDocs): Record<string, string> {
+  const context: Record<string, string> = {};
+  for (const docType of dependsOn) {
+    if (docs[docType]) {
+      context[docType] = docs[docType];
+    }
+  }
+  return context;
+}
+
+// 컨텍스트(이전 문서)를 참조하여 문서 생성
+async function generateDocumentWithContext(
+  docType: DocType,
+  summary: MeetingSummary,
+  transcript: string,
+  meetingInfo: { title: string; date: string },
+  contextDocs: Record<string, string>
+): Promise<string> {
+  const prompt = getPromptForDocTypeWithContext(docType, summary, transcript, meetingInfo, contextDocs);
+
+  try {
+    const response = await openai.chat.completions.create({
+      model: 'gpt-4o',
+      messages: [{ role: 'user', content: prompt }],
+      max_tokens: 16384,
+    });
+
+    return response.choices[0]?.message?.content || '';
+  } catch (error) {
+    console.error('OpenAI API 오류:', error);
+    throw error;
   }
 }
 
@@ -761,6 +923,46 @@ graph TD
 - 관련 문서 링크`;
 }
 
+// 컨텍스트(이전 문서)를 참조한 프롬프트 생성
+function getPromptForDocTypeWithContext(
+  docType: DocType,
+  summary: MeetingSummary,
+  transcript: string,
+  meetingInfo: { title: string; date: string },
+  contextDocs: Record<string, string>
+): string {
+  const baseInfo = `
+## 회의 정보
+- 제목: ${meetingInfo.title}
+- 날짜: ${meetingInfo.date}
+
+## 회의 요약
+- 개요: ${summary.overview}
+- 핵심 사항: ${summary.keyPoints.join(', ')}
+- 의사결정: ${summary.decisions.join(', ')}
+`;
+
+  // 컨텍스트 문서 추가
+  let contextSection = '';
+  if (Object.keys(contextDocs).length > 0) {
+    contextSection = '\n## 참고 문서 (이미 생성된 문서)\n\n';
+    for (const [docName, content] of Object.entries(contextDocs)) {
+      const title = DOCUMENT_TITLES[docName as DocType] || docName;
+      contextSection += `### ${title}\n${content.substring(0, 2000)}...\n\n`; // 앞부분만 참조
+    }
+  }
+
+  const originalPrompt = getPromptForDocType(docType, summary, transcript, meetingInfo);
+
+  // 원본 프롬프트의 회의 내용 섹션 앞에 컨텍스트 추가
+  const insertPoint = originalPrompt.indexOf('## 원본 회의 내용');
+  if (insertPoint > 0 && contextSection) {
+    return originalPrompt.substring(0, insertPoint) + contextSection + originalPrompt.substring(insertPoint);
+  }
+
+  return originalPrompt;
+}
+
 function getMockDoc(docType: DocType, summary: MeetingSummary, meetingInfo: { title: string; date: string }): string {
   const title = DOCUMENT_TITLES[docType];
   const baseInfo = `# ${title}
@@ -1016,30 +1218,71 @@ vercel rollback
   
 
   if (docType === 'test-case') {
-    return baseInfo;
+    return `${baseInfo}
+
+## 테스트 케이스 목록
+
+| TC-ID | 기능명 | 시나리오 | 전제 조건 | 테스트 단계 | 기대 결과 | 우선순위 |
+|-------|--------|----------|-----------|-----------|-----------|----------|
+| TC-001 | [기능명] | [시나리오] | [조건] | [단계] | [결과] | P0 |
+
+회의 내용을 바탕으로 구체적인 테스트 케이스를 작성하세요.`;
   }
 
   if (docType === 'database') {
-    return baseInfo;
-  }}
+    return `${baseInfo}
+
+## ERD (Entity Relationship Diagram)
+
+\`\`\`mermaid
+erDiagram
+    USER ||--o{ ORDER : places
+    ORDER ||--|{ ORDER_ITEM : contains
+\`\`\`
+
+회의에서 논의된 실제 데이터 구조와 엔티티를 바탕으로 작성하세요.`;
+  }
 
   return baseInfo;
 }
 
 export async function POST(request: NextRequest) {
   try {
-    const { docType, summary, transcript, meetingInfo } = await request.json();
+    const body = await request.json();
+    const { docType, summary, transcript, meetingInfo, mode } = body;
 
-    if (!docType || !summary || !meetingInfo) {
+    if (!summary || !meetingInfo) {
       return NextResponse.json(
-        { error: 'docType, summary, meetingInfo가 필요합니다.' },
+        { error: 'summary, meetingInfo가 필요합니다.' },
+        { status: 400 }
+      );
+    }
+
+    // 전체 문서 생성 모드
+    if (mode === 'all') {
+      const result = await generateAllDocuments(
+        summary,
+        transcript || '',
+        meetingInfo
+      );
+
+      return NextResponse.json({
+        docs: result.docs,
+        progress: result.progress,
+      });
+    }
+
+    // 단일 문서 생성 모드 (기존)
+    if (!docType) {
+      return NextResponse.json(
+        { error: 'docType이 필요합니다 (단일 생성 모드).' },
         { status: 400 }
       );
     }
 
     const content = await generateDocument(docType, summary, transcript || '', meetingInfo);
 
-    return NextResponse.json({ content });
+    return NextResponse.json({ content, docType });
   } catch (error) {
     console.error('Generate doc API 오류:', error);
     return NextResponse.json(
