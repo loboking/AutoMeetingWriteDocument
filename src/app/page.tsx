@@ -379,20 +379,20 @@ export default function Home() {
             {/* 단계별 컴포넌트 렌더링 */}
             <Tabs value={currentStep} onValueChange={handleTabChange} className="w-full">
               <TabsList className="grid w-full grid-cols-4 h-auto p-1 bg-slate-100 dark:bg-slate-800">
-                <TabsTrigger value="recording" disabled={isTabDisabled('recording')} className="gap-1.5 data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm dark:data-[state=active]:bg-slate-700 dark:data-[state=active]:text-blue-400">
-                  <Mic className="w-4 h-4" />
+                <TabsTrigger value="recording" disabled={isTabDisabled('recording')} className="gap-1 sm:gap-1.5 h-8 sm:h-9 data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm dark:data-[state=active]:bg-slate-700 dark:data-[state=active]:text-blue-400">
+                  <Mic className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                   <span className="hidden sm:inline">녹음</span>
                 </TabsTrigger>
-                <TabsTrigger value="transcribing" disabled={isTabDisabled('transcribing')} className="gap-1.5 data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm dark:data-[state=active]:bg-slate-700 dark:data-[state=active]:text-blue-400">
-                  <Upload className="w-4 h-4" />
+                <TabsTrigger value="transcribing" disabled={isTabDisabled('transcribing')} className="gap-1 sm:gap-1.5 h-8 sm:h-9 data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm dark:data-[state=active]:bg-slate-700 dark:data-[state=active]:text-blue-400">
+                  <Upload className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                   <span className="hidden sm:inline">변환</span>
                 </TabsTrigger>
-                <TabsTrigger value="summarizing" disabled={isTabDisabled('summarizing')} className="gap-1.5 data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm dark:data-[state=active]:bg-slate-700 dark:data-[state=active]:text-blue-400">
-                  <FileText className="w-4 h-4" />
+                <TabsTrigger value="summarizing" disabled={isTabDisabled('summarizing')} className="gap-1 sm:gap-1.5 h-8 sm:h-9 data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm dark:data-[state=active]:bg-slate-700 dark:data-[state=active]:text-blue-400">
+                  <FileText className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                   <span className="hidden sm:inline">요약</span>
                 </TabsTrigger>
-                <TabsTrigger value="done" disabled={isTabDisabled('done')} className="gap-1.5 data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm dark:data-[state=active]:bg-slate-700 dark:data-[state=active]:text-blue-400">
-                  <Download className="w-4 h-4" />
+                <TabsTrigger value="done" disabled={isTabDisabled('done')} className="gap-1 sm:gap-1.5 h-8 sm:h-9 data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm dark:data-[state=active]:bg-slate-700 dark:data-[state=active]:text-blue-400">
+                  <Download className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                   <span className="hidden sm:inline">문서</span>
                 </TabsTrigger>
               </TabsList>
