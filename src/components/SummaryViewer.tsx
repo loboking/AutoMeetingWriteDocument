@@ -10,7 +10,8 @@ import { useBeforeUnload } from '@/hooks/useBeforeUnload';
 import { useMeetingStore } from '@/store/meetingStore';
 
 export function SummaryViewer() {
-  const { currentMeeting, updateCurrentMeeting, updateMeetingStep } = useMeetingStore();
+  const currentMeeting = useMeetingStore(s => s.currentMeeting);
+  const { updateCurrentMeeting, updateMeetingStep } = useMeetingStore();
   const summary = currentMeeting?.summary;
   const [isGenerating, setIsGenerating] = useState(false);
   const [isRegenerating, setIsRegenerating] = useState(false);

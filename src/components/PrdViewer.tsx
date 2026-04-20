@@ -7,6 +7,8 @@ import { saveAs } from 'file-saver';
 import * as XLSX from 'xlsx';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { sanitizeHtml } from '@/lib/sanitize';
+import { extractMermaidCode, docTypeToField, canGenerateDoc, getDependencyNames, getAllParentKeys, FLAT_DOCUMENTS, DOCUMENTS, DOCUMENT_TREE, type DocType, type TreeNode } from '@/lib/documentUtils';
 import PptxGenJS from 'pptxgenjs';
 import { Document as DocxDocument, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, Table, TableRow, TableCell, WidthType, BorderStyle } from 'docx';
 import { Button } from '@/components/ui/button';
@@ -33,277 +35,9 @@ import { WBSViewer } from '@/components/WBSViewer';
 import { InAppTerminal } from '@/components/InAppTerminal';
 import { CommandPanel } from '@/components/CommandPanel';
 
-// 마크다운에서 mermaid 코드 추출
-function extractMermaidCode(content: string): string {
-  // 먼저 ```mermaid 블록 추출 시도
-  const codeBlockMatch = content.match(/```mermaid\n([\s\S]+?)```/);
-  if (codeBlockMatch) {
-    return codeBlockMatch[1].trim();
-  }
-
-  // 블록이 없으면 전체 텍스트가 mermaid인지 확인 후 반환
-  const trimmedContent = content.trim();
-  const hasMermaidKeyword = /\b(flowchart|graph|sequenceDiagram|classDiagram|stateDiagram|erDiagram|gantt|pie|mindmap)\b/i.test(trimmedContent);
-
-  if (hasMermaidKeyword) {
-    // mermaid 키워드부터 시작하는 부분만 추출
-    const lines = trimmedContent.split('\n');
-    const startIdx = lines.findIndex(line => /\b(flowchart|graph|sequenceDiagram|classDiagram|stateDiagram|erDiagram|gantt|pie|mindmap)\b/i.test(line));
-    if (startIdx >= 0) {
-      return lines.slice(startIdx).join('\n').trim();
-    }
-    return trimmedContent;
-  }
-
-  return ''; // mermaid 코드 없음
-}
-
-// DocType을 Meeting 필드 이름으로 변환
-function docTypeToField(docType: string): string {
-  const mapping: Record<string, string> = {
-    'feature-list': 'featureList',
-    'screen-list': 'screenList',
-    'user-story': 'userStory',
-    'api-spec': 'apiSpec',
-    'test-plan': 'testPlan',
-  };
-  return mapping[docType] || docType;
-}
-
-type DocType =
-  | 'prd'
-  | 'feature-list'
-  | 'screen-list'
-  | 'ia'
-  | 'flowchart'
-  | 'wireframe'
-  | 'storyboard'
-  | 'user-story'
-  | 'wbs'
-  | 'api-spec'
-  | 'test-plan'
-  | 'test-case'
-  | 'database'
-  | 'deployment';
-
-interface Document {
-  type: DocType;
-  title: string;
-  content: string;
-  lastModified: Date;
-}
-
-const DOCUMENTS: { key: DocType; title: string; icon: string; description: string }[] = [
-  { key: 'prd', title: 'PRD', icon: '📋', description: '제품 요구사항 문서' },
-  { key: 'user-story', title: '시나리오 정의서', icon: '👤', description: '사용자 시나리오 정의' },
-  { key: 'feature-list', title: '기능목록', icon: '📝', description: '기능 목록 정의서' },
-  { key: 'screen-list', title: '화면목록', icon: '📱', description: '화면 목록 정의서' },
-  { key: 'ia', title: 'IA', icon: '🗂️', description: '정보구조도' },
-  { key: 'flowchart', title: '플로우차트', icon: '🔄', description: '사용자 플로우 및 프로세스' },
-  { key: 'storyboard', title: '스토리보드', icon: '🎬', description: '사용자 시나리오 흐름' },
-  { key: 'wireframe', title: '와이어프레임', icon: '🎨', description: '화면 설계 및 플로우' },
-  { key: 'api-spec', title: 'API명세', icon: '🔌', description: 'API 인터페이스 설계' },
-  { key: 'test-plan', title: '테스트계획', icon: '🧪', description: '테스트 시나리오 및 계획' },
-  { key: 'test-case', title: '테스트케이스', icon: '✅', description: '상세 테스트 케이스 목록' },
-  { key: 'database', title: 'DB설계', icon: '🗄️', description: '데이터베이스 스키마 및 ERD' },
-  { key: 'wbs', title: 'WBS', icon: '📊', description: '작업 분류 구조' },
-  { key: 'deployment', title: '배포가이드', icon: '🚀', description: '릴리스 및 배포 절차' },
-];
-
-// 문서 의존성 정의
-const DEPENDENCIES: Record<DocType, DocType[]> = {
-  'prd': [], // 기반 문서
-  'user-story': [], // 기반 문서
-  'feature-list': [], // 기반 문서
-  'flowchart': [], // 기반 문서 (독립 생성 가능)
-  'screen-list': ['feature-list'], // 기능목록 필요
-  'ia': ['screen-list'], // 화면목록 필요
-  'storyboard': ['flowchart'], // 플로우차트 필요
-  'wireframe': ['ia', 'screen-list'], // IA, 화면목록 필요
-  'api-spec': ['feature-list'], // 기능목록 필요
-  'test-plan': ['feature-list', 'api-spec'], // 기능목록, API명세 필요
-  'test-case': ['feature-list', 'api-spec', 'test-plan'], // 기능목록, API명세, 테스트계획 필요
-  'database': ['feature-list', 'api-spec'], // 기능목록, API명세 필요
-  'wbs': ['feature-list', 'api-spec', 'wireframe'], // 기능목록, API명세, 와이어프레임 필요
-  'deployment': ['prd', 'feature-list', 'api-spec'], // PRD, 기능목록, API명세 필요
-};
-
-// 의존성 체크
-function canGenerateDoc(
-  docType: DocType,
-  documents: Record<DocType, string>
-): { canGenerate: boolean; missing: DocType[] } {
-  const deps = DEPENDENCIES[docType] || [];
-  const missing = deps.filter(dep => !documents[dep]);
-
-  return {
-    canGenerate: missing.length === 0,
-    missing,
-  };
-}
-
-// 의존성 문서 이름 가져오기
-function getDependencyNames(docType: DocType): string[] {
-  const deps = DEPENDENCIES[docType] || [];
-  return deps.map(dep => DOCUMENTS.find(d => d.key === dep)?.title || dep);
-}
-
-// 트리 구조 정의
-interface TreeNode {
-  key: DocType;
-  title: string;
-  icon: string;
-  description: string;
-  children: TreeNode[];
-  isParent: boolean;
-}
-
-// 문서 트리 구조 생성
-const DOCUMENT_TREE: TreeNode[] = [
-  {
-    key: 'prd',
-    title: 'PRD',
-    icon: '📋',
-    description: '제품 요구사항 문서',
-    isParent: true,
-    children: [],
-  },
-  {
-    key: 'user-story',
-    title: '시나리오 정의서',
-    icon: '👤',
-    description: '사용자 시나리오 정의',
-    isParent: true,
-    children: [],
-  },
-  {
-    key: 'feature-list',
-    title: '기능목록',
-    icon: '📝',
-    description: '기능 목록 정의서',
-    isParent: true,
-    children: [
-      {
-        key: 'screen-list',
-        title: '화면목록',
-        icon: '📱',
-        description: '화면 목록 정의서',
-        isParent: true,
-        children: [
-          {
-            key: 'ia',
-            title: 'IA',
-            icon: '🗂️',
-            description: '정보구조도',
-            isParent: true,
-            children: [],
-          },
-        ],
-      },
-      {
-        key: 'database',
-        title: 'DB설계',
-        icon: '🗄️',
-        description: '데이터베이스 스키마 및 ERD',
-        isParent: true,
-        children: [],
-      },
-      {
-        key: 'api-spec',
-        title: 'API명세',
-        icon: '🔌',
-        description: 'API 인터페이스 설계',
-        isParent: true,
-        children: [
-          {
-            key: 'test-plan',
-            title: '테스트계획',
-            icon: '🧪',
-            description: '테스트 시나리오 및 계획',
-            isParent: true,
-            children: [],
-          },
-        ],
-      },
-      {
-        key: 'flowchart',
-        title: '플로우차트',
-        icon: '🔄',
-        description: '사용자 플로우 및 프로세스',
-        isParent: true,
-        children: [
-          {
-            key: 'storyboard',
-            title: '스토리보드',
-            icon: '🎬',
-            description: '사용자 시나리오 흐름',
-            isParent: true,
-            children: [],
-          },
-        ],
-      },
-      {
-        key: 'wireframe',
-        title: '와이어프레임',
-        icon: '🎨',
-        description: '화면 설계 및 플로우',
-        isParent: true,
-        children: [
-          {
-            key: 'wbs',
-            title: 'WBS',
-            icon: '📊',
-            description: '작업 분류 구조',
-            isParent: true,
-            children: [],
-          },
-        ],
-      },
-    ],
-  },
-  {
-    key: 'deployment',
-    title: '배포가이드',
-    icon: '🚀',
-    description: '릴리스 및 배포 절차',
-    isParent: true,
-    children: [],
-  },
-];
-
-// 모든 부모 노드의 key를 추출하는 함수 (초기 펼침 상태용)
-function getAllParentKeys(): string[] {
-  const parentKeys: string[] = [];
-  const traverse = (nodes: TreeNode[]) => {
-    for (const node of nodes) {
-      if (node.isParent || node.children.length > 0) {
-        parentKeys.push(node.key);
-        traverse(node.children);
-      }
-    }
-  };
-  traverse(DOCUMENT_TREE);
-  return parentKeys;
-}
-
-// 트리를 평탄화하는 함수 (탭 렌더링용)
-function flattenTree(nodes: TreeNode[], parentKey: string | null = null): Array<TreeNode & { level: number; parentKey: string | null }> {
-  const result: Array<TreeNode & { level: number; parentKey: string | null }> = [];
-
-  for (const node of nodes) {
-    result.push({ ...node, level: parentKey === null ? 0 : 1, parentKey });
-    if (node.children.length > 0) {
-      result.push(...flattenTree(node.children, node.key).map(n => ({ ...n, level: (parentKey === null ? 0 : 1) + 1, parentKey: node.key })));
-    }
-  }
-
-  return result;
-}
-
-const FLAT_DOCUMENTS = flattenTree(DOCUMENT_TREE);
-
 export function PrdViewer() {
-  const { currentMeeting, updateCurrentMeeting } = useMeetingStore();
+  const currentMeeting = useMeetingStore(s => s.currentMeeting);
+  const { updateCurrentMeeting } = useMeetingStore();
   const [activeDoc, setActiveDoc] = useState<DocType>('prd');
 
   // currentMeeting에서 문서들을 초기화
@@ -1035,7 +769,7 @@ export function PrdViewer() {
       else if (trimmed.includes('|') && !trimmed.match(/^#/)) {
         const cells = trimmed.split('|').filter((_, i, arr) => i > 0 && i < arr.length - 1);
         if (cells.length > 1 && !trimmed.includes('---')) {
-          currentSlide.addTable([cells.map(c => c.trim())] as any, {
+          currentSlide.addTable([cells.map(c => c.trim())] as unknown as any, {
             x: 0.5, y: yPosition, w: 9,
             border: { pt: 1, color: 'CCCCCC' }
           });
@@ -1596,7 +1330,7 @@ export function PrdViewer() {
                           pre: ({ children, node }) => {
                             // mermaid인 경우 이미 처리했으므로 건너뜀
                             const childArray = Array.isArray(children) ? children : [children];
-                            const codeChild = childArray.find((c): c is { type: string; props: any } =>
+                            const codeChild = childArray.find((c): c is { type: string; props: { className?: string } } =>
                               typeof c === 'object' && c !== null && 'type' in c && c.type === 'code'
                             );
                             if (codeChild && 'props' in codeChild) {
@@ -1620,7 +1354,7 @@ export function PrdViewer() {
                           ),
                         }}
                       >
-                        {docContent}
+                        {sanitizeHtml(docContent)}
                       </ReactMarkdown>
                     </div>
                   </CardContent>

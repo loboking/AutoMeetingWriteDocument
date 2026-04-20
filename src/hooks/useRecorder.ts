@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
+import { useObjectUrl } from './useObjectUrl';
 
 interface UseRecorderReturn {
   isRecording: boolean;
@@ -23,6 +24,7 @@ export function useRecorder(): UseRecorderReturn {
   const audioChunksRef = useRef<Blob[]>([]);
   const streamRef = useRef<MediaStream | null>(null);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const { createObjectUrl, revokeObjectUrl, getObjectUrl } = useObjectUrl();
 
   // 타이머 시작
   const startTimer = useCallback(() => {
@@ -59,7 +61,8 @@ export function useRecorder(): UseRecorderReturn {
         const audioBlob = new Blob(audioChunksRef.current, {
           type: 'audio/webm',
         });
-        const url = URL.createObjectURL(audioBlob);
+        // Safely create object URL with automatic cleanup
+        const url = createObjectUrl(audioBlob);
         setAudioUrl(url);
       };
 
@@ -72,7 +75,7 @@ export function useRecorder(): UseRecorderReturn {
       console.error('마이크 접근 오류:', error);
       throw new Error('마이크 접근이 거부되었습니다.');
     }
-  }, [startTimer]);
+  }, [startTimer, createObjectUrl]);
 
   // 녹음 정지
   const stopRecording = useCallback(() => {
@@ -122,23 +125,21 @@ export function useRecorder(): UseRecorderReturn {
     setAudioUrl(null);
     audioChunksRef.current = [];
 
-    if (audioUrl) {
-      URL.revokeObjectURL(audioUrl);
-    }
-  }, [audioUrl]);
+    // Safely revoke object URL
+    revokeObjectUrl();
+  }, [revokeObjectUrl]);
 
   // 컴포넌트 언마운트 시 정리
   useEffect(() => {
     return () => {
       stopTimer();
-      if (audioUrl) {
-        URL.revokeObjectURL(audioUrl);
-      }
+      // Safely revoke object URL (useObjectUrl handles cleanup)
+      revokeObjectUrl();
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((track) => track.stop());
       }
     };
-  }, [audioUrl, stopTimer]);
+  }, [stopTimer, revokeObjectUrl]);
 
   return {
     isRecording,

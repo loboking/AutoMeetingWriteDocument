@@ -11,7 +11,9 @@ export function DateFormat({ date, format = 'datetime' }: DateFormatProps) {
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
-    setMounted(true);
+    // Hydration mismatch 방지를 위해 다음 틱에 상태 설정
+    const timeoutId = setTimeout(() => setMounted(true), 0);
+    return () => clearTimeout(timeoutId);
   }, []);
 
   if (!mounted) {

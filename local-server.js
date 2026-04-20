@@ -5,6 +5,7 @@
  * 터미널에서: node local-server.js
  */
 
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const http = require('http');
 
 const API_KEY = process.env.ANTHROPIC_API_KEY || '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';

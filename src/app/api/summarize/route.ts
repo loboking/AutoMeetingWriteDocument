@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import type { MeetingSummary, ActionItem } from '@/types';
+import type { MeetingSummary } from '@/types';
 import OpenAI from 'openai';
 
 export const runtime = 'nodejs';
@@ -71,11 +71,11 @@ ${context ? `## 추가 맥락\n${context}` : ''}
     });
 
     // 코딩 플랜 추론 모델은 content 또는 reasoning_content를 확인
-    const message = response.choices[0]?.message as any;
-    const content = message?.content || message?.reasoning_content || '{}';
+    const message = response.choices[0]?.message;
+    const content = message?.content || (message as { reasoning_content?: string })?.reasoning_content || '{}';
 
     // JSON 파싱: reasoning_content에서 JSON 부분 추출
-    let jsonMatch = content.match(/\{[\s\S]*\}/);
+    const jsonMatch = content.match(/\{[\s\S]*\}/);
     if (jsonMatch) {
       return JSON.parse(jsonMatch[0]);
     }

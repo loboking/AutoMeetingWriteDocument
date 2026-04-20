@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, memo } from 'react';
 import { FolderOpen, Trash2, Clock, FileText, Check } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -13,8 +13,75 @@ interface ProjectListProps {
   onClose: () => void;
 }
 
+// 개별 프로젝트 카드 (memo 적용으로 불필요한 리렌더링 방지)
+interface MeetingCardProps {
+  meeting: Meeting;
+  isCurrent: boolean;
+  docCount: number;
+  onLoad: (meeting: Meeting) => void;
+  onDelete: (id: string, e: React.MouseEvent) => void;
+}
+
+const MeetingCard = memo(({ meeting, isCurrent, docCount, onLoad, onDelete }: MeetingCardProps) => (
+  <Card
+    className={`transition-all hover:shadow-md ${
+      isCurrent ? 'ring-2 ring-blue-500 opacity-60' : 'cursor-pointer'
+    }`}
+    onClick={() => !isCurrent && onLoad(meeting)}
+  >
+    <CardContent className="p-4">
+      <div className="flex items-start justify-between">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 mb-1">
+            <h3 className="font-medium truncate">{meeting.title || '제목 없음'}</h3>
+            {isCurrent && (
+              <Badge variant="default" className="gap-1">
+                현재
+              </Badge>
+            )}
+            {meeting.isCompleted && (
+              <Badge variant="secondary" className="gap-1">
+                <Check className="w-3 h-3" />
+                완료
+              </Badge>
+            )}
+          </div>
+          <div className="flex items-center gap-3 text-sm text-slate-500">
+            <span className="flex items-center gap-1">
+              <Clock className="w-3 h-3" aria-hidden="true" />
+              <DateFormat date={meeting.createdAt} format="date" />
+            </span>
+            <span className="flex items-center gap-1">
+              <FileText className="w-3 h-3" aria-hidden="true" />
+              {docCount}/11 문서
+            </span>
+          </div>
+          {meeting.summary && (
+            <p className="text-sm text-slate-600 mt-2 line-clamp-2">
+              {meeting.summary.overview}
+            </p>
+          )}
+        </div>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={(e) => onDelete(meeting.id, e)}
+          className="text-red-500 hover:text-red-700 hover:bg-red-50"
+          aria-label="프로젝트 삭제"
+        >
+          <Trash2 className="w-4 h-4" aria-hidden="true" />
+        </Button>
+      </div>
+    </CardContent>
+  </Card>
+));
+
+MeetingCard.displayName = 'MeetingCard';
+
 export function ProjectList({ onClose }: ProjectListProps) {
-  const { meetings, deleteMeeting, currentMeeting, setCurrentMeeting } = useMeetingStore();
+  const meetings = useMeetingStore(s => s.meetings);
+  const currentMeeting = useMeetingStore(s => s.currentMeeting);
+  const { deleteMeeting, setCurrentMeeting } = useMeetingStore();
   const [filter, setFilter] = useState<'all' | 'in-progress' | 'completed'>('all');
 
   // 생성일 역순 정렬
@@ -117,57 +184,14 @@ export function ProjectList({ onClose }: ProjectListProps) {
             const isCurrent = meeting.id === currentMeeting?.id;
 
             return (
-              <Card
+              <MeetingCard
                 key={meeting.id}
-                className={`transition-all hover:shadow-md ${
-                  isCurrent ? 'ring-2 ring-blue-500 opacity-60' : 'cursor-pointer'
-                }`}
-                onClick={() => !isCurrent && handleLoad(meeting)}
-              >
-                <CardContent className="p-4">
-                  <div className="flex items-start justify-between">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-1">
-                        <h3 className="font-medium truncate">{meeting.title || '제목 없음'}</h3>
-                        {isCurrent && (
-                          <Badge variant="default" className="gap-1">
-                            현재
-                          </Badge>
-                        )}
-                        {meeting.isCompleted && (
-                          <Badge variant="secondary" className="gap-1">
-                            <Check className="w-3 h-3" />
-                            완료
-                          </Badge>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-3 text-sm text-slate-500">
-                        <span className="flex items-center gap-1">
-                          <Clock className="w-3 h-3" />
-                          <DateFormat date={meeting.createdAt} format="date" />
-                        </span>
-                        <span className="flex items-center gap-1">
-                          <FileText className="w-3 h-3" />
-                          {docCount}/11 문서
-                        </span>
-                      </div>
-                      {meeting.summary && (
-                        <p className="text-sm text-slate-600 mt-2 line-clamp-2">
-                          {meeting.summary.overview}
-                        </p>
-                      )}
-                    </div>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={(e) => handleDelete(meeting.id, e)}
-                      className="text-red-500 hover:text-red-700 hover:bg-red-50"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
+                meeting={meeting}
+                isCurrent={isCurrent}
+                docCount={docCount}
+                onLoad={handleLoad}
+                onDelete={handleDelete}
+              />
             );
           })
         )}

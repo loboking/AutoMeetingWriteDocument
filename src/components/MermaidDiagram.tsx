@@ -37,8 +37,6 @@ export function MermaidDiagram({ chart, id = 'mermaid' }: MermaidDiagramProps) {
   }, []);
 
   useEffect(() => {
-    setError(null);
-
     if (!ref.current || !chart.trim()) {
       return;
     }
@@ -102,9 +100,9 @@ export function MermaidDiagram({ chart, id = 'mermaid' }: MermaidDiagramProps) {
           ref.current.innerHTML = result.svg;
         }
       })
-      .catch((err: any) => {
+      .catch((err: Error | { message?: string; str?: string }) => {
         console.error('Mermaid render error:', err);
-        const errorMsg = err?.message || err?.str || '렌더링 오류';
+        const errorMsg = err?.message || (err as { str?: string })?.str || '렌더링 오류';
         setError(errorMsg);
 
         if (ref.current) {

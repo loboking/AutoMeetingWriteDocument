@@ -21,8 +21,11 @@ export function FileUploader({ onTranscriptComplete }: FileUploaderProps) {
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // 진행률 시뮬레이션 훅 사용
+  // 진행률 시뮬레이션 훅 사용 (오디오용)
   const { progress, startSimulation, stopSimulation, resetSimulation } = useProgressSimulation(200, 10, 90);
+
+  // 문서 처리용 별도 진행률 시뮬레이션
+  const { progress: docProgress, startSimulation: startDocSim, stopSimulation: stopDocSim, resetSimulation: resetDocSim } = useProgressSimulation(200, 15, 90);
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -82,8 +85,6 @@ export function FileUploader({ onTranscriptComplete }: FileUploaderProps) {
 
   const handleDocumentFile = async (file: File) => {
     // 문서 처리는 더 높은 증가분 사용
-    const { progress: docProgress, startSimulation: startDocSim, stopSimulation: stopDocSim, resetSimulation: resetDocSim } = useProgressSimulation(200, 15, 90);
-
     resetDocSim();
     startDocSim();
 

@@ -32,7 +32,10 @@ import { ProjectList } from '@/components/ProjectList';
 import { DateFormat } from '@/components/DateFormat';
 
 export default function Home() {
-  const { currentMeeting, currentStep, createMeeting, updateCurrentMeeting, updateMeetingStep, meetings, setCurrentMeeting } = useMeetingStore();
+  const currentMeeting = useMeetingStore(s => s.currentMeeting);
+  const currentStep = useMeetingStore(s => s.currentStep);
+  const meetings = useMeetingStore(s => s.meetings);
+  const { createMeeting, updateCurrentMeeting, updateMeetingStep, setCurrentMeeting } = useMeetingStore();
   const [meetingTitle, setMeetingTitle] = useState('');
   const [mounted, setMounted] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -191,8 +194,9 @@ export default function Home() {
                   variant="default"
                   size="sm"
                   className="gap-1.5 sm:gap-2 h-8 sm:h-9 px-2 sm:px-2.5"
+                  aria-label="새 회의 시작"
                 >
-                  <Plus className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                  <Plus className="w-3.5 h-3.5 sm:w-4 sm:h-4" aria-hidden="true" />
                   <span className="hidden xs:inline">새 회의</span>
                 </Button>
               )}
@@ -201,8 +205,9 @@ export default function Home() {
                 variant="outline"
                 size="sm"
                 className="gap-1.5 sm:gap-2 h-8 sm:h-9 px-2 sm:px-2.5"
+                aria-label="프로젝트 리스트 열기"
               >
-                <FolderOpen className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                <FolderOpen className="w-3.5 h-3.5 sm:w-4 sm:h-4" aria-hidden="true" />
                 <span className="hidden xs:inline">프로젝트 리스트</span>
                 {meetings.length > 0 && (
                   <Badge variant="secondary" className="ml-0.5 sm:ml-1 px-1 sm:px-1.5 py-0 text-[10px] sm:text-xs">{meetings.length}</Badge>
@@ -240,7 +245,7 @@ export default function Home() {
               );
             })}
           </div>
-          <Progress value={(getCurrentStepIndex() / (steps.length - 1)) * 100} className="h-2" />
+          <Progress value={(getCurrentStepIndex() / (steps.length - 1)) * 100} className="h-2" aria-label="회의 진행률" />
         </div>
 
         {/* 메인 콘텐츠 */}
@@ -262,6 +267,8 @@ export default function Home() {
                   value={meetingTitle}
                   onChange={(e) => setMeetingTitle(e.target.value)}
                   className="h-11"
+                  id="meeting-title"
+                  aria-label="회의 제목"
                 />
               </div>
 
@@ -360,20 +367,20 @@ export default function Home() {
             {/* 단계별 컴포넌트 렌더링 */}
             <Tabs value={currentStep} onValueChange={handleTabChange} className="w-full">
               <TabsList className="grid w-full grid-cols-4 h-auto p-1 bg-slate-100 dark:bg-slate-800">
-                <TabsTrigger value="recording" disabled={isTabDisabled('recording')} className="gap-1 sm:gap-1.5 h-8 sm:h-9 data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm dark:data-[state=active]:bg-slate-700 dark:data-[state=active]:text-blue-400">
-                  <Mic className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                <TabsTrigger value="recording" disabled={isTabDisabled('recording')} className="gap-1 sm:gap-1.5 h-8 sm:h-9 data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm dark:data-[state=active]:bg-slate-700 dark:data-[state=active]:text-blue-400" aria-label="녹음 탭">
+                  <Mic className="w-3.5 h-3.5 sm:w-4 sm:h-4" aria-hidden="true" />
                   <span className="hidden sm:inline">녹음</span>
                 </TabsTrigger>
-                <TabsTrigger value="transcribing" disabled={isTabDisabled('transcribing')} className="gap-1 sm:gap-1.5 h-8 sm:h-9 data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm dark:data-[state=active]:bg-slate-700 dark:data-[state=active]:text-blue-400">
-                  <Upload className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                <TabsTrigger value="transcribing" disabled={isTabDisabled('transcribing')} className="gap-1 sm:gap-1.5 h-8 sm:h-9 data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm dark:data-[state=active]:bg-slate-700 dark:data-[state=active]:text-blue-400" aria-label="변환 탭">
+                  <Upload className="w-3.5 h-3.5 sm:w-4 sm:h-4" aria-hidden="true" />
                   <span className="hidden sm:inline">변환</span>
                 </TabsTrigger>
-                <TabsTrigger value="summarizing" disabled={isTabDisabled('summarizing')} className="gap-1 sm:gap-1.5 h-8 sm:h-9 data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm dark:data-[state=active]:bg-slate-700 dark:data-[state=active]:text-blue-400">
-                  <FileText className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                <TabsTrigger value="summarizing" disabled={isTabDisabled('summarizing')} className="gap-1 sm:gap-1.5 h-8 sm:h-9 data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm dark:data-[state=active]:bg-slate-700 dark:data-[state=active]:text-blue-400" aria-label="요약 탭">
+                  <FileText className="w-3.5 h-3.5 sm:w-4 sm:h-4" aria-hidden="true" />
                   <span className="hidden sm:inline">요약</span>
                 </TabsTrigger>
-                <TabsTrigger value="done" disabled={isTabDisabled('done')} className="gap-1 sm:gap-1.5 h-8 sm:h-9 data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm dark:data-[state=active]:bg-slate-700 dark:data-[state=active]:text-blue-400">
-                  <Download className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                <TabsTrigger value="done" disabled={isTabDisabled('done')} className="gap-1 sm:gap-1.5 h-8 sm:h-9 data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm dark:data-[state=active]:bg-slate-700 dark:data-[state=active]:text-blue-400" aria-label="문서 탭">
+                  <Download className="w-3.5 h-3.5 sm:w-4 sm:h-4" aria-hidden="true" />
                   <span className="hidden sm:inline">문서</span>
                 </TabsTrigger>
               </TabsList>
@@ -408,8 +415,9 @@ export default function Home() {
                   size="icon"
                   onClick={() => setShowProjectList(false)}
                   className="h-8 w-8"
+                  aria-label="닫기"
                 >
-                  <X className="h-4 w-4" />
+                  <X className="h-4 w-4" aria-hidden="true" />
                 </Button>
               </div>
               <div className="flex-1 overflow-y-auto p-4">
@@ -423,10 +431,10 @@ export default function Home() {
         {/* 새 회의 확인 다이얼로그 */}
         {showNewMeetingConfirm && (
           <AlertDialog open={showNewMeetingConfirm} onOpenChange={setShowNewMeetingConfirm}>
-            <AlertDialogContent>
+            <AlertDialogContent role="alertdialog" aria-describedby="new-meeting-desc">
               <AlertDialogHeader>
-                <AlertDialogTitle>새 회의 시작</AlertDialogTitle>
-                <AlertDialogDescription>
+                <AlertDialogTitle id="new-meeting-title">새 회의 시작</AlertDialogTitle>
+                <AlertDialogDescription id="new-meeting-desc">
                   현재 회의 내용은 자동 저장됩니다. 새 회의를 시작하시겠습니까?
                 </AlertDialogDescription>
               </AlertDialogHeader>

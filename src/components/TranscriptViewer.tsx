@@ -8,7 +8,8 @@ import { Textarea } from '@/components/ui/textarea';
 import { useMeetingStore } from '@/store/meetingStore';
 
 export function TranscriptViewer() {
-  const { currentMeeting, updateCurrentMeeting, updateMeetingStep } = useMeetingStore();
+  const currentMeeting = useMeetingStore(s => s.currentMeeting);
+  const { updateCurrentMeeting, updateMeetingStep } = useMeetingStore();
   const [isSummarizing, setIsSummarizing] = useState(false);
   const [isRegenerating, setIsRegenerating] = useState(false);
   const [editedTranscript, setEditedTranscript] = useState(currentMeeting?.transcript || '');

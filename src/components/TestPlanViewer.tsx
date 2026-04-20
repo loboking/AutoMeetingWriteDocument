@@ -15,7 +15,7 @@ interface TestPlanViewerProps {
   content: string;
 }
 
-function parseTestPlan(content: string): { testCases: TestCase[], summary: any } {
+function parseTestPlan(content: string): { testCases: TestCase[], summary: { total: number; passed: number; failed: number; pending: number } } {
   const lines = content.split('\n');
   const testCases: TestCase[] = [];
   const summary = {

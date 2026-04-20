@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, memo, useMemo } from 'react';
 import { Terminal, FileText, Copy, Check, FolderTree, ChevronRight, Code, Server, Database, TestTube } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -17,7 +17,7 @@ interface CommandCard {
 }
 
 // 기획 문서 기반 명령어 생성
-function generateCommandsFromDocuments(meeting: any): CommandCard[] {
+function generateCommandsFromDocuments(meeting: { title?: string; prd?: string; featureList?: string; apiSpec?: string; database?: string; testPlan?: string; testCase?: string }): CommandCard[] {
   const commands: CommandCard[] = [];
 
   // 프로젝트 설정 명령어
@@ -25,7 +25,7 @@ function generateCommandsFromDocuments(meeting: any): CommandCard[] {
     id: 'init-project',
     title: '프로젝트 초기화',
     description: 'Next.js 프로젝트 시작',
-    command: `npx create-next-app@latest ${meeting.title.replace(/\s+/g, '-').toLowerCase()} --typescript --tailwind --app --no-src-dir --import-alias "@/*"`,
+    command: `npx create-next-app@latest ${(meeting.title || 'my-project').replace(/\s+/g, '-').toLowerCase()} --typescript --tailwind --app --no-src-dir --import-alias "@/*"`,
     category: 'setup',
     icon: FolderTree,
   });
@@ -117,16 +117,77 @@ const CATEGORY_STYLES = {
   test: { bg: 'bg-orange-500/10', text: 'text-orange-500', border: 'border-orange-500/20', label: '테스트' },
 };
 
+// 개별 명령어 카드 (memo 적용)
+interface CommandCardItemProps {
+  cmd: CommandCard;
+  isCopied: boolean;
+  onCopy: (command: string, id: string) => void;
+}
+
+const CommandCardItem = memo(({ cmd, isCopied, onCopy }: CommandCardItemProps) => {
+  const Icon = cmd.icon;
+  const style = CATEGORY_STYLES[cmd.category];
+
+  return (
+    <Card
+      className={`group hover:shadow-md transition-all cursor-pointer ${style.bg} ${style.border} border`}
+    >
+      <CardContent className="p-4">
+        <div className="flex items-start gap-3">
+          <div className={`p-2 rounded-lg ${style.bg} ${style.text}`}>
+            <Icon className="w-4 h-4" aria-hidden="true" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 mb-1">
+              <h4 className="font-medium text-sm text-slate-900 dark:text-slate-50">
+                {cmd.title}
+              </h4>
+              <Badge variant="outline" className={`text-xs ${style.text} ${style.border}`}>
+                {style.label}
+              </Badge>
+            </div>
+            <p className="text-xs text-slate-600 dark:text-slate-400 mb-2">
+              {cmd.description}
+            </p>
+            <code className="block text-xs bg-slate-900 text-slate-100 p-2 rounded overflow-x-auto whitespace-pre-wrap break-all">
+              {cmd.command}
+            </code>
+          </div>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => onCopy(cmd.command, cmd.id)}
+            className={`shrink-0 ${isCopied ? 'text-green-500' : ''}`}
+            aria-label="명령어 복사"
+          >
+            {isCopied ? (
+              <>
+                <Check className="w-4 h-4 mr-1" aria-hidden="true" />
+                복사됨
+              </>
+            ) : (
+              <>
+                <Copy className="w-4 h-4 mr-1" aria-hidden="true" />
+                복사
+              </>
+            )}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+});
+
+CommandCardItem.displayName = 'CommandCardItem';
+
 export function CommandPanel() {
-  const { currentMeeting } = useMeetingStore();
-  const [commands, setCommands] = useState<CommandCard[]>([]);
+  const currentMeeting = useMeetingStore(s => s.currentMeeting);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (currentMeeting) {
-      setCommands(generateCommandsFromDocuments(currentMeeting));
-    }
+  // currentMeeting이 변경될 때 명령어 목록 계산
+  const commands = useMemo(() => {
+    return currentMeeting ? generateCommandsFromDocuments(currentMeeting) : [];
   }, [currentMeeting]);
 
   const handleCopy = async (command: string, id: string) => {
@@ -194,60 +255,14 @@ export function CommandPanel() {
         </Card>
       ) : (
         <div className="space-y-3">
-          {filteredCommands.map((cmd) => {
-            const Icon = cmd.icon;
-            const style = CATEGORY_STYLES[cmd.category];
-            const isCopied = copiedId === cmd.id;
-
-            return (
-              <Card
-                key={cmd.id}
-                className={`group hover:shadow-md transition-all cursor-pointer ${style.bg} ${style.border} border`}
-              >
-                <CardContent className="p-4">
-                  <div className="flex items-start gap-3">
-                    <div className={`p-2 rounded-lg ${style.bg} ${style.text}`}>
-                      <Icon className="w-4 h-4" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-1">
-                        <h4 className="font-medium text-sm text-slate-900 dark:text-slate-50">
-                          {cmd.title}
-                        </h4>
-                        <Badge variant="outline" className={`text-xs ${style.text} ${style.border}`}>
-                          {style.label}
-                        </Badge>
-                      </div>
-                      <p className="text-xs text-slate-600 dark:text-slate-400 mb-2">
-                        {cmd.description}
-                      </p>
-                      <code className="block text-xs bg-slate-900 text-slate-100 p-2 rounded overflow-x-auto whitespace-pre-wrap break-all">
-                        {cmd.command}
-                      </code>
-                    </div>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => handleCopy(cmd.command, cmd.id)}
-                      className={`shrink-0 ${isCopied ? 'text-green-500' : ''}`}
-                    >
-                      {isCopied ? (
-                        <>
-                          <Check className="w-4 h-4 mr-1" />
-                          복사됨
-                        </>
-                      ) : (
-                        <>
-                          <Copy className="w-4 h-4 mr-1" />
-                          복사
-                        </>
-                      )}
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
-            );
-          })}
+          {filteredCommands.map((cmd) => (
+            <CommandCardItem
+              key={cmd.id}
+              cmd={cmd}
+              isCopied={copiedId === cmd.id}
+              onCopy={handleCopy}
+            />
+          ))}
         </div>
       )}
 

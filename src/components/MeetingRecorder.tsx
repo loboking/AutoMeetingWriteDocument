@@ -117,8 +117,8 @@ function VoiceRecorder() {
       </CardHeader>
       <CardContent className="space-y-6">
         {/* 녹음 상태 표시 */}
-        <div className="text-center space-y-4">
-          <div className="text-6xl font-mono font-bold text-slate-800 dark:text-slate-200">
+        <div className="text-center space-y-4" role="status" aria-live="polite">
+          <div className="text-6xl font-mono font-bold text-slate-800 dark:text-slate-200" aria-label={`녹음 시간 ${formatTime(duration)}`}>
             {formatTime(duration)}
           </div>
 
@@ -160,8 +160,10 @@ function VoiceRecorder() {
               size="lg"
               className="w-32 h-32 rounded-full"
               disabled={!!audioUrl}
+              aria-label={audioUrl ? "녹음 완료됨" : "녹음 시작"}
+              aria-pressed={false}
             >
-              <Mic className="w-8 h-8" />
+              <Mic className="w-8 h-8" aria-hidden="true" />
             </Button>
           ) : (
             <>
@@ -171,8 +173,10 @@ function VoiceRecorder() {
                   size="lg"
                   className="h-16 w-16 rounded-full"
                   variant="secondary"
+                  aria-label="녹음 재개"
+                  aria-pressed={false}
                 >
-                  <Play className="w-6 h-6" />
+                  <Play className="w-6 h-6" aria-hidden="true" />
                 </Button>
               ) : (
                 <Button
@@ -180,8 +184,10 @@ function VoiceRecorder() {
                   size="lg"
                   className="h-16 w-16 rounded-full"
                   variant="secondary"
+                  aria-label="녹음 일시정지"
+                  aria-pressed={true}
                 >
-                  <Pause className="w-6 h-6" />
+                  <Pause className="w-6 h-6" aria-hidden="true" />
                 </Button>
               )}
 
@@ -189,8 +195,9 @@ function VoiceRecorder() {
                 onClick={handleStopRecording}
                 size="lg"
                 className="h-16 w-16 rounded-full bg-red-500 hover:bg-red-600"
+                aria-label="녹음 정지"
               >
-                <Square className="w-6 h-6" />
+                <Square className="w-6 h-6" aria-hidden="true" />
               </Button>
             </>
           )}
@@ -199,11 +206,11 @@ function VoiceRecorder() {
         {/* 녹음 완료 후 변환 진행 상태 */}
         {audioUrl && !isRecording && (
           <div className="space-y-4">
-            <audio src={audioUrl} controls className="w-full" />
+            <audio src={audioUrl} controls className="w-full" aria-label="녹음된 오디오 재생" />
 
             {/* 변환 중인 경우 진행률 표시 */}
             {isUploading ? (
-              <div className="space-y-3">
+              <div className="space-y-3" role="status" aria-live="polite">
                 <div className="flex items-center justify-between">
                   <span className="text-sm font-medium text-slate-600 dark:text-slate-400">
                     텍스트 변환 중...
@@ -212,7 +219,7 @@ function VoiceRecorder() {
                     {uploadProgress}%
                   </span>
                 </div>
-                <Progress value={uploadProgress} className="h-3" />
+                <Progress value={uploadProgress} className="h-3" aria-label={`변환 진행률 ${uploadProgress}퍼센트`} />
                 <p className="text-xs text-center text-slate-500">
                   AI가 음성을 텍스트로 변환하고 있습니다. 잠시만 기다려주세요...
                 </p>
@@ -237,13 +244,13 @@ export function MeetingRecorder() {
 
   return (
     <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-      <TabsList className="grid w-full grid-cols-2 mb-6">
-        <TabsTrigger value="voice" className="gap-2">
-          <Mic className="w-4 h-4" />
+      <TabsList className="grid w-full grid-cols-2 mb-6" role="tablist">
+        <TabsTrigger value="voice" className="gap-2" aria-label="음성 녹음 탭">
+          <Mic className="w-4 h-4" aria-hidden="true" />
           음성 녹음
         </TabsTrigger>
-        <TabsTrigger value="file" className="gap-2">
-          <FileUp className="w-4 h-4" />
+        <TabsTrigger value="file" className="gap-2" aria-label="파일 업로드 탭">
+          <FileUp className="w-4 h-4" aria-hidden="true" />
           파일 업로드
         </TabsTrigger>
       </TabsList>
