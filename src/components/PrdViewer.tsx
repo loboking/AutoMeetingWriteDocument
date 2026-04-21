@@ -1433,8 +1433,8 @@ export function PrdViewer() {
               </AlertDialogTitle>
               <AlertDialogDescription>
                 {generateConfirmData.isRegenerate
-                  ? `모든 문서(${generateConfirmData.count}개)가 이미 생성되어 있습니다.\n전체를 다시 생성하시겠습니까?`
-                  : `${generateConfirmData.count}개 문서를 생성하시겠습니까?\n(의존성이 충족된 문서만 생성됩니다)`
+                  ? `모든 문서(14개 전체)를 다시 생성하시겠습니까?`
+                  : `첫 번째 문서부터 시작하여 의존성에 따라\n최대 14개의 문서를 자동으로 생성합니다.\n\n생성 가능: ${generateConfirmData.count}개 → 연속 생성으로 완료`
                 }
               </AlertDialogDescription>
             </AlertDialogHeader>
