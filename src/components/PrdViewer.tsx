@@ -1,14 +1,14 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { FileText, Download, Copy, Check, Loader2, Plus, Edit, Save, Eye, File, Code, BookOpen, Presentation, Printer, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Folder, Terminal } from 'lucide-react';
+import { FileText, Download, Copy, Check, Loader2, Plus, Edit, Save, Eye, File, Code, BookOpen, Presentation, Printer, ChevronLeft, ChevronRight, Terminal } from 'lucide-react';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { saveAs } from 'file-saver';
 import * as XLSX from 'xlsx';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { sanitizeHtml } from '@/lib/sanitize';
-import { extractMermaidCode, docTypeToField, canGenerateDoc, getDependencyNames, getAllParentKeys, FLAT_DOCUMENTS, DOCUMENTS, DOCUMENT_TREE, type DocType, type TreeNode } from '@/lib/documentUtils';
+import { extractMermaidCode, docTypeToField, canGenerateDoc, getDependencyNames, DOCUMENTS, type DocType } from '@/lib/documentUtils';
 import PptxGenJS from 'pptxgenjs';
 import { Document as DocxDocument, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, Table, TableRow, TableCell, WidthType, BorderStyle } from 'docx';
 import { Button } from '@/components/ui/button';
@@ -71,7 +71,6 @@ export function PrdViewer() {
     status: 'generating' | 'completed' | 'error';
   } | null>(null);
 
-  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set(getAllParentKeys())); // 모든 노드 기본 펼침 (자식 포함)
   const [editedContent, setEditedContent] = useState('');
   const [copied, setCopied] = useState(false);
   const [viewMode, setViewMode] = useState<'raw' | 'preview' | 'visual' | 'terminal'>('visual'); // 기본을 시각화로 변경
@@ -299,66 +298,21 @@ export function PrdViewer() {
     setIsEditing(false);
   };
 
-  // 트리 노드 토글
-  const toggleNode = (key: string) => {
-    setExpandedNodes(prev => {
-      const newSet = new Set(prev);
-      if (newSet.has(key)) {
-        newSet.delete(key);
-      } else {
-        newSet.add(key);
-      }
-      return newSet;
-    });
-  };
-
-  // 트리에서 문서 찾기
-  const findNodeInTree = (nodes: TreeNode[], key: string): TreeNode | null => {
-    for (const node of nodes) {
-      if (node.key === key) return node;
-      if (node.children.length > 0) {
-        const found = findNodeInTree(node.children, key);
-        if (found) return found;
-      }
-    }
-    return null;
-  };
-
   const currentContent = documents[activeDoc] || '';
   const hasContent = !!currentContent;
-  const doc = findNodeInTree(DOCUMENT_TREE, activeDoc) || DOCUMENTS.find(d => d.key === activeDoc);
-  const flatIndex = FLAT_DOCUMENTS.findIndex(d => d.key === activeDoc);
-
-  // 트리에서 보여질 노드 목록 생성 (펼쳐진 노드만 포함)
-  const getVisibleNodes = (): Array<{ node: TreeNode; level: number }> => {
-    const result: Array<{ node: TreeNode; level: number }> = [];
-
-    const traverse = (nodes: TreeNode[], level: number = 0) => {
-      for (const node of nodes) {
-        result.push({ node, level });
-        // 펼쳐져 있으면 자식들도 추가
-        if (node.children.length > 0 && expandedNodes.has(node.key)) {
-          traverse(node.children, level + 1);
-        }
-      }
-    };
-
-    traverse(DOCUMENT_TREE);
-    return result;
-  };
-
-  const visibleNodes = getVisibleNodes();
+  const doc = DOCUMENTS.find(d => d.key === activeDoc);
+  const flatIndex = DOCUMENTS.findIndex(d => d.key === activeDoc);
 
   // 문서 네비게이션
   const handlePreviousDoc = () => {
     if (flatIndex > 0) {
-      setActiveDoc(FLAT_DOCUMENTS[flatIndex - 1].key);
+      setActiveDoc(DOCUMENTS[flatIndex - 1].key);
     }
   };
 
   const handleNextDoc = () => {
-    if (flatIndex < FLAT_DOCUMENTS.length - 1) {
-      setActiveDoc(FLAT_DOCUMENTS[flatIndex + 1].key);
+    if (flatIndex < DOCUMENTS.length - 1) {
+      setActiveDoc(DOCUMENTS[flatIndex + 1].key);
     }
   };
 
@@ -801,40 +755,19 @@ export function PrdViewer() {
         <div className="p-3 border-b border-slate-200 dark:border-slate-700 flex-shrink-0">
           <h2 className="text-base font-bold text-slate-900 dark:text-white">문서 목록</h2>
         </div>
-        {/* 트리 영역 - 스크롤 가능 */}
+        {/* 문서 목록 영역 - 스크롤 가능 */}
         <div ref={treeRef} className="flex-1 overflow-y-auto max-h-[60vh]">
           <Tabs value={activeDoc} onValueChange={(v) => setActiveDoc(v as DocType)}>
             <TabsList className="bg-transparent border-none p-0 h-auto flex flex-col items-start gap-0.5 rounded-none w-full">
-          {visibleNodes.map(({ node, level }, index) => {
-              const hasDoc = !!documents[node.key];
-              const { canGenerate } = canGenerateDoc(node.key, documents);
-              const isDisabled = !hasDoc && !canGenerate;
-              const isExpanded = expandedNodes.has(node.key);
-              const hasChildren = node.children.length > 0;
-              const hasNextSibling = index < visibleNodes.length - 1 &&
-                                     visibleNodes[index + 1].level <= level;
+              {DOCUMENTS.map((doc) => {
+                const hasDoc = !!documents[doc.key];
+                const { canGenerate } = canGenerateDoc(doc.key, documents);
+                const isDisabled = !hasDoc && !canGenerate;
 
-              return (
-                <div key={node.key} className="relative w-full">
-                  {/* 트리 연결선 */}
-                  {level > 0 && (
-                    <div
-                      className="absolute left-0 top-0 bottom-0 w-px bg-slate-200 dark:bg-slate-700"
-                      style={{
-                        left: `${level * 20 - 8}px`,
-                        height: hasNextSibling ? '100%' : '24px'
-                      }}
-                    />
-                  )}
-                  {level > 0 && (
-                    <div
-                      className="absolute left-0 top-3 w-4 h-px bg-slate-200 dark:bg-slate-700"
-                      style={{ left: `${level * 20 - 8}px` }}
-                    />
-                  )}
-
+                return (
                   <TabsTrigger
-                    value={node.key}
+                    key={doc.key}
+                    value={doc.key}
                     className="gap-2 text-sm w-full justify-start px-3 py-2 h-auto rounded-md
                              text-slate-900 dark:text-slate-100
                              data-[state=active]:bg-white dark:data-[state=active]:bg-slate-800
@@ -845,46 +778,16 @@ export function PrdViewer() {
                              data-[state=active]:border-slate-200 dark:data-[state=active]:border-slate-700
                              relative group"
                     disabled={isDisabled}
-                    style={{ paddingLeft: `${level * 20 + 12}px` }}
                   >
-                    {/* 펼침/접힘 버튼 - div로 변경하여 중첩 버튼 문제 해결 */}
-                    {hasChildren ? (
-                      <div
-                        onClick={(e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          toggleNode(node.key);
-                        }}
-                        className="p-0 h-5 w-5 flex items-center justify-center
-                               hover:bg-slate-200 dark:hover:bg-slate-700
-                               rounded transition-colors duration-150
-                               cursor-pointer select-none
-                               flex-shrink-0 -ml-6 mr-1
-                               group-hover:bg-slate-200 dark:group-hover:bg-slate-700"
-                        style={{ marginLeft: `${level * 20 - 28}px` }}
-                      >
-                        {isExpanded ? (
-                          <ChevronDown className="w-3.5 h-3.5 text-slate-600 dark:text-slate-400 pointer-events-none" />
-                        ) : (
-                          <ChevronRight className="w-3.5 h-3.5 text-slate-600 dark:text-slate-400 pointer-events-none" />
-                        )}
-                      </div>
-                    ) : (
-                      <span
-                        className="h-5 w-5 inline-block flex-shrink-0"
-                        style={{ marginLeft: `${level * 20 - 28}px` }}
-                      />
-                    )}
-
                     {/* 아이콘과 제목 */}
                     <span className="text-base flex-shrink-0 opacity-80 group-hover:opacity-100 transition-opacity">
-                      {node.icon}
+                      {doc.icon}
                     </span>
                     <span className="truncate flex-1 text-left text-slate-900 dark:text-slate-100">
-                      {node.title}
+                      {doc.title}
                     </span>
 
-                    {/* 상태 표시 - 개선된 디자인 */}
+                    {/* 상태 표시 */}
                     <span className="ml-auto flex-shrink-0 flex items-center gap-2">
                       {hasDoc && (
                         <span className="relative flex h-2.5 w-2.5">
@@ -897,9 +800,8 @@ export function PrdViewer() {
                       )}
                     </span>
                   </TabsTrigger>
-                </div>
-              );
-            })}
+                );
+              })}
             </TabsList>
           </Tabs>
         </div>
@@ -946,7 +848,7 @@ export function PrdViewer() {
               </span>
               <Button
                 onClick={handleNextDoc}
-                disabled={flatIndex === FLAT_DOCUMENTS.length - 1}
+                disabled={flatIndex === DOCUMENTS.length - 1}
                 variant="outline"
                 size="sm"
                 className="h-8"
@@ -1154,18 +1056,18 @@ export function PrdViewer() {
                   </Button>
                   <div className="flex items-center gap-2 px-3">
                     <span className="text-sm font-medium text-slate-700 dark:text-slate-300">
-                      {FLAT_DOCUMENTS[flatIndex]?.icon}
+                      {DOCUMENTS[flatIndex]?.icon}
                     </span>
                     <span className="text-xs text-slate-500 dark:text-slate-400">
-                      {flatIndex + 1} / {FLAT_DOCUMENTS.length}
+                      {flatIndex + 1} / {DOCUMENTS.length}
                     </span>
                     <span className="text-sm font-medium text-slate-700 dark:text-slate-300">
-                      {FLAT_DOCUMENTS[flatIndex]?.title}
+                      {DOCUMENTS[flatIndex]?.title}
                     </span>
                   </div>
                   <Button
                     onClick={handleNextDoc}
-                    disabled={flatIndex === FLAT_DOCUMENTS.length - 1}
+                    disabled={flatIndex === DOCUMENTS.length - 1}
                     variant="ghost"
                     size="sm"
                     className="gap-1 h-8 rounded-full"

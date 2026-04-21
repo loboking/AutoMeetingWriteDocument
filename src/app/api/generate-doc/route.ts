@@ -6,6 +6,13 @@ import { getTestCasePrompt } from '@/lib/testCaseTemplate';
 import { getDatabasePrompt } from '@/lib/databaseTemplate';
 import { getWireframePrompt } from '@/lib/wireframeTemplate';
 import { getUserStoryPrompt } from '@/lib/userStoryTemplate';
+import { getFeatureListPrompt } from '@/lib/featureListTemplate';
+import { getScreenListPrompt } from '@/lib/screenListTemplate';
+import { getIaPrompt } from '@/lib/iaTemplate';
+import { getFlowchartPrompt } from '@/lib/flowchartTemplate';
+import { getStoryboardPrompt } from '@/lib/storyboardTemplate';
+import { getWBSPrompt } from '@/lib/wbsTemplate';
+import { getTestPlanPrompt } from '@/lib/testPlanTemplate';
 import type { MeetingSummary } from '@/types';
 import OpenAI from 'openai';
 
@@ -234,32 +241,60 @@ function getPromptForDocType(
 - 의사결정: ${summary.decisions.join(', ')}
 `;
 
+  if (docType === 'prd') {
+    return getPRDPrompt(baseInfo, transcript, meetingInfo);
+  }
+
+  if (docType === 'feature-list') {
+    return getFeatureListPrompt(baseInfo, transcript);
+  }
+
+  if (docType === 'screen-list') {
+    return getScreenListPrompt(baseInfo, transcript);
+  }
+
+  if (docType === 'ia') {
+    return getIaPrompt(baseInfo, transcript);
+  }
+
+  if (docType === 'flowchart') {
+    return getFlowchartPrompt(baseInfo, transcript);
+  }
 
   if (docType === 'wireframe') {
     return getWireframePrompt(baseInfo, transcript);
+  }
+
+  if (docType === 'storyboard') {
+    return getStoryboardPrompt(baseInfo, transcript);
   }
 
   if (docType === 'user-story') {
     return getUserStoryPrompt(baseInfo, transcript);
   }
 
+  if (docType === 'wbs') {
+    return getWBSPrompt(baseInfo, transcript);
+  }
 
   if (docType === 'api-spec') {
     return getApiSpecPrompt(baseInfo, transcript);
   }
 
-  if (docType === 'deployment') {
-    return getDeploymentPrompt(baseInfo, transcript);
-
-  }
-
-
   if (docType === 'test-case') {
     return getTestCasePrompt(baseInfo, transcript);
   }
 
+  if (docType === 'test-plan') {
+    return getTestPlanPrompt(baseInfo, transcript);
+  }
+
   if (docType === 'database') {
     return getDatabasePrompt(baseInfo, transcript);
+  }
+
+  if (docType === 'deployment') {
+    return getDeploymentPrompt(baseInfo, transcript);
   }
 
   // Default: PRD
@@ -545,6 +580,158 @@ erDiagram
 \`\`\`
 
 회의에서 논의된 실제 데이터 구조와 엔티티를 바탕으로 작성하세요.`;
+  }
+
+  if (docType === 'feature-list') {
+    return `${baseInfo}
+
+## 1. 기능 개요
+- **총 기능 수**: 5개
+- **우선순위 분류**: P0(필수), P1(중요), P2(선택)
+
+## 2. 기능 목록
+
+### 2.1 회원가입/로그인 (P0)
+| 항목 | 내용 |
+|------|------|
+| 기능 ID | F-001 |
+| 기능명 | 회원가입 |
+| 설명 | 이메일 인증을 통한 회원가입 |
+| 우선순위 | P0 |
+
+### 2.2 대시버드 (P0)
+| 항목 | 내용 |
+|------|------|
+| 기능 ID | F-002 |
+| 기능명 | 대시버드 |
+| 설명 | 주요 데이터 시각화 |
+| 우선순위 | P0 |`;
+  }
+
+  if (docType === 'screen-list') {
+    return `${baseInfo}
+
+## 1. 화면 개요
+- **총 화면 수**: 5개
+
+## 2. 화면 목록
+
+| 화면ID | 화면명 | 경로 | 설명 | 관련 기능 |
+|--------|--------|------|------|----------|
+| S-001 | 로그인 | /login | 사용자 인증 | F-001 |
+| S-002 | 대시버드 | /dashboard | 메인 대시버드 | F-002 |
+| S-003 | 설정 | /settings | 사용자 설정 | F-003 |`;
+  }
+
+  if (docType === 'ia') {
+    return `${baseInfo}
+
+## 1. 정보 구조 개요
+- **구조 유형**: 계층형
+- **깊이**: 3단계
+
+## 2. 사이트맵
+
+\`\`\`mermaid
+graph TD
+    A[홈] --> B[로그인]
+    D[대시버드] --> E[위젯]
+    D --> F[리포트]
+    D --> G[설정]
+\`\`\``;
+  }
+
+  if (docType === 'flowchart') {
+    return `${baseInfo}
+
+## 1. 회원가입 플로우
+
+\`\`\`mermaid
+flowchart TD
+    A[시작] --> B[회원가입 버튼 클릭]
+    B --> C[이메일 입력]
+    C --> D{이메일 유효성 검사}
+    D -->|실패| C
+    D -->|성공| E[비밀번호 입력]
+    E --> F[가입 요청]
+    F --> G[회원가입 완료]
+\`\`\``;
+  }
+
+  if (docType === 'storyboard') {
+    return `${baseInfo}
+
+## 1. 시나리오 개요
+- **시나리오명**: 데이터 조회
+- **사용자 페르소나**: 데이터 분석가
+
+## 2. 스토리보드 시트
+
+### 장면 1: 문제 인식
+| 요소 | 설명 |
+|------|------|
+| 배경 | 사무실 |
+| 사용자 상태 | 데이터를 찾지 못해 불편 |
+| 생각/대사 | "데이터가 어디 있지?" |
+| 감정 | 불편함, 답답함 |
+
+### 장면 2: 서비스 발견
+| 요소 | 설명 |
+|------|------|
+| 배경 | 웹 서핑 중 |
+| 사용자 상태 | 서비스 발견 |
+| 생각/대사 | "이걸 쓰면 편해지겠네?" |
+| 감정 | 호기심, 기대감 |`;
+  }
+
+  if (docType === 'wbs') {
+    return `${baseInfo}
+
+## 1. 프로젝트 개요
+- **프로젝트명**: 회의 자동화 시스템
+- **시작일**: ${meetingInfo.date}
+- **종료일**: -
+- **총 기간**: 4주
+
+## 2. WBS 계층 구조
+
+### 1.0 프로젝트 관리
+- 1.1 프로젝트 계획
+- 1.2 일정 관리
+
+### 2.0 요구사항 분석
+- 2.1 요구사항 수집
+- 2.2 PRD 작성
+
+### 3.0 디자인
+- 3.1 UI/UX 디자인
+- 3.2 와이어프레임 작성`;
+  }
+
+  if (docType === 'test-plan') {
+    return `${baseInfo}
+
+## 1. 테스트 개요
+- **테스트 목표**: 기능 품질 보증
+- **테스트 기간**: 1주
+
+## 2. 테스트 전략
+
+| 테스트 유형 | 목적 | 도구 | 책임자 |
+|------------|------|------|--------|
+| 단위 테스트 | 함수/컴포넌트 품질 | Jest | 개발자 |
+| 통합 테스트 | 모듈 간 연동 | Supertest | 개발자 |
+| E2E 테스트 | 사용자 시나리오 | Playwright | QA |
+
+## 3. 입수/퇴수 기준
+
+### 입수 기준
+- [ ] 개발 완료 및 배포
+- [ ] 단위 테스트 통과 (80% 이상)
+
+### 퇴수 기준
+- [ ] P0/P1 버그 0건
+- [ ] 테스트 커버리지 70% 이상`;
   }
 
   return baseInfo;

@@ -34,20 +34,21 @@ export interface TreeNode {
   parentKey?: string | null;
 }
 
+// 평면 목록 순서 (사용자 요청 순서)
 export const DOCUMENTS: { key: DocType; title: string; icon: string; description: string }[] = [
   { key: 'prd', title: 'PRD', icon: '📋', description: '제품 요구사항 문서' },
   { key: 'user-story', title: '시나리오 정의서', icon: '👤', description: '사용자 시나리오 정의' },
   { key: 'feature-list', title: '기능목록', icon: '📝', description: '기능 목록 정의서' },
   { key: 'screen-list', title: '화면목록', icon: '📱', description: '화면 목록 정의서' },
   { key: 'ia', title: 'IA', icon: '🗂️', description: '정보구조도' },
+  { key: 'database', title: 'DB설계', icon: '🗄️', description: '데이터베이스 스키마 및 ERD' },
+  { key: 'api-spec', title: 'API명세', icon: '🔌', description: 'API 인터페이스 설계' },
+  { key: 'test-plan', title: '테스트계획', icon: '🧪', description: '테스트 시나리오 및 계획' },
   { key: 'flowchart', title: '플로우차트', icon: '🔄', description: '사용자 플로우 및 프로세스' },
   { key: 'storyboard', title: '스토리보드', icon: '🎬', description: '사용자 시나리오 흐름' },
   { key: 'wireframe', title: '와이어프레임', icon: '🎨', description: '화면 설계 및 플로우' },
-  { key: 'api-spec', title: 'API명세', icon: '🔌', description: 'API 인터페이스 설계' },
-  { key: 'test-plan', title: '테스트계획', icon: '🧪', description: '테스트 시나리오 및 계획' },
-  { key: 'test-case', title: '테스트케이스', icon: '✅', description: '상세 테스트 케이스 목록' },
-  { key: 'database', title: 'DB설계', icon: '🗄️', description: '데이터베이스 스키마 및 ERD' },
   { key: 'wbs', title: 'WBS', icon: '📊', description: '작업 분류 구조' },
+  { key: 'test-case', title: '테스트케이스', icon: '✅', description: '상세 테스트 케이스 목록' },
   { key: 'deployment', title: '배포가이드', icon: '🚀', description: '릴리스 및 배포 절차' },
 ];
 
