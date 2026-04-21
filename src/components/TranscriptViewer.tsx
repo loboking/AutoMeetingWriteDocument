@@ -59,6 +59,11 @@ export function TranscriptViewer() {
     updateMeetingStep('summarizing');
 
     try {
+      console.log('[Frontend] 요약 요청 시작', {
+        textLength: editedTranscript.length,
+        title: currentMeeting?.title,
+      });
+
       const response = await fetch('/api/summarize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -68,7 +73,16 @@ export function TranscriptViewer() {
         }),
       });
 
-      if (!response.ok) throw new Error('요약 실패');
+      console.log('[Frontend] 요약 응답 수신', {
+        status: response.status,
+        ok: response.ok,
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('[Frontend] API 에러 응답:', errorText);
+        throw new Error('요약 실패');
+      }
 
       const { summary } = await response.json();
 

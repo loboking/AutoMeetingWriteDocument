@@ -64,24 +64,67 @@ ${context ? `## 추가 맥락\n${context}` : ''}
 
   try {
     const openai = createOpenAIClient();
+    console.log('[API] Z.ai API 호출 시작 - Model: glm-5');
+
     const response = await openai.chat.completions.create({
       model: 'glm-5',
       messages: [{ role: 'user', content: prompt }],
       max_tokens: 8192,
     });
 
+    console.log('[API] Z.ai API 응답 수신:', {
+      choices: response.choices?.length,
+      finishReason: response.choices?.[0]?.finish_reason,
+      hasContent: !!response.choices?.[0]?.message?.content
+    });
+
     // 코딩 플랜 추론 모델은 content 또는 reasoning_content를 확인
     const message = response.choices[0]?.message;
     const content = message?.content || (message as { reasoning_content?: string })?.reasoning_content || '{}';
 
-    // JSON 파싱: reasoning_content에서 JSON 부분 추출
-    const jsonMatch = content.match(/\{[\s\S]*\}/);
+    // JSON 파싱: 제어 문자 제거 후 JSON 부분 추출
+    // 제어 문자(개행, 탭 등)를 일반 공백으로 변환하여 JSON 파싱 오류 방지
+    const cleanedContent = content.replace(/[\x00-\x1F\x7F]/g, ' ');
+
+    const jsonMatch = cleanedContent.match(/\{[\s\S]*\}/);
     if (jsonMatch) {
-      return JSON.parse(jsonMatch[0]);
+      try {
+        return JSON.parse(jsonMatch[0]);
+      } catch (e) {
+        console.error('JSON 파싱 실패, 정제된 내용:', jsonMatch[0].substring(0, 200));
+        // 파싱 실패 시 마크다운 코드 블록 제거 시도
+        const withoutCodeBlock = jsonMatch[0].replace(/```json\n?|\n?```/g, '').trim();
+        return JSON.parse(withoutCodeBlock);
+      }
     }
-    return JSON.parse(content);
+
+    // 코드 블록 안에 JSON이 있는 경우 처리
+    const codeBlockMatch = cleanedContent.match(/```json\s*([\s\S]*?)\s*```/);
+    if (codeBlockMatch) {
+      try {
+        return JSON.parse(codeBlockMatch[1]);
+      } catch (e) {
+        console.error('코드블록 JSON 파싱 실패');
+      }
+    }
+
+    return JSON.parse(cleanedContent);
   } catch (error) {
-    console.error('코딩 플랜 API 오류:', error);
+    console.error('[ERROR] 코딩 플랜 API 오류:', {
+      message: error instanceof Error ? error.message : 'Unknown error',
+      name: error instanceof Error ? error.name : 'Unknown',
+      stack: error instanceof Error ? error.stack : undefined,
+      // API 키 설정 확인
+      hasZaiKey: !!process.env.ZAI_API_KEY,
+      hasOpenAIKey: !!process.env.OPENAI_API_KEY,
+      baseURL: process.env.ZAI_BASE_URL
+    });
+
+    // 개발 환경에서는 상세 에러 반환, 프로덕션에서는 목업
+    if (process.env.NODE_ENV === 'development') {
+      throw error; // 개발 중에는 실제 에러 전파
+    }
+
     return getMockSummary();
   }
 }
@@ -112,18 +155,36 @@ function getMockSummary(): MeetingSummary {
 }
 
 export async function POST(request: NextRequest) {
+  const startTime = Date.now();
+
   try {
     const { text, context } = await request.json();
 
+    console.log('[API] /api/summarize 호출됨', {
+      textLength: text?.length || 0,
+      hasContext: !!context,
+      contextLength: context?.length || 0,
+    });
+
     if (!text) {
+      console.warn('[API] 텍스트 없음');
       return NextResponse.json({ error: '텍스트가 필요합니다.' }, { status: 400 });
     }
 
     const summary = await summarizeWithGPT(text, context);
 
+    const duration = Date.now() - startTime;
+    console.log(`[API] 요약 완료 - ${duration}ms`);
+
     return NextResponse.json({ summary });
   } catch (error) {
-    console.error('Summarize API 오류:', error);
+    const duration = Date.now() - startTime;
+    console.error('[API] Summarize API 오류:', {
+      error: error instanceof Error ? error.message : 'Unknown',
+      duration,
+      stack: error instanceof Error ? error.stack : undefined
+    });
+
     return NextResponse.json(
       { error: '요약 생성에 실패했습니다.' },
       { status: 500 }

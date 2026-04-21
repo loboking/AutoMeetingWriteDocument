@@ -25,6 +25,10 @@ export function SummaryViewer() {
 
     setIsRegenerating(true);
     try {
+      console.log('[Frontend] 요약 재생성 요청', {
+        textLength: currentMeeting.transcript.length,
+      });
+
       const response = await fetch('/api/summarize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -34,7 +38,16 @@ export function SummaryViewer() {
         }),
       });
 
-      if (!response.ok) throw new Error('요약 재생성 실패');
+      console.log('[Frontend] 요약 재생성 응답', {
+        status: response.status,
+        ok: response.ok,
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('[Frontend] 재생성 API 에러:', errorText);
+        throw new Error('요약 재생성 실패');
+      }
 
       const { summary: newSummary } = await response.json();
       updateCurrentMeeting({ summary: newSummary });
