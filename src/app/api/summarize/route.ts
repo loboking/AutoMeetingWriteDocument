@@ -16,6 +16,7 @@ function createOpenAIClient() {
   return new OpenAI({
     apiKey: API_KEY,
     baseURL: API_BASE,
+    timeout: 60000, // 60초 타임아웃 (Vercel 함수 제한: 60초)
   });
 }
 
@@ -70,6 +71,7 @@ ${context ? `## 추가 맥락\n${context}` : ''}
       model: 'glm-5',
       messages: [{ role: 'user', content: prompt }],
       max_tokens: 8192,
+      timeout: 45000, // 45초 타임아웃 (함수 제한 내에서 여유 있게)
     });
 
     console.log('[API] Z.ai API 응답 수신:', {
