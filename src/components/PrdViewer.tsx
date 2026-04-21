@@ -959,7 +959,7 @@ export function PrdViewer() {
                           <Button onClick={handlePrint} variant="outline" size="sm" title="인쇄">
                             <Printer className="w-4 h-4" />
                           </Button>
-                          {!docIsEditing && docViewMode === 'raw' && (
+                          {!docIsEditing && (
                             <Button onClick={() => setIsEditing(true)} variant="outline" size="sm" title="편집">
                               <Edit className="w-4 h-4" />
                             </Button>

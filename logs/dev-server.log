@@ -1,0 +1,28 @@
+
+> meeting-auto-docs@0.1.0 dev
+> TURBOPACK=0 next dev -p 12001
+
+▲ Next.js 16.2.2 (Turbopack)
+- Local:         http://localhost:12001
+- Network:       http://192.168.0.103:12001
+- Environments: .env.local
+✓ Ready in 516ms
+⚠ Warning: Next.js inferred your workspace root, but it may not be correct.
+ We detected multiple lockfiles and selected the directory of /Users/ws/package-lock.json as the root directory.
+ To silence this warning, set `turbopack.root` in your Next.js config, or consider removing one of the lockfiles if it's not needed.
+   See https://nextjs.org/docs/app/api-reference/config/next-config-js/turbopack#root-directory for more information.
+ Detected additional lockfiles: 
+   * /Users/ws/meeting-auto-docs/package-lock.json
+
+
+(node:97599) Warning: `--localstorage-file` was provided without a valid path
+(Use `node --trace-warnings ...` to show where the warning was created)
+ GET / 200 in 524ms (next.js: 157ms, application-code: 367ms)
+ GET / 200 in 38ms (next.js: 8ms, application-code: 30ms)
+ GET / 200 in 68ms (next.js: 27ms, application-code: 41ms)
+ GET / 200 in 80ms (next.js: 34ms, application-code: 45ms)
+ GET / 200 in 70ms (next.js: 19ms, application-code: 51ms)
+ GET / 200 in 37ms (next.js: 7ms, application-code: 30ms)
+ GET / 200 in 15ms (next.js: 1537µs, application-code: 13ms)
+ GET / 200 in 34ms (next.js: 10ms, application-code: 24ms)
+[?25h
