@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { FileText, Download, Copy, Check, Loader2, Plus, Edit, Save, Eye, File, Code, BookOpen, Presentation, Printer, ChevronLeft, ChevronRight, Terminal } from 'lucide-react';
+import { FileText, Download, Copy, Check, Loader2, Plus, Edit, Save, Eye, File, Code, BookOpen, Presentation, Printer, ChevronLeft, ChevronRight, Terminal, CheckCircle2, Circle, ToggleLeft, ToggleRight } from 'lucide-react';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { saveAs } from 'file-saver';
 import * as XLSX from 'xlsx';
@@ -37,7 +37,7 @@ import { CommandPanel } from '@/components/CommandPanel';
 
 export function PrdViewer() {
   const currentMeeting = useMeetingStore(s => s.currentMeeting);
-  const { updateCurrentMeeting } = useMeetingStore();
+  const { updateCurrentMeeting, toggleCompleteDoc, isDocCompleted, getNextIncompleteDoc, setAutoAdvance } = useMeetingStore();
   const [activeDoc, setActiveDoc] = useState<DocType>('prd');
 
   // currentMeeting에서 문서들을 초기화
@@ -76,6 +76,12 @@ export function PrdViewer() {
   const [viewMode, setViewMode] = useState<'raw' | 'preview' | 'visual' | 'terminal'>('visual'); // 기본을 시각화로 변경
   const [terminalCommands, setTerminalCommands] = useState<string[]>([]);
   const treeRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+
+  // 학습 완료 관련 상태
+  const [autoAdvance, setAutoAdvanceState] = useState(false);
+  const [sequentialMode, setSequentialMode] = useState(false); // 순차적 진행 모드
+  const [scrollAtBottom, setScrollAtBottom] = useState(false);
 
   // 페이지 이탈 방지 훅 사용 (문서 생성 중 또는 편집 중)
   useBeforeUnload(
@@ -123,7 +129,58 @@ export function PrdViewer() {
         }
       });
     }
+    // 문서가 변경되면 스크롤 상태 리셋
+    setScrollAtBottom(false);
   }, [currentMeeting, activeDoc]);
+
+  // autoAdvance 상태 동기화
+  useEffect(() => {
+    if (currentMeeting?.autoAdvance !== undefined) {
+      setAutoAdvanceState(currentMeeting.autoAdvance);
+    }
+  }, [currentMeeting?.autoAdvance]);
+
+  // 현재 문서 컨텐츠
+  const currentContent = documents[activeDoc] || '';
+  const hasContent = !!currentContent;
+  const doc = DOCUMENTS.find(d => d.key === activeDoc);
+  const flatIndex = DOCUMENTS.findIndex(d => d.key === activeDoc);
+
+  // 스크롤 끝 도달 감지
+  useEffect(() => {
+    const contentElement = contentRef.current;
+    if (!contentElement) return;
+
+    const handleScroll = () => {
+      const { scrollTop, scrollHeight, clientHeight } = contentElement;
+      const isAtBottom = scrollHeight - scrollTop - clientHeight < 50;
+
+      if (isAtBottom && !scrollAtBottom) {
+        setScrollAtBottom(true);
+
+        // 문서 완료 처리 (이미 완료되지 않은 경우만)
+        const content = documents[activeDoc] || '';
+        if (!isDocCompleted(activeDoc) && content) {
+          toggleCompleteDoc(activeDoc);
+
+          // 자동 넘김이 활성화된 경우 다음 문서로 이동
+          if (autoAdvance) {
+            setTimeout(() => {
+              const nextDoc = getNextIncompleteDoc();
+              if (nextDoc) {
+                setActiveDoc(nextDoc);
+              }
+            }, 500);
+          }
+        }
+      } else if (!isAtBottom && scrollAtBottom) {
+        setScrollAtBottom(false);
+      }
+    };
+
+    contentElement.addEventListener('scroll', handleScroll);
+    return () => contentElement.removeEventListener('scroll', handleScroll);
+  }, [activeDoc, documents, scrollAtBottom, autoAdvance, isDocCompleted, toggleCompleteDoc, getNextIncompleteDoc]);
 
 
   const handleGenerateDoc = async (docType: DocType) => {
@@ -298,11 +355,6 @@ export function PrdViewer() {
     setIsEditing(false);
   };
 
-  const currentContent = documents[activeDoc] || '';
-  const hasContent = !!currentContent;
-  const doc = DOCUMENTS.find(d => d.key === activeDoc);
-  const flatIndex = DOCUMENTS.findIndex(d => d.key === activeDoc);
-
   // 문서 네비게이션
   const handlePreviousDoc = () => {
     if (flatIndex > 0) {
@@ -312,7 +364,15 @@ export function PrdViewer() {
 
   const handleNextDoc = () => {
     if (flatIndex < DOCUMENTS.length - 1) {
-      setActiveDoc(DOCUMENTS[flatIndex + 1].key);
+      const nextDoc = DOCUMENTS[flatIndex + 1];
+
+      // 순차적 진행 모드 체크
+      if (sequentialMode && !isDocCompleted(activeDoc)) {
+        alert(`먼저 "${DOCUMENTS[flatIndex]?.title}" 문서를 완료해주세요.\n\n(문서 끝까지 스크롤하면 완료됩니다)`);
+        return;
+      }
+
+      setActiveDoc(nextDoc.key);
     }
   };
 
@@ -756,13 +816,34 @@ export function PrdViewer() {
           <h2 className="text-base font-bold text-slate-900 dark:text-white">문서 목록</h2>
         </div>
         {/* 문서 목록 영역 - 스크롤 가능 */}
-        <div ref={treeRef} className="flex-1 overflow-y-auto max-h-[60vh]">
-          <Tabs value={activeDoc} onValueChange={(v) => setActiveDoc(v as DocType)}>
+        <div ref={treeRef} className="flex-1 overflow-y-auto min-h-[300px] lg:min-h-[400px]">
+          <Tabs value={activeDoc} onValueChange={(v) => {
+            const newDoc = v as DocType;
+            const docIndex = DOCUMENTS.findIndex(d => d.key === newDoc);
+
+            // 순차적 진행 모드 체크
+            if (sequentialMode && docIndex > 0) {
+              const prevDoc = DOCUMENTS[docIndex - 1];
+              if (!isDocCompleted(prevDoc.key)) {
+                alert(`먼저 "${prevDoc.title}" 문서를 완료해주세요.\n\n(문서 끝까지 스크롤하면 완료됩니다)`);
+                return;
+              }
+            }
+
+            setActiveDoc(newDoc);
+          }}>
             <TabsList className="bg-transparent border-none p-0 h-auto flex flex-col items-start gap-0.5 rounded-none w-full">
               {DOCUMENTS.map((doc) => {
                 const hasDoc = !!documents[doc.key];
                 const { canGenerate } = canGenerateDoc(doc.key, documents);
                 const isDisabled = !hasDoc && !canGenerate;
+                const isCompleted = isDocCompleted(doc.key);
+
+                // 순차적 진행 모드에서 이전 문서 완료 체크
+                const docIndex = DOCUMENTS.findIndex(d => d.key === doc.key);
+                const prevDoc = docIndex > 0 ? DOCUMENTS[docIndex - 1] : null;
+                const isPrevCompleted = !prevDoc || isDocCompleted(prevDoc.key);
+                const isSequentiallyDisabled = sequentialMode && hasDoc && !isCompleted && !isPrevCompleted;
 
                 return (
                   <TabsTrigger
@@ -776,24 +857,44 @@ export function PrdViewer() {
                              transition-all duration-150 ease-in-out
                              border border-transparent
                              data-[state=active]:border-slate-200 dark:data-[state=active]:border-slate-700
-                             relative group"
-                    disabled={isDisabled}
+                             relative group
+                             disabled:opacity-50 disabled:cursor-not-allowed"
+                    disabled={isDisabled || isSequentiallyDisabled}
+                    onClick={() => {
+                      // 순차적 진행 모드에서 이전 문서 완료 경고
+                      if (sequentialMode && hasDoc && !isCompleted && !isPrevCompleted) {
+                        alert(`먼저 "${prevDoc?.title}" 문서를 완료해주세요.\n\n(문서 끝까지 스크롤하면 완료됩니다)`);
+                      }
+                    }}
                   >
-                    {/* 아이콘과 제목 */}
-                    <span className="text-base flex-shrink-0 opacity-80 group-hover:opacity-100 transition-opacity">
-                      {doc.icon}
+                    {/* 완료 상태 아이콘 */}
+                    <span className="text-base flex-shrink-0">
+                      {isCompleted ? (
+                        <CheckCircle2 className="w-4 h-4 text-green-500" />
+                      ) : (
+                        <span className="opacity-80 group-hover:opacity-100 transition-opacity">
+                          {doc.icon}
+                        </span>
+                      )}
                     </span>
-                    <span className="truncate flex-1 text-left text-slate-900 dark:text-slate-100">
+                    <span className={`truncate flex-1 text-left ${
+                      isCompleted
+                        ? 'text-green-700 dark:text-green-400 line-through opacity-70'
+                        : 'text-slate-900 dark:text-slate-100'
+                    }`}>
                       {doc.title}
                     </span>
 
                     {/* 상태 표시 */}
                     <span className="ml-auto flex-shrink-0 flex items-center gap-2">
-                      {hasDoc && (
+                      {hasDoc && !isCompleted && (
                         <span className="relative flex h-2.5 w-2.5">
-                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-                          <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-green-500"></span>
+                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
+                          <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-blue-500"></span>
                         </span>
+                      )}
+                      {isCompleted && (
+                        <span className="text-green-500 text-xs">완료</span>
                       )}
                       {!hasDoc && !canGenerate && (
                         <span className="w-2.5 h-2.5 rounded-full bg-slate-300 dark:bg-slate-600" />
@@ -848,7 +949,7 @@ export function PrdViewer() {
               </span>
               <Button
                 onClick={handleNextDoc}
-                disabled={flatIndex === DOCUMENTS.length - 1}
+                disabled={flatIndex === DOCUMENTS.length - 1 || (sequentialMode && isDocCompleted(activeDoc) === false && !!currentContent)}
                 variant="outline"
                 size="sm"
                 className="h-8"
@@ -858,7 +959,42 @@ export function PrdViewer() {
               </Button>
             </div>
 
-            {/* 오른쪽: 전체 생성 버튼 */}
+            {/* 오른쪽: 학습 설정 */}
+            <div className="flex items-center gap-3 border-l border-slate-200 dark:border-slate-700 pl-4">
+              {/* 순차적 진행 모드 토글 */}
+              <button
+                onClick={() => setSequentialMode(!sequentialMode)}
+                className={`flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium transition-colors ${
+                  sequentialMode
+                    ? 'bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300'
+                    : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700'
+                }`}
+                title="순차적 진행: 이전 문서를 완료해야 다음 문서로 이동 가능"
+              >
+                <span className="text-xs">🔒</span>
+                순차적 진행
+              </button>
+
+              {/* 자동 넘김 토글 */}
+              <button
+                onClick={() => {
+                  const newValue = !autoAdvance;
+                  setAutoAdvanceState(newValue);
+                  setAutoAdvance(newValue);
+                }}
+                className={`flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium transition-colors ${
+                  autoAdvance
+                    ? 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300'
+                    : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700'
+                }`}
+                title="자동 넘김: 문서를 다 읽으면 다음 문서로 자동 이동"
+              >
+                {autoAdvance ? <ToggleRight className="w-3.5 h-3.5" /> : <ToggleLeft className="w-3.5 h-3.5" />}
+                자동 넘김
+              </button>
+            </div>
+
+            {/* 전체 생성 버튼 */}
             <Button
               onClick={handleGenerateAll}
               disabled={isGenerating || !currentMeeting?.summary}
@@ -913,7 +1049,7 @@ export function PrdViewer() {
         </div>
 
         {/* 문서 컨텐츠 영역 */}
-        <div className="p-6">
+        <div className="p-6" ref={contentRef}>
         <div className="min-w-0">
           {DOCUMENTS.map((doc) => {
             const docContent = documents[doc.key] || '';
@@ -926,6 +1062,34 @@ export function PrdViewer() {
 
             return (
               <div key={doc.key} className="space-y-4">
+                {/* 문서 완료 상태 표시 */}
+                {docHasContent && (
+                  <div className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium ${
+                    isDocCompleted(doc.key)
+                      ? 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300'
+                      : scrollAtBottom
+                        ? 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300 animate-pulse'
+                        : 'bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300'
+                  }`}>
+                    {isDocCompleted(doc.key) ? (
+                      <>
+                        <CheckCircle2 className="w-4 h-4" />
+                        이 문서를 완료했습니다
+                      </>
+                    ) : scrollAtBottom ? (
+                      <>
+                        <CheckCircle2 className="w-4 h-4" />
+                        문서 완료! {autoAdvance ? '다음 문서로 자동 이동합니다...' : '다음 문서로 이동하세요'}
+                      </>
+                    ) : (
+                      <>
+                        <Circle className="w-4 h-4" />
+                        문서 끝까지 스크롤하여 완료하세요
+                      </>
+                    )}
+                  </div>
+                )}
+
                 {/* 문서 헤더 */}
                 <Card>
                 <CardHeader>
@@ -934,6 +1098,9 @@ export function PrdViewer() {
                       <CardTitle className="flex items-center gap-2">
                         <span className="text-2xl flex-shrink-0">{doc.icon}</span>
                         <span className="truncate">{doc.title}</span>
+                        {isDocCompleted(doc.key) && (
+                          <CheckCircle2 className="w-6 h-6 text-green-500" />
+                        )}
                       </CardTitle>
                       <p className="text-sm text-slate-500 mt-1">{doc.description}</p>
                     </div>
@@ -1067,7 +1234,7 @@ export function PrdViewer() {
                   </div>
                   <Button
                     onClick={handleNextDoc}
-                    disabled={flatIndex === DOCUMENTS.length - 1}
+                    disabled={flatIndex === DOCUMENTS.length - 1 || (sequentialMode && isDocCompleted(activeDoc) === false && !!currentContent)}
                     variant="ghost"
                     size="sm"
                     className="gap-1 h-8 rounded-full"
