@@ -6,12 +6,24 @@ export const runtime = 'nodejs';
 
 // OpenAI 클라이언트 초기화 함수 (빌드 시 실행 방지)
 function createOpenAIClient() {
-  const API_BASE = process.env.ZAI_BASE_URL || 'https://api.openai.com/v1';
-  const API_KEY = process.env.ZAI_API_KEY || process.env.OPENAI_API_KEY;
+  // OpenAI를 명확히 우선 (OPENAI_API_KEY가 있으면 무조건 OpenAI 사용)
+  const hasOpenAI = !!process.env.OPENAI_API_KEY;
+  const hasZai = !!process.env.ZAI_API_KEY;
+
+  const useZai = !hasOpenAI && hasZai;  // OpenAI가 없을 때만 Z.ai 사용
+  const API_KEY = hasOpenAI ? process.env.OPENAI_API_KEY! : process.env.ZAI_API_KEY!;
+  const API_BASE = useZai ? (process.env.ZAI_BASE_URL || 'https://api.z.ai/api/coding/paas/v4') : 'https://api.openai.com/v1';
 
   if (!API_KEY) {
     throw new Error('API_KEY가 필요합니다. ZAI_API_KEY 또는 OPENAI_API_KEY 환경변수를 설정하세요.');
   }
+
+  console.log('[API] OpenAI 클라이언트 초기화', {
+    hasOpenAI,
+    hasZai,
+    useZai,
+    API_BASE,
+  });
 
   return new OpenAI({
     apiKey: API_KEY,
@@ -20,13 +32,35 @@ function createOpenAIClient() {
   });
 }
 
+// 최대 입력 길이 (토큰 제한 고려, 한국어 1글자 ≈ 0.4 토큰)
+const MAX_INPUT_LENGTH = 15000; // 약 6000 토큰
+
+// 텍스트 자르기 (길이 제한)
+function truncateText(text: string, maxLength: number): string {
+  if (text.length <= maxLength) return text;
+  return text.substring(0, maxLength) + '... [요약을 위해 텍스트가 잘렸습니다]';
+}
+
 // 코딩 플랜 GLM API를 통한 요약 생성
 async function summarizeWithGPT(text: string, context?: string): Promise<MeetingSummary> {
+  // OpenAI 우선 명확히 (함수 시작 시점에 한 번만 결정)
+  const hasOpenAI = !!process.env.OPENAI_API_KEY;
+  const useZai = !hasOpenAI && !!process.env.ZAI_API_KEY;
+  const MODEL = useZai ? (process.env.ZAI_MODEL || 'glm-5.1') : 'gpt-4o';
+
+  console.log('[API] 요약 모델 선택', { hasOpenAI, useZai, MODEL });
+
+  // 입력 길이 확인 및 제한
+  const truncatedText = truncateText(text, MAX_INPUT_LENGTH);
+  if (text.length > MAX_INPUT_LENGTH) {
+    console.warn(`[API] 텍스트가 너무 길어서 자름: ${text.length} → ${MAX_INPUT_LENGTH}`);
+  }
+
   const prompt = `당신은 회의록 전문가입니다. 다음 회의 내용을 **상세하게 분석**하여 구조화된 요약을 제공해주세요.
 
 ## 회의 녹취록 (전체)
 \`\`\`
-${text}
+${truncatedText}
 \`\`\`
 
 ${context ? `## 추가 맥락\n${context}` : ''}
@@ -65,12 +99,13 @@ ${context ? `## 추가 맥락\n${context}` : ''}
 
   try {
     const openai = createOpenAIClient();
-    console.log('[API] Z.ai API 호출 시작 - Model: glm-5');
+    console.log('[API] API 호출 시작 - Model:', MODEL);
 
     const response = await openai.chat.completions.create({
-      model: 'glm-5',
+      model: MODEL,
       messages: [{ role: 'user', content: prompt }],
       max_tokens: 8192,
+    }, {
       timeout: 45000, // 45초 타임아웃 (함수 제한 내에서 여유 있게)
     });
 
@@ -83,6 +118,9 @@ ${context ? `## 추가 맥락\n${context}` : ''}
     // 코딩 플랜 추론 모델은 content 또는 reasoning_content를 확인
     const message = response.choices[0]?.message;
     const content = message?.content || (message as { reasoning_content?: string })?.reasoning_content || '{}';
+
+    // 실제 응답 내용 로그 출력 (디버깅용)
+    console.log('[API] 응답 content 미리보기:', content.substring(0, 200));
 
     // JSON 파싱: 제어 문자 제거 후 JSON 부분 추출
     // 제어 문자(개행, 탭 등)를 일반 공백으로 변환하여 JSON 파싱 오류 방지
@@ -122,11 +160,7 @@ ${context ? `## 추가 맥락\n${context}` : ''}
       baseURL: process.env.ZAI_BASE_URL
     });
 
-    // 개발 환경에서는 상세 에러 반환, 프로덕션에서는 목업
-    if (process.env.NODE_ENV === 'development') {
-      throw error; // 개발 중에는 실제 에러 전파
-    }
-
+    // API 실패 시 목업 반환 (안정성 확보)
     return getMockSummary();
   }
 }
@@ -177,8 +211,19 @@ export async function POST(request: NextRequest) {
 
     const duration = Date.now() - startTime;
     console.log(`[API] 요약 완료 - ${duration}ms`);
+    console.log('[API] 최종 응답 overview:', summary?.overview?.substring(0, 100));
 
-    return NextResponse.json({ summary });
+    // 캐시 방지 헤더 추가
+    return NextResponse.json(
+      { summary },
+      {
+        headers: {
+          'Cache-Control': 'no-store, no-cache, must-revalidate',
+          'Pragma': 'no-cache',
+          'Expires': '0',
+        },
+      }
+    );
   } catch (error) {
     const duration = Date.now() - startTime;
     console.error('[API] Summarize API 오류:', {

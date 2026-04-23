@@ -18,9 +18,36 @@ import OpenAI from 'openai';
 
 export const runtime = 'nodejs';
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY || process.env.ZAI_API_KEY,
-});
+// Z.ai GLM 모델 설정 (코딩 플랜 구독 권장)
+const ZAI_MODEL = process.env.ZAI_MODEL || 'glm-4-plus';
+
+// OpenAI 클라이언트 초기화 함수 (빌드 시 실행 방지)
+function createOpenAIClient() {
+  // OpenAI를 명확히 우선 (OPENAI_API_KEY가 있으면 무조건 OpenAI 사용)
+  const hasOpenAI = !!process.env.OPENAI_API_KEY;
+  const hasZai = !!process.env.ZAI_API_KEY;
+
+  const useZai = !hasOpenAI && hasZai;
+  const API_KEY = hasOpenAI ? process.env.OPENAI_API_KEY! : process.env.ZAI_API_KEY!;
+  const API_BASE = useZai ? (process.env.ZAI_BASE_URL || 'https://open.bigmodel.cn/api/coding/paas/v4') : 'https://api.openai.com/v1';
+
+  if (!API_KEY) {
+    throw new Error('API_KEY가 필요합니다. ZAI_API_KEY 또는 OPENAI_API_KEY 환경변수를 설정하세요.');
+  }
+
+  console.log('[generate-doc] OpenAI 클라이언트 초기화', {
+    hasOpenAI,
+    hasZai,
+    useZai,
+    API_BASE,
+  });
+
+  return new OpenAI({
+    apiKey: API_KEY,
+    baseURL: API_BASE,
+    timeout: 120000, // 2분 타임아웃 (문서 생성은 더 오래 걸림)
+  });
+}
 
 // 문서 의존 관계 (1뎁스 → 2뎁스 → 3뎁스...)
 type DocType =
@@ -111,9 +138,15 @@ async function generateDocument(
 ): Promise<string> {
   const prompt = getPromptForDocType(docType, summary, transcript, meetingInfo);
 
+  // OpenAI 우선 명확히
+  const hasOpenAI = !!process.env.OPENAI_API_KEY;
+  const useZai = !hasOpenAI && !!process.env.ZAI_API_KEY;
+  const MODEL = useZai ? ZAI_MODEL : 'gpt-4o';
+
   try {
+    const openai = createOpenAIClient();
     const response = await openai.chat.completions.create({
-      model: 'gpt-4o',
+      model: MODEL,
       messages: [{ role: 'user', content: prompt }],
       max_tokens: 16384,
     });
@@ -210,9 +243,15 @@ async function generateDocumentWithContext(
 ): Promise<string> {
   const prompt = getPromptForDocType(docType, summary, transcript, meetingInfo);
 
+  // OpenAI 우선 명확히
+  const hasOpenAI = !!process.env.OPENAI_API_KEY;
+  const useZai = !hasOpenAI && !!process.env.ZAI_API_KEY;
+  const MODEL = useZai ? ZAI_MODEL : 'gpt-4o';
+
   try {
+    const openai = createOpenAIClient();
     const response = await openai.chat.completions.create({
-      model: 'gpt-4o',
+      model: MODEL,
       messages: [{ role: 'user', content: prompt }],
       max_tokens: 16384,
     });
