@@ -136,7 +136,10 @@ async function generateDocument(
   transcript: string,
   meetingInfo: { title: string; date: string }
 ): Promise<string> {
-  const prompt = getPromptForDocType(docType, summary, transcript, meetingInfo);
+  // transcript 길이 제한
+  const truncatedTranscript = truncateTranscript(transcript);
+
+  const prompt = getPromptForDocType(docType, summary, truncatedTranscript, meetingInfo, {});
 
   // OpenAI 우선 명확히
   const hasOpenAI = !!process.env.OPENAI_API_KEY;
@@ -148,7 +151,7 @@ async function generateDocument(
     const response = await openai.chat.completions.create({
       model: MODEL,
       messages: [{ role: 'user', content: prompt }],
-      max_tokens: 16384,
+      max_tokens: 32768, // 32k로 증가
     });
 
     return response.choices[0]?.message?.content || '';
@@ -233,6 +236,13 @@ function getContextDocs(dependsOn: DocType[], docs: GeneratedDocs): Record<strin
   return context;
 }
 
+// 텍스트 자르기 (길이 제한)
+const MAX_TRANSCRIPT_LENGTH = 8000; // 약 3200 토큰
+function truncateTranscript(text: string): string {
+  if (text.length <= MAX_TRANSCRIPT_LENGTH) return text;
+  return text.substring(0, MAX_TRANSCRIPT_LENGTH) + '\n\n[참고: 녹취록이 너무 길어서 잘렸습니다. 전체 내용은 회의 요약을 참고해주세요.]';
+}
+
 // 컨텍스트(이전 문서)를 참조하여 문서 생성
 async function generateDocumentWithContext(
   docType: DocType,
@@ -241,19 +251,30 @@ async function generateDocumentWithContext(
   meetingInfo: { title: string; date: string },
   contextDocs: Record<string, string>
 ): Promise<string> {
-  const prompt = getPromptForDocType(docType, summary, transcript, meetingInfo);
+  // transcript 길이 제한
+  const truncatedTranscript = truncateTranscript(transcript);
+
+  const prompt = getPromptForDocType(docType, summary, truncatedTranscript, meetingInfo, contextDocs);
 
   // OpenAI 우선 명확히
   const hasOpenAI = !!process.env.OPENAI_API_KEY;
   const useZai = !hasOpenAI && !!process.env.ZAI_API_KEY;
   const MODEL = useZai ? ZAI_MODEL : 'gpt-4o';
 
+  console.log('[generate-doc] 문서 생성', {
+    docType,
+    hasContextDocs: Object.keys(contextDocs).length > 0,
+    contextKeys: Object.keys(contextDocs),
+    transcriptLength: transcript.length,
+    truncatedLength: truncatedTranscript.length,
+  });
+
   try {
     const openai = createOpenAIClient();
     const response = await openai.chat.completions.create({
       model: MODEL,
       messages: [{ role: 'user', content: prompt }],
-      max_tokens: 16384,
+      max_tokens: 32768, // 32k로 증가
     });
 
     return response.choices[0]?.message?.content || '';
@@ -267,8 +288,23 @@ function getPromptForDocType(
   docType: DocType,
   summary: MeetingSummary,
   transcript: string,
-  meetingInfo: { title: string; date: string }
+  meetingInfo: { title: string; date: string },
+  contextDocs: Record<string, string> = {}
 ): string {
+  // contextDocs 내용을 baseInfo에 추가
+  let contextSection = '';
+  if (Object.keys(contextDocs).length > 0) {
+    contextSection = '\n## 이전에 생성된 문서 (참고용)\n\n';
+    for (const [key, content] of Object.entries(contextDocs)) {
+      const title = DOCUMENT_TITLES[key as DocType] || key;
+      // 너무 길면 앞부분만 사용 (최대 2000자)
+      const truncatedContent = content.length > 2000
+        ? content.substring(0, 2000) + '\n\n... (내용 생략) ...'
+        : content;
+      contextSection += `### ${title}\n\n${truncatedContent}\n\n---\n\n`;
+    }
+  }
+
   const baseInfo = `
 ## 회의 정보
 - 제목: ${meetingInfo.title}
@@ -278,7 +314,7 @@ function getPromptForDocType(
 - 개요: ${summary.overview}
 - 핵심 사항: ${summary.keyPoints.join(', ')}
 - 의사결정: ${summary.decisions.join(', ')}
-`;
+${contextSection}`;
 
   if (docType === 'prd') {
     return getPRDPrompt(baseInfo, transcript, meetingInfo);
