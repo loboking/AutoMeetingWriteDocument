@@ -13,6 +13,7 @@ import { getFlowchartPrompt } from '@/lib/flowchartTemplate';
 import { getStoryboardPrompt } from '@/lib/storyboardTemplate';
 import { getWBSPrompt } from '@/lib/wbsTemplate';
 import { getTestPlanPrompt } from '@/lib/testPlanTemplate';
+import { reviewDocument } from '@/lib/docReviewer';
 import type { MeetingSummary } from '@/types';
 import OpenAI from 'openai';
 
@@ -151,7 +152,7 @@ async function generateDocument(
     const response = await openai.chat.completions.create({
       model: MODEL,
       messages: [{ role: 'user', content: prompt }],
-      max_tokens: 32768, // 32k로 증가
+      max_tokens: 16384, // 최대 출력 토큰 (GPT-4o: 16k, GLM-4: 8k)
     });
 
     return response.choices[0]?.message?.content || '';
@@ -237,7 +238,7 @@ function getContextDocs(dependsOn: DocType[], docs: GeneratedDocs): Record<strin
 }
 
 // 텍스트 자르기 (길이 제한)
-const MAX_TRANSCRIPT_LENGTH = 8000; // 약 3200 토큰
+const MAX_TRANSCRIPT_LENGTH = 20000; // 약 8000 토큰 (상세한 문서 생성 위해 증가)
 function truncateTranscript(text: string): string {
   if (text.length <= MAX_TRANSCRIPT_LENGTH) return text;
   return text.substring(0, MAX_TRANSCRIPT_LENGTH) + '\n\n[참고: 녹취록이 너무 길어서 잘렸습니다. 전체 내용은 회의 요약을 참고해주세요.]';
@@ -274,7 +275,7 @@ async function generateDocumentWithContext(
     const response = await openai.chat.completions.create({
       model: MODEL,
       messages: [{ role: 'user', content: prompt }],
-      max_tokens: 32768, // 32k로 증가
+      max_tokens: 16384, // 최대 출력 토큰 (GPT-4o: 16k, GLM-4: 8k)
     });
 
     return response.choices[0]?.message?.content || '';
@@ -297,9 +298,9 @@ function getPromptForDocType(
     contextSection = '\n## 이전에 생성된 문서 (참고용)\n\n';
     for (const [key, content] of Object.entries(contextDocs)) {
       const title = DOCUMENT_TITLES[key as DocType] || key;
-      // 너무 길면 앞부분만 사용 (최대 2000자)
-      const truncatedContent = content.length > 2000
-        ? content.substring(0, 2000) + '\n\n... (내용 생략) ...'
+      // 너무 길면 앞부분만 사용 (최대 6000자로 증가)
+      const truncatedContent = content.length > 6000
+        ? content.substring(0, 6000) + '\n\n... (내용 생략) ...'
         : content;
       contextSection += `### ${title}\n\n${truncatedContent}\n\n---\n\n`;
     }
@@ -815,7 +816,7 @@ flowchart TD
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { docType, summary, transcript, meetingInfo, mode } = body;
+    const { docType, summary, transcript, meetingInfo, mode, review = true } = body;
 
     if (!summary || !meetingInfo) {
       return NextResponse.json(
@@ -832,13 +833,22 @@ export async function POST(request: NextRequest) {
         meetingInfo
       );
 
+      // 검토 수행
+      const reviews: Record<string, any> = {};
+      if (review) {
+        for (const [key, content] of Object.entries(result.docs)) {
+          reviews[key] = reviewDocument(key as any, content);
+        }
+      }
+
       return NextResponse.json({
         docs: result.docs,
         progress: result.progress,
+        reviews,
       });
     }
 
-    // 단일 문서 생성 모드 (기존)
+    // 단일 문서 생성 모드
     if (!docType) {
       return NextResponse.json(
         { error: 'docType이 필요합니다 (단일 생성 모드).' },
@@ -848,7 +858,13 @@ export async function POST(request: NextRequest) {
 
     const content = await generateDocument(docType, summary, transcript || '', meetingInfo);
 
-    return NextResponse.json({ content, docType });
+    // 검토 수행
+    let docReview;
+    if (review) {
+      docReview = reviewDocument(docType, content);
+    }
+
+    return NextResponse.json({ content, docType, review: docReview });
   } catch (error) {
     console.error('Generate doc API 오류:', error);
     return NextResponse.json(

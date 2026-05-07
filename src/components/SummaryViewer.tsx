@@ -15,6 +15,7 @@ export function SummaryViewer() {
   const summary = currentMeeting?.summary;
   const [isGenerating, setIsGenerating] = useState(false);
   const [isRegenerating, setIsRegenerating] = useState(false);
+  const [regenerateProgress, setRegenerateProgress] = useState('');
 
   // 페이지 이탈 방지 훅 사용
   useBeforeUnload(isGenerating, '문서 생성 중입니다. 페이지를 나가시면 생성이 취소됩니다.');
@@ -24,10 +25,14 @@ export function SummaryViewer() {
     if (!currentMeeting?.transcript) return;
 
     setIsRegenerating(true);
+    setRegenerateProgress('API 요청 준비 중...');
+
     try {
       console.log('[Frontend] 요약 재생성 요청', {
         textLength: currentMeeting.transcript.length,
       });
+
+      setRegenerateProgress('AI 모델에 요청 전송 중...');
 
       const response = await fetch('/api/summarize', {
         method: 'POST',
@@ -43,6 +48,8 @@ export function SummaryViewer() {
         ok: response.ok,
       });
 
+      setRegenerateProgress('요약 결과 분석 중...');
+
       if (!response.ok) {
         const errorText = await response.text();
         console.error('[Frontend] 재생성 API 에러:', errorText);
@@ -50,10 +57,14 @@ export function SummaryViewer() {
       }
 
       const { summary: newSummary } = await response.json();
+
+      setRegenerateProgress('저장 중...');
       updateCurrentMeeting({ summary: newSummary });
+      setRegenerateProgress('');
     } catch (error) {
       console.error('Summary regenerate error:', error);
       alert('요약 재생성에 실패했습니다.');
+      setRegenerateProgress('');
     } finally {
       setIsRegenerating(false);
     }
@@ -117,17 +128,21 @@ export function SummaryViewer() {
   return (
     <div className="space-y-6">
       {/* 요약 재생성 버튼 */}
-      <div className="flex justify-end">
+      <div className="flex justify-between items-center">
+        {isRegenerating && (
+          <span className="text-sm text-slate-500">{regenerateProgress}</span>
+        )}
         <Button
           onClick={handleRegenerateSummary}
           disabled={isRegenerating}
           variant="outline"
           size="sm"
+          className="ml-auto"
         >
           {isRegenerating ? (
             <>
               <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-              재생성 중...
+              {regenerateProgress || '재생성 중...'}
             </>
           ) : (
             <>

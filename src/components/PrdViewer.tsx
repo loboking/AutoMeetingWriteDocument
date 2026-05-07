@@ -36,8 +36,7 @@ import { InAppTerminal } from '@/components/InAppTerminal';
 import { CommandPanel } from '@/components/CommandPanel';
 
 export function PrdViewer() {
-  const currentMeeting = useMeetingStore(s => s.currentMeeting);
-  const { updateCurrentMeeting, toggleCompleteDoc, isDocCompleted, getNextIncompleteDoc, setAutoAdvance } = useMeetingStore();
+  const { currentMeeting, updateCurrentMeeting, toggleCompleteDoc, isDocCompleted, getNextIncompleteDoc, setAutoAdvance } = useMeetingStore();
   const [activeDoc, setActiveDoc] = useState<DocType>('prd');
 
   // currentMeeting에서 문서들을 초기화

@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { Meeting, MeetingStep, MeetingSummary } from '@/types';
+import type { Meeting, MeetingStep, MeetingSummary, DocType } from '@/types';
+import { DOCUMENTS } from '@/lib/documentUtils';
 
 // UUID 생성 유틸 (브라우저 호환성)
 function generateId(): string {
@@ -29,6 +30,12 @@ interface MeetingStore {
   deleteMeeting: (id: string) => void;
   setCurrentMeeting: (meeting: Meeting | null) => void;
   getMeeting: (id: string) => Meeting | undefined;
+
+  // 학습 완료 관련 액션
+  toggleCompleteDoc: (docType: DocType) => void;
+  isDocCompleted: (docType: DocType) => boolean;
+  getNextIncompleteDoc: () => DocType | null;
+  setAutoAdvance: (enabled: boolean) => void;
 }
 
 export const useMeetingStore = create<MeetingStore>()(
@@ -130,6 +137,59 @@ export const useMeetingStore = create<MeetingStore>()(
 
       getMeeting: (id) => {
         return get().meetings.find((m) => m.id === id);
+      },
+
+      // 학습 완료 관련 액션
+      toggleCompleteDoc: (docType) => {
+        const current = get().currentMeeting;
+        if (!current) return;
+
+        const completedDocs = current.completedDocs || [];
+        const isCompleted = completedDocs.includes(docType);
+
+        let newCompletedDocs: DocType[];
+        if (isCompleted) {
+          // 완료 취소
+          newCompletedDocs = completedDocs.filter(d => d !== docType);
+        } else {
+          // 완료 추가
+          newCompletedDocs = [...completedDocs, docType];
+        }
+
+        get().updateCurrentMeeting({ completedDocs: newCompletedDocs });
+      },
+
+      isDocCompleted: (docType) => {
+        const current = get().currentMeeting;
+        if (!current) return false;
+        return (current.completedDocs || []).includes(docType);
+      },
+
+      getNextIncompleteDoc: () => {
+        const current = get().currentMeeting;
+        if (!current) return null;
+
+        const completedDocs = current.completedDocs || [];
+
+        for (const doc of DOCUMENTS) {
+          // 문서가 생성되어 있고 완료되지 않은 문서 반환
+          const docField = doc.key === 'feature-list' ? 'featureList' :
+                          doc.key === 'screen-list' ? 'screenList' :
+                          doc.key === 'user-story' ? 'userStory' :
+                          doc.key === 'api-spec' ? 'apiSpec' :
+                          doc.key === 'test-plan' ? 'testPlan' :
+                          doc.key === 'test-case' ? 'testCase' :
+                          doc.key;
+          const hasDoc = !!current[docField as keyof Meeting];
+          if (hasDoc && !completedDocs.includes(doc.key)) {
+            return doc.key;
+          }
+        }
+        return null;
+      },
+
+      setAutoAdvance: (enabled) => {
+        get().updateCurrentMeeting({ autoAdvance: enabled });
       },
     }),
     {

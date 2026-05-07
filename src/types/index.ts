@@ -47,6 +47,9 @@ export interface Meeting {
   // 메타데이터
   isCompleted?: boolean;
   tags?: string[];
+  // 학습 완료 추적
+  completedDocs?: DocType[];
+  autoAdvance?: boolean; // 자동 넘김 설정
 }
 
 // 요약 결과 타입

@@ -1,11 +1,14 @@
 'use client';
 
 import { useState } from 'react';
-import { FileText, Loader2, Sparkles, RefreshCw } from 'lucide-react';
+import { FileText, Loader2, Sparkles, RefreshCw, AlertTriangle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Textarea } from '@/components/ui/textarea';
 import { useMeetingStore } from '@/store/meetingStore';
+
+// 최대 권장 텍스트 길이 (토큰 제한 고려)
+const MAX_RECOMMENDED_LENGTH = 15000;
 
 export function TranscriptViewer() {
   const currentMeeting = useMeetingStore(s => s.currentMeeting);
@@ -13,6 +16,8 @@ export function TranscriptViewer() {
   const [isSummarizing, setIsSummarizing] = useState(false);
   const [isRegenerating, setIsRegenerating] = useState(false);
   const [editedTranscript, setEditedTranscript] = useState(currentMeeting?.transcript || '');
+  const [summarizeProgress, setSummarizeProgress] = useState('');
+  const [isTooLong, setIsTooLong] = useState(false);
 
   // 변환 재생성 (오디오 파일 필요)
   const handleRegenerateTranscript = async () => {
@@ -55,14 +60,31 @@ export function TranscriptViewer() {
   const handleSummarize = async () => {
     if (!editedTranscript.trim()) return;
 
+    // 텍스트 길이 확인
+    if (editedTranscript.length > MAX_RECOMMENDED_LENGTH) {
+      const confirmed = confirm(
+        `텍스트가 너무 길어서 API 요청이 실패할 수 있습니다.\n\n` +
+        `현재 길이: ${editedTranscript.length.toLocaleString()}자\n` +
+        `권장 길이: ${MAX_RECOMMENDED_LENGTH.toLocaleString()}자\n\n` +
+        `계속 진행하시겠습니까?`
+      );
+      if (!confirmed) return;
+      setIsTooLong(true);
+    }
+
     setIsSummarizing(true);
     updateMeetingStep('summarizing');
+
+    // 진행 상태 메시지
+    setSummarizeProgress('API 요청 준비 중...');
 
     try {
       console.log('[Frontend] 요약 요청 시작', {
         textLength: editedTranscript.length,
         title: currentMeeting?.title,
       });
+
+      setSummarizeProgress('AI 모델에 요청 전송 중...');
 
       const response = await fetch('/api/summarize', {
         method: 'POST',
@@ -78,6 +100,8 @@ export function TranscriptViewer() {
         ok: response.ok,
       });
 
+      setSummarizeProgress('요약 결과 분석 중...');
+
       if (!response.ok) {
         const errorText = await response.text();
         console.error('[Frontend] API 에러 응답:', errorText);
@@ -86,16 +110,19 @@ export function TranscriptViewer() {
 
       const { summary } = await response.json();
 
+      setSummarizeProgress('저장 중...');
       updateCurrentMeeting({
         transcript: editedTranscript,
         summary,
       });
 
       updateMeetingStep('summarizing');
+      setSummarizeProgress('');
     } catch (error) {
       console.error('Summarize error:', error);
-      alert('요약 생성에 실패했습니다.');
+      alert('요약 생성에 실패했습니다. 다시 시도해주세요.');
       updateMeetingStep('transcribing');
+      setSummarizeProgress('');
     } finally {
       setIsSummarizing(false);
     }
@@ -115,13 +142,25 @@ export function TranscriptViewer() {
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <div className="flex items-center justify-between">
-          <CardTitle className="flex items-center gap-2">
-            <FileText className="w-5 h-5" />
-            변환된 텍스트
-          </CardTitle>
+    <div className="relative">
+      {/* 요약 중 전체 화면 로딩 오버레이 */}
+      {isSummarizing && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-white/80 dark:bg-slate-900/80 backdrop-blur-sm rounded-lg">
+          <div className="text-center">
+            <Loader2 className="w-12 h-12 mx-auto mb-4 animate-spin text-blue-500" />
+            <p className="text-lg font-medium">AI 요약 생성 중...</p>
+            <p className="text-sm text-slate-500 mt-2">{summarizeProgress || '회의 내용을 분석하고 있습니다'}</p>
+          </div>
+        </div>
+      )}
+
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <CardTitle className="flex items-center gap-2">
+              <FileText className="w-5 h-5" />
+              변환된 텍스트
+            </CardTitle>
           <Button
             onClick={handleRegenerateTranscript}
             disabled={isRegenerating || !currentMeeting?.audioUrl}
@@ -151,8 +190,9 @@ export function TranscriptViewer() {
         />
 
         <div className="flex justify-end gap-2">
-          <span className="text-sm text-slate-500 self-center">
-            {editedTranscript.length}자
+          <span className={`text-sm self-center ${editedTranscript.length > MAX_RECOMMENDED_LENGTH ? 'text-amber-500 font-medium' : 'text-slate-500'}`}>
+            {editedTranscript.length.toLocaleString()}자
+            {editedTranscript.length > MAX_RECOMMENDED_LENGTH && ' (권장 길이 초과)'}
           </span>
           <Button
             onClick={handleSummarize}
@@ -162,7 +202,7 @@ export function TranscriptViewer() {
             {isSummarizing ? (
               <>
                 <Loader2 className="w-5 h-5 mr-2 animate-spin" />
-                요약 중...
+                요약 생성 중...
               </>
             ) : (
               <>
@@ -172,8 +212,23 @@ export function TranscriptViewer() {
             )}
           </Button>
         </div>
+
+        {/* 텍스트 길이 경고 */}
+        {editedTranscript.length > MAX_RECOMMENDED_LENGTH && (
+          <div className="flex items-start gap-2 p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg">
+            <AlertTriangle className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" />
+            <div className="text-sm text-amber-800 dark:text-amber-200">
+              <p className="font-medium">텍스트가 너무 길어서 API 요청이 실패할 수 있습니다.</p>
+              <p className="mt-1">
+                현재 <strong>{editedTranscript.length.toLocaleString()}자</strong> (권장: {MAX_RECOMMENDED_LENGTH.toLocaleString()}자 이하)
+              </p>
+              <p className="mt-1">불필요한 내용을 삭제하거나, 여러 부분으로 나눠서 요약을 진행해주세요.</p>
+            </div>
+          </div>
+        )}
       </CardContent>
     </Card>
+    </div>
   );
 }
 
