@@ -70,6 +70,22 @@ export const DEPENDENCIES: Record<DocType, DocType[]> = {
   'deployment': ['prd', 'feature-list', 'api-spec'],
 };
 
+// 역방향 의존성: 어떤 문서가 수정되면 어떤 문서가 영향을 받는지
+export const REVERSE_DEPENDENCIES: Record<DocType, DocType[]> = (() => {
+  const reverse: Partial<Record<DocType, DocType[]>> = {};
+
+  for (const [docType, deps] of Object.entries(DEPENDENCIES)) {
+    for (const dep of deps) {
+      if (!reverse[dep]) {
+        reverse[dep] = [];
+      }
+      reverse[dep]!.push(docType as DocType);
+    }
+  }
+
+  return reverse as Record<DocType, DocType[]>;
+})();
+
 // 문서 트리 구조
 export const DOCUMENT_TREE: TreeNode[] = [
   {
@@ -188,7 +204,10 @@ export const DOCUMENT_TREE: TreeNode[] = [
 export function extractMermaidCode(content: string): string {
   const codeBlockMatch = content.match(/```mermaid\n([\s\S]+?)```/);
   if (codeBlockMatch) {
-    return codeBlockMatch[1].trim();
+    let code = codeBlockMatch[1].trim();
+    // HTML 엔티티를 원래 기호로 변환
+    code = code.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').replace(/--&gt;/g, '-->');
+    return code;
   }
 
   const trimmedContent = content.trim();
@@ -198,9 +217,14 @@ export function extractMermaidCode(content: string): string {
     const lines = trimmedContent.split('\n');
     const startIdx = lines.findIndex(line => /\b(flowchart|graph|sequenceDiagram|classDiagram|stateDiagram|erDiagram|gantt|pie|mindmap)\b/i.test(line));
     if (startIdx >= 0) {
-      return lines.slice(startIdx).join('\n').trim();
+      let code = lines.slice(startIdx).join('\n').trim();
+      // HTML 엔티티를 원래 기호로 변환
+      code = code.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').replace(/--&gt;/g, '-->');
+      return code;
     }
-    return trimmedContent;
+    let code = trimmedContent;
+    code = code.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').replace(/--&gt;/g, '-->');
+    return code;
   }
 
   return '';
@@ -263,3 +287,21 @@ export function flattenTree(nodes: TreeNode[], parentKey: string | null = null):
 }
 
 export const FLAT_DOCUMENTS = flattenTree(DOCUMENT_TREE);
+
+// 특정 문서의 모든 하위 문서를 재귀적으로 찾기
+export function getAllDependents(docType: DocType, visited: Set<DocType> = new Set()): DocType[] {
+  if (visited.has(docType)) return [];
+  visited.add(docType);
+
+  const directDependents = REVERSE_DEPENDENCIES[docType] || [];
+  let allDependents = [...directDependents];
+
+  for (const dependent of directDependents) {
+    allDependents = [
+      ...allDependents,
+      ...getAllDependents(dependent, visited)
+    ];
+  }
+
+  return Array.from(new Set(allDependents));
+}

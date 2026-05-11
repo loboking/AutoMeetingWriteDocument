@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { FileText, Download, Copy, Check, Loader2, Plus, Edit, Save, Eye, File, Code, BookOpen, Presentation, Printer, ChevronLeft, ChevronRight, Terminal, CheckCircle2, Circle, ToggleLeft, ToggleRight } from 'lucide-react';
+import { FileText, Download, Copy, Check, Loader2, Plus, Edit, Save, Eye, File, Code, BookOpen, Presentation, Printer, ChevronLeft, ChevronRight, Terminal, CheckCircle2, Circle, ToggleLeft, ToggleRight, Lock, Unlock, AlertTriangle } from 'lucide-react';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { saveAs } from 'file-saver';
 import * as XLSX from 'xlsx';
@@ -37,6 +37,19 @@ import { CommandPanel } from '@/components/CommandPanel';
 
 export function PrdViewer() {
   const { currentMeeting, updateCurrentMeeting, toggleCompleteDoc, isDocCompleted, getNextIncompleteDoc, setAutoAdvance } = useMeetingStore();
+  const {
+    getDocStatus,
+    freezeDoc,
+    unfreezeDoc,
+    isDocFrozen,
+    canRegenerateDoc,
+    setDocStatus,
+    incrementDocVersion,
+    markDependentsOutdated,
+    getDocVersion
+  } = useMeetingStore();
+
+  // 항상 PRD로 시작 - 초기화 함수 사용
   const [activeDoc, setActiveDoc] = useState<DocType>('prd');
 
   // currentMeeting에서 문서들을 초기화
@@ -75,12 +88,16 @@ export function PrdViewer() {
   const [viewMode, setViewMode] = useState<'raw' | 'preview' | 'visual' | 'terminal'>('visual'); // 기본을 시각화로 변경
   const [terminalCommands, setTerminalCommands] = useState<string[]>([]);
   const treeRef = useRef<HTMLDivElement>(null);
+  const tabsListRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
 
   // 학습 완료 관련 상태
   const [autoAdvance, setAutoAdvanceState] = useState(false);
   const [sequentialMode, setSequentialMode] = useState(false); // 순차적 진행 모드
   const [scrollAtBottom, setScrollAtBottom] = useState(false);
+
+  // 사이드바 상태
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   // 페이지 이탈 방지 훅 사용 (문서 생성 중 또는 편집 중)
   useBeforeUnload(
@@ -90,33 +107,105 @@ export function PrdViewer() {
       : '편집 중인 내용이 저장되지 않을 수 있습니다. 정말 나가시겠습니까?'
   );
 
+  // 컴포넌트 마운트 시 항상 activeDoc 초기화 및 강력한 스크롤 초기화
+  useEffect(() => {
+    setActiveDoc('prd');
+    console.log('[PrdViewer] Mounted, set activeDoc to prd');
+
+    // 강력한 스크롤 초기화 (마운트 시 즉시 실행)
+    const forceScrollReset = () => {
+      // 전체 페이지 스크롤
+      window.scrollTo(0, 0);
+      document.documentElement.scrollTop = 0;
+      document.body.scrollTop = 0;
+
+      // localStorage에서 스크롤 위치 삭제
+      try {
+        localStorage.removeItem('scrollPosition');
+        localStorage.removeItem('tabs-scroll-position');
+        sessionStorage.clear();
+      } catch (e) {}
+
+      // treeRef에 직접 강제 스타일 적용
+      if (treeRef.current) {
+        treeRef.current.style.overflow = 'visible';
+        treeRef.current.scrollTop = 0;
+        treeRef.current.style.maxHeight = 'none';
+        // 강제로 첫 번째 자식으로 스크롤
+        const firstChild = treeRef.current.firstElementChild;
+        if (firstChild) {
+          firstChild.scrollIntoView({ block: 'start', behavior: 'instant' });
+        }
+      }
+    };
+
+    forceScrollReset();
+
+    // 여러 타이밍에서 재시도
+    [0, 10, 50, 100, 200].forEach(delay => {
+      setTimeout(forceScrollReset, delay);
+    });
+  }, []);
+
   // currentMeeting 변경 시 documents 동기화
   useEffect(() => {
     setDocuments(getDocumentsFromMeeting());
-  }, [currentMeeting]);
+  }, [currentMeeting?.id]); // id만 의존성으로 사용
 
-  // 컴포넌트 마운트 시 강제 스크롤 리셋 (항상 PRD가 최상단에 보이도록)
+  // 스크롤 초기화 - 컴포넌트 마운트 시와 activeDoc 변경 시 실행
   useEffect(() => {
-    const forceScrollToTop = () => {
+    console.log('[PrdViewer] Scroll reset, activeDoc:', activeDoc);
+
+    // 브라우저 스크롤 복원 비활성화
+    if ('scrollRestoration' in history) {
+      history.scrollRestoration = 'manual';
+    }
+
+    const resetScroll = () => {
+      // 1. 전체 페이지 스크롤 초기화 (가장 강력)
+      window.scrollTo(0, 0);
+      document.documentElement.scrollTop = 0;
+      document.body.scrollTop = 0;
+
+      // 2. tabsListRef 초기화
+      if (tabsListRef.current) {
+        tabsListRef.current.scrollTop = 0;
+        console.log('[PrdViewer] tabsListRef.scrollTop reset to 0, current:', tabsListRef.current.scrollTop);
+      }
+      // 3. treeRef 초기화
       if (treeRef.current) {
         treeRef.current.scrollTop = 0;
-        // requestAnimationFrame으로 다시 시도
-        requestAnimationFrame(() => {
-          if (treeRef.current) {
-            treeRef.current.scrollTop = 0;
-          }
-        });
       }
+      // 4. id로 초기화
+      const container = document.getElementById('document-list-container');
+      if (container) {
+        container.scrollTop = 0;
+      }
+      // 5. data-slot으로 초기화
+      const tabsList = document.querySelector('[data-slot="tabs-list"]');
+      if (tabsList) {
+        (tabsList as HTMLElement).scrollTop = 0;
+      }
+      // 6. 모든 overflow-y 가능한 요소 초기화
+      const scrollableElements = document.querySelectorAll('[class*="overflow"], [style*="overflow"]');
+      scrollableElements.forEach((el) => {
+        const element = el as HTMLElement;
+        if (element.scrollTop > 0) {
+          element.scrollTop = 0;
+        }
+      });
     };
-    
-    // 즉시 실행 + 여러 지연 타이밍에서 재시도
-    forceScrollToTop();
-    const timeouts = [50, 100, 200, 300].map(delay => 
-      setTimeout(forceScrollToTop, delay)
+
+    // 즉시 실행
+    resetScroll();
+
+    // 여러 타이밍에서 재시도 (더 긴 타이밍 추가)
+    const timeouts = [0, 10, 50, 100, 200, 300].map(delay =>
+      setTimeout(resetScroll, delay)
     );
-    
+
     return () => timeouts.forEach(clearTimeout);
-  }, []);
+  }, [activeDoc]); // activeDoc 변경 시마다 실행
 
   // currentMeeting 또는 activeDoc 변경 시 스크롤 리셋
   useEffect(() => {
@@ -186,6 +275,15 @@ export function PrdViewer() {
     if (!currentMeeting?.summary) {
       alert('먼저 요약을 생성해주세요.');
       return;
+    }
+
+    // frozen 체크
+    if (currentMeeting?.id) {
+      const { can, reason } = canRegenerateDoc(currentMeeting.id, docType);
+      if (!can) {
+        alert(`이 문서는 ${reason || '고정되어 있어'} AI가 수정할 수 없습니다.\n고정을 해제한 후 다시 시도해주세요.`);
+        return;
+      }
     }
 
     // 의존성 체크
@@ -272,7 +370,7 @@ export function PrdViewer() {
 
     setIsGenerating(true);
     setGenerationProgress({
-      currentLevel: 0,
+      currentLevel: 1,
       totalLevels: 5,
       currentDoc: '',
       completedDocs: [],
@@ -280,33 +378,87 @@ export function PrdViewer() {
     });
 
     try {
-      const response = await fetch('/api/generate-doc', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          mode: 'all',
-          summary: currentMeeting.summary,
-          transcript: currentMeeting.transcript,
-          meetingInfo: {
-            title: currentMeeting.title,
-            date: new Date(currentMeeting.createdAt).toLocaleDateString('ko-KR'),
-          },
-        }),
+      // SSE 스트림 연결
+      const params = new URLSearchParams({
+        summary: JSON.stringify(currentMeeting.summary),
+        transcript: currentMeeting.transcript || '',
+        title: currentMeeting.title,
+        date: new Date(currentMeeting.createdAt).toLocaleDateString('ko-KR'),
       });
 
-      if (!response.ok) throw new Error('전체 생성 실패');
+      const response = await fetch(`/api/generate-doc-stream?${params.toString()}`);
 
-      const { docs, progress } = await response.json();
+      if (!response.ok) throw new Error('스트림 연결 실패');
 
-      // 생성된 문서들을 순차적으로 업데이트 (진행률 표시 효과)
-      for (const [docType, content] of Object.entries(docs)) {
-        if (content) {
-          setDocuments(prev => ({ ...prev, [docType]: content }));
-          updateCurrentMeeting({ [docTypeToField(docType)]: content });
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
+
+      if (!reader) throw new Error('스트림을 읽을 수 없습니다');
+
+      // SSE 이벤트 처리
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value);
+        const lines = chunk.split('\n');
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const data = JSON.parse(line.slice(6));
+
+              switch (data.type) {
+                case 'level_start':
+                  setGenerationProgress(prev => prev ? {
+                    ...prev,
+                    currentLevel: data.level,
+                    totalLevels: data.totalLevels,
+                    currentDoc: '',
+                    status: 'generating',
+                  } : null);
+                  break;
+
+                case 'doc_start':
+                  setGenerationProgress(prev => prev ? {
+                    ...prev,
+                    currentDoc: data.docTitle,
+                  } : null);
+                  break;
+
+                case 'doc_complete':
+                  // 문서 내용 즉시 업데이트
+                  setDocuments(prev => ({ ...prev, [data.docType]: data.content }));
+                  updateCurrentMeeting({ [docTypeToField(data.docType)]: data.content });
+                  setGenerationProgress(prev => prev ? {
+                    ...prev,
+                    completedDocs: [...prev.completedDocs, data.docType],
+                  } : null);
+                  break;
+
+                case 'doc_error':
+                  console.error(`${data.docTitle} 생성 실패:`, data.error);
+                  break;
+
+                case 'all_complete':
+                  setGenerationProgress({
+                    currentLevel: 5,
+                    totalLevels: 5,
+                    currentDoc: '',
+                    completedDocs: Object.keys(data.docs),
+                    status: 'completed',
+                  });
+                  break;
+
+                case 'error':
+                  throw new Error(data.error);
+              }
+            } catch (e) {
+              console.error('SSE 파싱 오류:', e);
+            }
+          }
         }
       }
-
-      setGenerationProgress(progress);
     } catch (error) {
       console.error('전체 생성 오류:', error);
       setGenerationProgress(prev => prev ? { ...prev, status: 'error' } : null);
@@ -351,6 +503,17 @@ export function PrdViewer() {
   const handleSaveEdit = () => {
     setDocuments(prev => ({ ...prev, [activeDoc]: editedContent }));
     updateCurrentMeeting({ [docTypeToField(activeDoc)]: editedContent });
+
+    // 문서 상태 업데이트
+    if (currentMeeting?.id) {
+      // 사용자가 직접 수정하면 latest로 표시
+      setDocStatus(currentMeeting.id, activeDoc, 'latest');
+      incrementDocVersion(currentMeeting.id, activeDoc);
+
+      // 하위 문서들을 outdated로 표시
+      markDependentsOutdated(currentMeeting.id, activeDoc);
+    }
+
     setIsEditing(false);
   };
 
@@ -807,15 +970,71 @@ export function PrdViewer() {
   const totalCount = DOCUMENTS.length;
 
   return (
-    <div className="flex flex-col lg:flex-row gap-6">
+    <div className="relative">
+      {/* 햄버거 버튼 - 항상 표시 */}
+      <button
+        onClick={() => setSidebarOpen(true)}
+        className="fixed top-4 left-4 z-50 p-2 bg-white dark:bg-slate-800 rounded-lg shadow-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700"
+        aria-label="문서 목록 열기"
+      >
+        <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+        </svg>
+      </button>
+
+      {/* 오버레이 - 불투명 */}
+      {sidebarOpen && (
+        <div
+          className="fixed inset-0 bg-black z-40"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
+      {/* 슬라이드 사이드바 - 항상 숨겨져 있음, 버튼으로만 열림 */}
+      <div
+        className={`
+          fixed top-0 left-0 z-50 h-full w-80 max-w-[80vw]
+          bg-white dark:bg-slate-900
+          border-r border-slate-200 dark:border-slate-700
+          transform transition-transform duration-300 ease-in-out
+          ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}
+        `}
+      >
+        {/* 사이드바 헤더 */}
+        <div className="p-4 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between">
+          <h2 className="text-lg font-bold text-slate-900 dark:text-white">문서 목록</h2>
+          <button
+            onClick={() => setSidebarOpen(false)}
+            className="p-1 hover:bg-slate-100 dark:hover:bg-slate-800 rounded"
+            aria-label="닫기"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        {/* 문서 목록 영역 */}
+        <div
+          id="document-list-container"
+          ref={treeRef}
+          className="overflow-y-auto"
+          style={{ height: 'calc(100% - 60px)' }}
+        >
       {/* 왼쪽 사이드바 - 트리 네비게이션 */}
-      <div className="w-full lg:w-80 flex-shrink-0 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg flex flex-col">
+      <div className="w-full lg:w-80 flex-shrink-0 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg flex flex-col" style={{ height: 'fit-content', maxHeight: '80vh' }}>
         {/* 사이드바 헤더 */}
         <div className="p-3 border-b border-slate-200 dark:border-slate-700 flex-shrink-0">
           <h2 className="text-base font-bold text-slate-900 dark:text-white">문서 목록</h2>
         </div>
-        {/* 문서 목록 영역 - 스크롤 가능 */}
-        <div ref={treeRef} className="flex-1 overflow-y-auto min-h-[300px] lg:min-h-[400px]">
+        {/* 문서 목록 영역 - 헤더 바로 다음 위치 */}
+        <div
+          id="document-list-container"
+          ref={treeRef}
+          className="w-full overflow-visible"
+          style={{ scrollBehavior: 'auto' }}
+          data-scroll-container="true"
+        >
           <Tabs value={activeDoc} onValueChange={(v) => {
             const newDoc = v as DocType;
             const docIndex = DOCUMENTS.findIndex(d => d.key === newDoc);
@@ -830,8 +1049,19 @@ export function PrdViewer() {
             }
 
             setActiveDoc(newDoc);
+
+            // 스크롤을 맨 위로 초기화
+            setTimeout(() => {
+              if (treeRef.current) {
+                treeRef.current.scrollTop = 0;
+              }
+            }, 0);
           }}>
-            <TabsList className="bg-transparent border-none p-0 h-auto flex flex-col items-start gap-0.5 rounded-none w-full">
+            <TabsList
+              ref={tabsListRef}
+              className="bg-transparent border-none p-0 h-auto flex flex-col items-start gap-0.5 rounded-none w-full"
+              style={{ scrollBehavior: 'auto', overflowAnchor: 'none', scrollPaddingTop: 0 }}
+            >
               {DOCUMENTS.map((doc) => {
                 const hasDoc = !!documents[doc.key];
                 const { canGenerate } = canGenerateDoc(doc.key, documents);
@@ -885,7 +1115,36 @@ export function PrdViewer() {
                     </span>
 
                     {/* 상태 표시 */}
-                    <span className="ml-auto flex-shrink-0 flex items-center gap-2">
+                    <span className="ml-auto flex-shrink-0 flex items-center gap-1.5">
+                      {/* 문서 상태 배지 */}
+                      {currentMeeting?.id && (() => {
+                        const status = getDocStatus(currentMeeting.id, doc.key);
+                        if (status === 'outdated') {
+                          return (
+                            <span className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-50 text-amber-700 border border-amber-200 dark:bg-amber-900/30 dark:text-amber-300 dark:border-amber-700">
+                              <AlertTriangle className="w-2.5 h-2.5" />
+                              업데이트 필요
+                            </span>
+                          );
+                        }
+                        if (status === 'frozen') {
+                          return (
+                            <span className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-50 text-blue-700 border border-blue-200 dark:bg-blue-900/30 dark:text-blue-300 dark:border-blue-700">
+                              <Lock className="w-2.5 h-2.5" />
+                              고정됨
+                            </span>
+                          );
+                        }
+                        if (status === 'regenerating') {
+                          return (
+                            <span className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-purple-50 text-purple-700 border border-purple-200 dark:bg-purple-900/30 dark:text-purple-300 dark:border-purple-700">
+                              <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                              재생성 중
+                            </span>
+                          );
+                        }
+                        return null;
+                      })()}
                       {hasDoc && !isCompleted && (
                         <span className="relative flex h-2.5 w-2.5">
                           <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
@@ -991,6 +1250,29 @@ export function PrdViewer() {
                 {autoAdvance ? <ToggleRight className="w-3.5 h-3.5" /> : <ToggleLeft className="w-3.5 h-3.5" />}
                 자동 넘김
               </button>
+
+              {/* 문서 고정 토글 */}
+              {currentMeeting?.id && (
+                <button
+                  onClick={() => {
+                    const frozen = isDocFrozen(currentMeeting.id, activeDoc);
+                    if (frozen) {
+                      unfreezeDoc(currentMeeting.id, activeDoc);
+                    } else {
+                      freezeDoc(currentMeeting.id, activeDoc);
+                    }
+                  }}
+                  className={`flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium transition-colors ${
+                    isDocFrozen(currentMeeting.id, activeDoc)
+                      ? 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300'
+                      : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700'
+                  }`}
+                  title={isDocFrozen(currentMeeting.id, activeDoc) ? "문서 고정 해제: AI가 이 문서를 수정하지 않음" : "문서 고정: AI가 이 문서를 덮어쓰지 않음"}
+                >
+                  {isDocFrozen(currentMeeting.id, activeDoc) ? <Lock className="w-3.5 h-3.5" /> : <Unlock className="w-3.5 h-3.5" />}
+                  고정
+                </button>
+              )}
             </div>
 
             {/* 전체 생성 버튼 */}
@@ -1385,7 +1667,9 @@ export function PrdViewer() {
                             // mermaid 코드 블록 감지
                             const language = className?.replace('language-', '');
                             if (language === 'mermaid') {
-                              const codeContent = String(children).replace(/\n$/, '');
+                              let codeContent = String(children).replace(/\n$/, '');
+                              // HTML 엔티티를 원래 기호로 변환
+                              codeContent = codeContent.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').replace(/--&gt;/g, '-->');
                               return <MermaidDiagram chart={codeContent} key={node?.position?.start?.line?.toString()} />;
                             }
                             const isInline = !className;

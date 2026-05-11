@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { Meeting, MeetingStep, MeetingSummary, DocType } from '@/types';
-import { DOCUMENTS } from '@/lib/documentUtils';
+import type { Meeting, MeetingStep, MeetingSummary, DocType, DocStatus } from '@/types';
+import { DOCUMENTS, getAllDependents } from '@/lib/documentUtils';
 
 // UUID 생성 유틸 (브라우저 호환성)
 function generateId(): string {
@@ -22,6 +22,11 @@ interface MeetingStore {
   currentMeeting: Meeting | null;
   currentStep: MeetingStep;
 
+  // 문서 상태 관리 (meetingId -> docType -> status)
+  docStatuses: Record<string, Record<DocType, DocStatus>>;
+  docVersions: Record<string, Record<DocType, number>>;
+  frozenDocs: Record<string, DocType[]>;  // meetingId -> frozen docTypes
+
   // 액션
   createMeeting: (title: string) => void;
   updateMeetingStep: (step: MeetingStep) => void;
@@ -36,6 +41,17 @@ interface MeetingStore {
   isDocCompleted: (docType: DocType) => boolean;
   getNextIncompleteDoc: () => DocType | null;
   setAutoAdvance: (enabled: boolean) => void;
+
+  // 문서 상태 관리 액션
+  setDocStatus: (meetingId: string, docType: DocType, status: DocStatus) => void;
+  getDocStatus: (meetingId: string, docType: DocType) => DocStatus;
+  incrementDocVersion: (meetingId: string, docType: DocType) => void;
+  getDocVersion: (meetingId: string, docType: DocType) => number;
+  freezeDoc: (meetingId: string, docType: DocType) => void;
+  unfreezeDoc: (meetingId: string, docType: DocType) => void;
+  isDocFrozen: (meetingId: string, docType: DocType) => boolean;
+  markDependentsOutdated: (meetingId: string, docType: DocType) => void;
+  canRegenerateDoc: (meetingId: string, docType: DocType) => { can: boolean; reason?: string };
 }
 
 export const useMeetingStore = create<MeetingStore>()(
@@ -44,6 +60,9 @@ export const useMeetingStore = create<MeetingStore>()(
       meetings: [],
       currentMeeting: null,
       currentStep: 'idle',
+      docStatuses: {},
+      docVersions: {},
+      frozenDocs: {},
 
       createMeeting: (title) => {
         const newMeeting: Meeting = {
@@ -191,12 +210,106 @@ export const useMeetingStore = create<MeetingStore>()(
       setAutoAdvance: (enabled) => {
         get().updateCurrentMeeting({ autoAdvance: enabled });
       },
+
+      // 문서 상태 관리 액션
+      setDocStatus: (meetingId, docType, status) => {
+        const docStatuses = { ...get().docStatuses };
+        if (!docStatuses[meetingId]) {
+          docStatuses[meetingId] = {} as Record<DocType, DocStatus>;
+        }
+        docStatuses[meetingId] = {
+          ...docStatuses[meetingId],
+          [docType]: status,
+        };
+        set({ docStatuses });
+      },
+
+      getDocStatus: (meetingId, docType) => {
+        const { docStatuses, frozenDocs } = get();
+        const meetingFrozenDocs = frozenDocs[meetingId] || [];
+
+        // frozen 상태면 frozen 반환
+        if (meetingFrozenDocs.includes(docType)) {
+          return 'frozen';
+        }
+
+        return docStatuses[meetingId]?.[docType] || 'latest';
+      },
+
+      incrementDocVersion: (meetingId, docType) => {
+        const docVersions = { ...get().docVersions };
+        if (!docVersions[meetingId]) {
+          docVersions[meetingId] = {} as Record<DocType, number>;
+        }
+        const currentVersion = docVersions[meetingId][docType] || 0;
+        docVersions[meetingId] = {
+          ...docVersions[meetingId],
+          [docType]: currentVersion + 1,
+        };
+        set({ docVersions });
+      },
+
+      getDocVersion: (meetingId, docType) => {
+        return get().docVersions[meetingId]?.[docType] || 0;
+      },
+
+      freezeDoc: (meetingId, docType) => {
+        const frozenDocs = { ...get().frozenDocs };
+        const meetingFrozenDocs = frozenDocs[meetingId] || [];
+        if (!meetingFrozenDocs.includes(docType)) {
+          frozenDocs[meetingId] = [...meetingFrozenDocs, docType];
+          set({ frozenDocs });
+        }
+      },
+
+      unfreezeDoc: (meetingId, docType) => {
+        const frozenDocs = { ...get().frozenDocs };
+        const meetingFrozenDocs = frozenDocs[meetingId] || [];
+        frozenDocs[meetingId] = meetingFrozenDocs.filter(d => d !== docType);
+        set({ frozenDocs });
+      },
+
+      isDocFrozen: (meetingId, docType) => {
+        const meetingFrozenDocs = get().frozenDocs[meetingId] || [];
+        return meetingFrozenDocs.includes(docType);
+      },
+
+      markDependentsOutdated: (meetingId, docType) => {
+        const dependents = getAllDependents(docType);
+        const { frozenDocs, docStatuses } = get();
+        const meetingFrozenDocs = frozenDocs[meetingId] || [];
+
+        const newStatuses = { ...docStatuses };
+        if (!newStatuses[meetingId]) {
+          newStatuses[meetingId] = {} as Record<DocType, DocStatus>;
+        }
+
+        dependents.forEach(dep => {
+          // frozen 문서는 outdated로 표시하지 않음
+          if (!meetingFrozenDocs.includes(dep)) {
+            newStatuses[meetingId][dep] = 'outdated';
+          }
+        });
+
+        set({ docStatuses: newStatuses });
+      },
+
+      canRegenerateDoc: (meetingId, docType) => {
+        const { isDocFrozen } = get();
+        if (isDocFrozen(meetingId, docType)) {
+          return { can: false, reason: '문서가 고정되어 있습니다' };
+        }
+        return { can: true };
+      },
     }),
     {
       name: 'meeting-storage',
       partialize: (state) => ({
         meetings: state.meetings,
         currentMeeting: state.currentMeeting,
+        docStatuses: state.docStatuses,
+        docVersions: state.docVersions,
+        frozenDocs: state.frozenDocs,
       }),
     }
   )

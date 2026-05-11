@@ -1,7 +1,17 @@
 // 회의 상태 타입
 export type MeetingStep = 'idle' | 'recording' | 'transcribing' | 'summarizing' | 'done';
 
-// 문서 타입 (12개 기획 문서)
+// 문서 상태 타입
+export type DocStatus = 'latest' | 'outdated' | 'frozen' | 'regenerating';
+
+// 문서 버전 정보
+export interface DocVersionInfo {
+  version: number;
+  lastModified: Date;
+  contentHash?: string;
+}
+
+// 문서 타입 (14개 기획 문서)
 export type DocType =
   | 'prd'
   | 'feature-list'

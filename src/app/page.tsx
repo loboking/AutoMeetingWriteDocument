@@ -398,7 +398,7 @@ export default function Home() {
               </TabsContent>
 
               <TabsContent value="done" className="mt-6">
-                <PrdViewer />
+                <PrdViewer key={currentMeeting?.id || 'default'} />
               </TabsContent>
             </Tabs>
           </div>

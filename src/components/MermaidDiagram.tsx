@@ -80,8 +80,10 @@ export function MermaidDiagram({ chart, id = 'mermaid' }: MermaidDiagramProps) {
     }
 
     // 코드 정제 (불노이즈 제거, 빈 줄 제거)
-    const lines = trimmedChart.split('\n').filter(line => line.trim());
-    const cleanCode = lines.join('\n').trim();
+    let cleanCode = trimmedChart.split('\n').filter(line => line.trim()).join('\n').trim();
+
+    // HTML 엔티티를 원래 기호로 변환 (안전장치)
+    cleanCode = cleanCode.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').replace(/--&gt;/g, '-->');
 
     if (!cleanCode) {
       if (ref.current) {
