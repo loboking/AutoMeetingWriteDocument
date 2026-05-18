@@ -292,7 +292,7 @@ services:
       - "3000:3000"
     environment:
       - NODE_ENV=production
-      - DATABASE_URL=${DATABASE_URL}
+      - DATABASE_URL=\${DATABASE_URL}
     depends_on:
       - db
       - redis
@@ -303,9 +303,9 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     environment:
-      - POSTGRES_DB=${DB_NAME}
-      - POSTGRES_USER=${DB_USER}
-      - POSTGRES_PASSWORD=${DB_PASSWORD}
+      - POSTGRES_DB=\${DB_NAME}
+      - POSTGRES_USER=\${DB_USER}
+      - POSTGRES_PASSWORD=\${DB_PASSWORD}
     restart: unless-stopped
 
   redis:

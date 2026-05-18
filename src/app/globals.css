@@ -145,3 +145,43 @@
     @apply font-sans;
   }
 }
+
+/* Scrollbar 스타일 */
+#document-list-container {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(148 163 184) rgb(241 245 249);
+}
+
+#document-list-container::-webkit-scrollbar {
+  width: 8px;
+}
+
+#document-list-container::-webkit-scrollbar-track {
+  background: rgb(241 245 249);
+  border-radius: 4px;
+}
+
+#document-list-container::-webkit-scrollbar-thumb {
+  background: rgb(148 163 184);
+  border-radius: 4px;
+}
+
+#document-list-container::-webkit-scrollbar-thumb:hover {
+  background: rgb(100 116 139);
+}
+
+.dark #document-list-container {
+  scrollbar-color: rgb(71 85 105) rgb(30 41 59);
+}
+
+.dark #document-list-container::-webkit-scrollbar-track {
+  background: rgb(30 41 59);
+}
+
+.dark #document-list-container::-webkit-scrollbar-thumb {
+  background: rgb(71 85 105);
+}
+
+.dark #document-list-container::-webkit-scrollbar-thumb:hover {
+  background: rgb(100 116 139);
+}

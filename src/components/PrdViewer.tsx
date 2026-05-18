@@ -36,6 +36,12 @@ import { InAppTerminal } from '@/components/InAppTerminal';
 import { CommandPanel } from '@/components/CommandPanel';
 
 export function PrdViewer() {
+  // 디버그: DOCUMENTS 배열 출력
+  if (typeof window !== 'undefined') {
+    console.log('DOCUMENTS array:', DOCUMENTS);
+    console.log('DOCUMENTS length:', DOCUMENTS.length);
+  }
+
   const { currentMeeting, updateCurrentMeeting, toggleCompleteDoc, isDocCompleted, getNextIncompleteDoc, setAutoAdvance } = useMeetingStore();
   const {
     getDocStatus,
@@ -973,7 +979,14 @@ export function PrdViewer() {
     <div className="relative">
       {/* 햄버거 버튼 - 항상 표시 */}
       <button
-        onClick={() => setSidebarOpen(true)}
+        onClick={() => {
+          setSidebarOpen(true);
+          setTimeout(() => {
+            if (treeRef.current) {
+              treeRef.current.scrollTop = 0;
+            }
+          }, 100);
+        }}
         className="fixed top-4 left-4 z-50 p-2 bg-white dark:bg-slate-800 rounded-lg shadow-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700"
         aria-label="문서 목록 열기"
       >
@@ -981,14 +994,6 @@ export function PrdViewer() {
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
         </svg>
       </button>
-
-      {/* 오버레이 - 불투명 */}
-      {sidebarOpen && (
-        <div
-          className="fixed inset-0 bg-black z-40"
-          onClick={() => setSidebarOpen(false)}
-        />
-      )}
 
       {/* 슬라이드 사이드바 - 항상 숨겨져 있음, 버튼으로만 열림 */}
       <div
@@ -1021,20 +1026,6 @@ export function PrdViewer() {
           className="overflow-y-auto"
           style={{ height: 'calc(100% - 60px)' }}
         >
-      {/* 왼쪽 사이드바 - 트리 네비게이션 */}
-      <div className="w-full lg:w-80 flex-shrink-0 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg flex flex-col" style={{ height: 'fit-content', maxHeight: '80vh' }}>
-        {/* 사이드바 헤더 */}
-        <div className="p-3 border-b border-slate-200 dark:border-slate-700 flex-shrink-0">
-          <h2 className="text-base font-bold text-slate-900 dark:text-white">문서 목록</h2>
-        </div>
-        {/* 문서 목록 영역 - 헤더 바로 다음 위치 */}
-        <div
-          id="document-list-container"
-          ref={treeRef}
-          className="w-full overflow-visible"
-          style={{ scrollBehavior: 'auto' }}
-          data-scroll-container="true"
-        >
           <Tabs value={activeDoc} onValueChange={(v) => {
             const newDoc = v as DocType;
             const docIndex = DOCUMENTS.findIndex(d => d.key === newDoc);
@@ -1062,7 +1053,11 @@ export function PrdViewer() {
               className="bg-transparent border-none p-0 h-auto flex flex-col items-start gap-0.5 rounded-none w-full"
               style={{ scrollBehavior: 'auto', overflowAnchor: 'none', scrollPaddingTop: 0 }}
             >
-              {DOCUMENTS.map((doc) => {
+              {DOCUMENTS.map((doc, index) => {
+                // 디버그: 콘솔에 인덱스 출력
+                if (typeof window !== 'undefined') {
+                  console.log(`Rendering doc ${index}:`, doc.key, doc.title);
+                }
                 const hasDoc = !!documents[doc.key];
                 const { canGenerate } = canGenerateDoc(doc.key, documents);
                 const isDisabled = !hasDoc && !canGenerate;
