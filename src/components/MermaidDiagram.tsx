@@ -37,16 +37,13 @@ export function MermaidDiagram({ chart, id = 'mermaid' }: MermaidDiagramProps) {
   }, []);
 
   useEffect(() => {
-    if (!ref.current || !chart.trim()) {
+    if (!ref.current || !chart?.trim()) {
       return;
     }
 
     const trimmedChart = chart.trim();
     if (!trimmedChart) {
-      if (ref.current) {
-        ref.current.innerHTML = '<span class="text-slate-400 text-sm">빈 다이어그램</span>';
-      }
-      return;
+      return; // 빈 차트는 조용히 무시
     }
 
     // mermaid 키워드 확인 (더 관대하게)
@@ -68,14 +65,7 @@ export function MermaidDiagram({ chart, id = 'mermaid' }: MermaidDiagramProps) {
     const hasValidMermaid = mermaidPatterns.some(p => p.test(trimmedChart));
 
     if (!hasValidMermaid) {
-      if (ref.current) {
-        ref.current.innerHTML = `
-          <div class="text-center p-4">
-            <p class="text-amber-600 dark:text-amber-400 text-sm mb-2">유효한 Mermaid 다이어그램이 아닙니다</p>
-            <p class="text-xs text-slate-500 dark:text-slate-400">flowchart TD, sequenceDiagram 등 키워드가 필요합니다</p>
-          </div>
-        `;
-      }
+      // 유효하지 않은 mermaid 코드는 조용히 무시 (에러 메시지 제거)
       return;
     }
 
