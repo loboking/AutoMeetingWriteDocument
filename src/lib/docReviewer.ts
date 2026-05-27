@@ -57,7 +57,7 @@ const REVIEW_RULES: ReviewRule[] = [
   {
     name: '최소 길이',
     description: '문서의 최소 길이를 충족하는지 확인',
-    weight: 0.10,
+    weight: 0.08,
     check: (content) => {
       const length = content.length;
       const minLength = 1500;
@@ -77,7 +77,7 @@ const REVIEW_RULES: ReviewRule[] = [
   {
     name: '섹션 완성',
     description: '필수 섹션이 모두 포함되어 있는지 확인',
-    weight: 0.20,
+    weight: 0.16,
     check: (content) => {
       const issues: string[] = [];
       const lines = content.split('\n');
@@ -122,7 +122,7 @@ const REVIEW_RULES: ReviewRule[] = [
   {
     name: '테이블 포함',
     description: '데이터가 테이블 형식으로 구조화되어 있는지 확인',
-    weight: 0.1,
+    weight: 0.08,
     check: (content) => {
       const hasTable = content.includes('|') && content.split('\n').some((line) => line.split('|').length >= 4);
       const issues: string[] = [];
@@ -141,7 +141,7 @@ const REVIEW_RULES: ReviewRule[] = [
   {
     name: '다이어그램',
     description: '시각화 자료(Mermaid 다이어그램)가 포함되어 있는지 확인',
-    weight: 0.1,
+    weight: 0.08,
     check: (content) => {
       const hasMermaid = content.includes('```mermaid') || content.includes('``` mermaid');
       const issues: string[] = [];
@@ -160,7 +160,7 @@ const REVIEW_RULES: ReviewRule[] = [
   {
     name: '구체성',
     description: '모호한 표현(TBD, 추후, 등)이 과도하게 사용되지 않았는지 확인',
-    weight: 0.12,
+    weight: 0.10,
     check: (content) => {
       const vaguePatterns = [
         /\bTBD\b/g,
@@ -201,7 +201,7 @@ const REVIEW_RULES: ReviewRule[] = [
   {
     name: '상세성',
     description: '각 섹션이 충분히 상세하게 작성되었는지 확인',
-    weight: 0.10,
+    weight: 0.08,
     check: (content) => {
       const lines = content.split('\n');
       const sections = lines.filter((line) => line.match(/^#+\s/));
@@ -249,7 +249,7 @@ const REVIEW_RULES: ReviewRule[] = [
   {
     name: 'AI 모델명 통일',
     description: 'AI 모델명이 일관되게 사용되었는지 확인 (GLM-5 권장)',
-    weight: 0.05,
+    weight: 0.04,
     check: (content) => {
       const issues: string[] = [];
       const hasGPT4 = /GPT-?4/gi.test(content);
@@ -351,7 +351,7 @@ const REVIEW_RULES: ReviewRule[] = [
   {
     name: '화면 구성 충실',
     description: '최소 3개 이상의 화면이 정의되어 있는지 확인',
-    weight: 0.05,
+    weight: 0.04,
     check: (content) => {
       const issues: string[] = [];
       const screenSectionMatches = content.match(/화면\s*\d+[:\s]*[^\n]+/gi);
@@ -410,6 +410,118 @@ const REVIEW_RULES: ReviewRule[] = [
       return {
         passed: issues.length === 0,
         score: issues.length === 0 ? 100 : 70,
+        issues,
+      };
+    },
+  },
+  {
+    name: '회의 요약록 스타일 감지',
+    description: 'PRD가 회의 요약록 스타일로 작성되지 않았는지 확인',
+    weight: 0.06,
+    check: (content) => {
+      const issues: string[] = [];
+      const passiveVoicePatterns = [
+        /회의\s+(?:에서|에서는)\s*(?:논의|토론|결정)/gi,
+        /(?:논의|토론|결정)\s*된\s*것\s*으로/gi,
+        /(?:논의|토론)\s*결과/gi,
+      ];
+
+      let passiveCount = 0;
+      for (const pattern of passiveVoicePatterns) {
+        const matches = content.match(pattern);
+        if (matches) {
+          passiveCount += matches.length;
+        }
+      }
+
+      const threshold = Math.max(3, content.length / 1000);
+      if (passiveCount > threshold) {
+        issues.push(`회의 요약록 스타일의 수동태 표현이 ${passiveCount}건 발견되었습니다. PRD는 "우리는 ~를 구현한다"와 같은 능동태로 작성해주세요.`);
+      }
+
+      return {
+        passed: passiveCount <= threshold,
+        score: passiveCount <= threshold ? 100 : 40,
+        issues,
+      };
+    },
+  },
+  {
+    name: 'SaaS 필수 요소 포함',
+    description: 'SaaS 제품인 경우 필수 요소가 포함되어 있는지 확인',
+    weight: 0.06,
+    check: (content) => {
+      const issues: string[] = [];
+      const isSaaS = /SaaS|구독|결제|플랜|크레딧|월.*구독/gi.test(content);
+
+      if (isSaaS) {
+        const essentialElements = [
+          /다중\s*테넌트|tenant_id|데이터\s*격리/gi,
+          /API\s*키|암호화|인증|JWT/gi,
+          /결제|과금|환불|영수증/gi,
+          /백오피스|관리자|대시보드|admin/gi,
+        ];
+
+        const missingElements = [];
+        for (const element of essentialElements) {
+          if (!element.test(content)) {
+            missingElements.push(element.source.replace(/\\s\*/g, ' '));
+          }
+        }
+
+        if (missingElements.length > 0) {
+          issues.push(`SaaS 제품이지만 필수 요소가 누락되었습니다: ${missingElements.join(', ')}`);
+        }
+      }
+
+      return {
+        passed: issues.length === 0,
+        score: issues.length === 0 ? 100 : 50,
+        issues,
+      };
+    },
+  },
+  {
+    name: '섹션별 최소 길이',
+    description: '각 섹션이 최소 200자 이상인지 확인',
+    weight: 0.04,
+    check: (content) => {
+      const issues: string[] = [];
+      const lines = content.split('\n');
+      const sections: { title: string; start: number; end: number }[] = [];
+
+      // 섹션 추출 (##으로 시작하는 헤딩)
+      let currentSection: { title: string; start: number } | null = null;
+      for (let i = 0; i < lines.length; i++) {
+        const match = lines[i].match(/^##+\s+(.+)$/);
+        if (match) {
+          if (currentSection) {
+            sections.push({ ...currentSection, end: i });
+          }
+          currentSection = { title: match[1], start: i + 1 };
+        }
+      }
+      if (currentSection) {
+        sections.push({ ...currentSection, end: lines.length });
+      }
+
+      // 각 섹션 길이 확인
+      const shortSections: string[] = [];
+      for (const section of sections) {
+        const sectionContent = lines.slice(section.start, section.end).join('\n');
+        const length = sectionContent.replace(/\s/g, '').length;
+        if (length < 200 && !section.title.includes('부록') && !section.title.includes('용어')) {
+          shortSections.push(`${section.title}(${length}자)`);
+        }
+      }
+
+      if (shortSections.length > 0) {
+        issues.push(`다음 섹션이 너무 짧습니다 (최소 200자 권장): ${shortSections.join(', ')}`);
+      }
+
+      return {
+        passed: shortSections.length === 0,
+        score: Math.max(0, 100 - shortSections.length * 20),
         issues,
       };
     },
@@ -490,6 +602,9 @@ function getSuggestion(ruleName: string): string {
     '화면 구성 충실': '최소 3개 이상의 화면을 상세하게 정의해주세요.',
     'API 명세서 링크': '부록 15.2절에 API 명세서 링크를 추가해주세요.',
     '용어 일관성': '문서 전체에서 용어(사용자/유저, 원/원화 등)를 일관되게 사용해주세요.',
+    '회의 요약록 스타일 감지': 'PRD는 회의 요약록이 아닙니다. "우리는 ~를 구현한다"와 같은 능동태로 작성해주세요.',
+    'SaaS 필수 요소 포함': 'SaaS 제품의 경우 다중 테넌트, 결제, 보안, 백오피스를 반드시 포함해주세요.',
+    '섹션별 최소 길이': '각 섹션은 최소 200자 이상 상세하게 작성해주세요.',
   };
 
   return suggestions[ruleName] || '항목을 개선하여 문서 품질을 높여주세요.';
