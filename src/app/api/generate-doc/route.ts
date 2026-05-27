@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getPRDPrompt } from '@/lib/prdTemplate';
+import { generatePRDByChunks, PRDChunkProgress } from '@/lib/prd/prdChunkGenerator';
 import { getApiSpecPrompt } from '@/lib/apiSpecTemplate';
 import { getDeploymentPrompt } from '@/lib/deploymentTemplate';
 import { getTestCasePrompt } from '@/lib/testCaseTemplate';
@@ -135,8 +136,33 @@ async function generateDocument(
   docType: DocType,
   summary: MeetingSummary,
   transcript: string,
-  meetingInfo: { title: string; date: string }
+  meetingInfo: { title: string; date: string },
+  onProgress?: (progress: PRDChunkProgress | GenerationProgress) => void
 ): Promise<string> {
+  // PRD는 섹션별 청킹 방식 사용
+  if (docType === 'prd') {
+    console.log('[generate-doc] PRD 청킹 방식 생성 시작');
+    try {
+      const result = await generatePRDByChunks(
+        summary,
+        transcript,
+        meetingInfo,
+        (progress) => {
+          onProgress?.(progress);
+        }
+      );
+      console.log('[generate-doc] PRD 청킹 방식 생성 완료', {
+        sectionCount: Object.keys(result.sections).length,
+        totalLength: result.fullDocument.length,
+      });
+      return result.fullDocument;
+    } catch (error) {
+      console.error('[generate-doc] PRD 청킹 생성 실패:', error);
+      // 실패 시 기존 방식으로 fallback
+    }
+  }
+
+  // PRD 외 또는 fallback: 기존 방식
   const prompt = getPromptForDocType(docType, summary, transcript, meetingInfo, {});
 
   // OpenAI 우선 명확히
@@ -242,6 +268,22 @@ async function generateDocumentWithContext(
   meetingInfo: { title: string; date: string },
   contextDocs: Record<string, string>
 ): Promise<string> {
+  // PRD는 섹션별 청킹 방식 사용 (컨텍스트 무시 - 이미 청킹 로직 내에서 처리)
+  if (docType === 'prd') {
+    console.log('[generate-doc] PRD 청킹 방식 생성 시작 (generateDocumentWithContext)');
+    try {
+      const result = await generatePRDByChunks(summary, transcript, meetingInfo);
+      console.log('[generate-doc] PRD 청킹 방식 생성 완료', {
+        sectionCount: Object.keys(result.sections).length,
+        totalLength: result.fullDocument.length,
+      });
+      return result.fullDocument;
+    } catch (error) {
+      console.error('[generate-doc] PRD 청킹 생성 실패:', error);
+      // 실패 시 기존 방식으로 fallback
+    }
+  }
+
   const prompt = getPromptForDocType(docType, summary, transcript, meetingInfo, contextDocs);
 
   // OpenAI 우선 명확히
