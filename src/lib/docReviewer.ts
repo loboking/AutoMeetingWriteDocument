@@ -526,6 +526,107 @@ const REVIEW_RULES: ReviewRule[] = [
       };
     },
   },
+  {
+    name: '페르소나 구체성',
+    description: '사용자 페르소나가 구체적으로 작성되었는지 확인',
+    weight: 0.05,
+    check: (content) => {
+      const issues: string[] = [];
+      const personaSection = content.match(/##[##\s]*5\.?\s*[대상 사용자|페르소나|Target Users]/i);
+
+      if (personaSection) {
+        const sectionStart = content.indexOf(personaSection[0]);
+        const sectionEnd = content.indexOf('##', sectionStart + 10);
+        const sectionContent = content.substring(sectionStart, sectionEnd > 0 ? sectionEnd : content.length);
+
+        // 구체적 정보 포함 여부 확인
+        const hasAge = /\d{2}\s*(세|년생)/i.test(sectionContent);
+        const hasLocation = /(거주지|지역|도시|시)/i.test(sectionContent);
+        const hasQuote = /["'].*["'].*인용구|목소리/i.test(sectionContent);
+        const hasGoal = /\d+\s*(만원|원|VND|USD|명|%)/i.test(sectionContent);
+
+        const missingElements = [];
+        if (!hasAge) missingElements.push('연령');
+        if (!hasLocation) missingElements.push('거주지');
+        if (!hasQuote) missingElements.push('인용구');
+        if (!hasGoal) missingElements.push('구체적 목표(수치)');
+
+        if (missingElements.length > 0) {
+          issues.push(`페르소나에 누락된 정보: ${missingElements.join(', ')}`);
+        }
+      } else {
+        issues.push('사용자 페르소나 섹션(5절)을 찾을 수 없습니다.');
+      }
+
+      return {
+        passed: issues.length === 0,
+        score: issues.length === 0 ? 100 : 50,
+        issues,
+      };
+    },
+  },
+  {
+    name: 'ERD 포함',
+    description: '데이터베이스 ERD 다이어그램이 포함되어 있는지 확인',
+    weight: 0.06,
+    check: (content) => {
+      const issues: string[] = [];
+      const hasERD = /```mermaid[\s\S]*erDiagram/.test(content);
+      const hasDBSection = /##[##\s]*9\.?\s*.*[DB|데이터베이스|Database]/i.test(content);
+
+      if (!hasERD) {
+        if (hasDBSection) {
+          issues.push('DB 설계 섹션이 있지만 ERD(Mermaid)가 누락되었습니다. 9.3절에 ERD를 추가해주세요.');
+        } else {
+          issues.push('DB 설계 섹션(9.3절)과 ERD가 누락되었습니다.');
+        }
+      }
+
+      return {
+        passed: hasERD,
+        score: hasERD ? 100 : 0,
+        issues,
+      };
+    },
+  },
+  {
+    name: '보안 섹션 상세성',
+    description: 'SaaS 보안 요구사항이 상세하게 작성되었는지 확인',
+    weight: 0.06,
+    check: (content) => {
+      const issues: string[] = [];
+      const securitySection = content.match(/##[##\s]*7\.?\s*[2|2\.| ]*.*[보안|Security]/i);
+
+      if (securitySection) {
+        const sectionStart = content.indexOf(securitySection[0]);
+        const nextSection = content.indexOf('##', sectionStart + 10);
+        const sectionContent = content.substring(sectionStart, nextSection > 0 ? nextSection : content.length);
+
+        // SaaS 보안 필수 요소 확인
+        const requiredElements = [
+          { pattern: /다중\s*테넌트|tenant.*id|Row.*Level.*Security|RLS/i, name: '다중 테넌트 격리' },
+          { pattern: /API.*키.*암호화|AES.*256|토큰.*암호화/i, name: 'API 키 암호화' },
+          { pattern: /세션.*30분|세션.*만료.*30/i, name: '세션 만료(30분)' },
+          { pattern: /감사.*로그|audit.*log|접속.*기록/i, name: '감사 로그' },
+          { pattern: /Rate.*Limit|API.*호출.*제한|속도.*제한/i, name: 'Rate Limiting' },
+        ];
+
+        const missingElements = requiredElements.filter(element => !element.pattern.test(sectionContent));
+
+        if (missingElements.length > 0) {
+          issues.push(`보안 섹션에 누락된 SaaS 필수 요소: ${missingElements.map(e => e.name).join(', ')}`);
+        }
+      } else {
+        issues.push('보안 요구사항 섹션(7.2절)을 찾을 수 없습니다.');
+      }
+
+      return {
+        passed: issues.length === 0,
+        score: issues.length === 0 ? 100 : 50,
+        issues,
+      };
+    },
+  },
 ];
 
 // 문서 검토 함수
@@ -605,6 +706,9 @@ function getSuggestion(ruleName: string): string {
     '회의 요약록 스타일 감지': 'PRD는 회의 요약록이 아닙니다. "우리는 ~를 구현한다"와 같은 능동태로 작성해주세요.',
     'SaaS 필수 요소 포함': 'SaaS 제품의 경우 다중 테넌트, 결제, 보안, 백오피스를 반드시 포함해주세요.',
     '섹션별 최소 길이': '각 섹션은 최소 200자 이상 상세하게 작성해주세요.',
+    '페르소나 구체성': '페르소나에 연령, 거주지, 인용구, 구체적 목표(수치 포함)를 모두 포함해주세요.',
+    'ERD 포함': '9.3절 데이터베이스 설계에 Mermaid ERD 다이어그램을 추가해주세요.',
+    '보안 섹션 상세성': '보안 섹션(7.2절)에 다중 테넌트, API 암호화, 세션 만료, 감사 로그를 포함해주세요.',
   };
 
   return suggestions[ruleName] || '항목을 개선하여 문서 품질을 높여주세요.';

@@ -171,18 +171,19 @@ SaaS 제품인 경우 다음 요소들을 **12절 SaaS 운영 요소**에 반드
 **최소 2개 이상 상세히 작성하세요:**
 
 **페르소나 1: [이름]**
-- **연령**: 00대
-- **직업/직군**:
+- **연령**: 00대 (구체적 나이)
+- **거주지**: [도시/지역]
+- **직업/직군**: [직업]
 - **기술 수준**: (초급/중급/고급)
-- **목표**:
-- **페인 포인트**:
-- **행동 패턴**:
+- **목표**: [구체적 목표, 수치 포함]
+- **페인 포인트**: [3개 이상 구체적 문제]
+- **행동 패턴**: [일과적 사용 시간, 주요 행동]
 - **인용구**: "사용자의 실제 목소리"
 
-| 페르소나 | 연령 | 직업 | 기술 수준 | 주요 목표 | 주요 페인 포인트 |
-|---------|------|------|-----------|-----------|-----------------|
-| [이름] | 00대 | [직업] | [수준] | [목표] | [페인 포인트] |
-| [이름] | 00대 | [직업] | [수준] | [목표] | [페인 포인트] |
+| 페르소나 | 연령 | 거주지 | 직업 | 기술 수준 | 주요 목표 | 주요 페인 포인트 |
+|---------|------|--------|------|-----------|-----------|-----------------|
+| [이름] | 00세 | [지역] | [직업] | [수준] | [구체적 목표] | [3개 이상] |
+| [이름] | 00세 | [지역] | [직업] | [수준] | [구체적 목표] | [3개 이상] |
 
 #### 5.2 사용자 시나리오
 **최소 2개 시나리오 작성하세요:**
@@ -225,13 +226,29 @@ SaaS 제품인 경우 다음 요소들을 **12절 SaaS 운영 요소**에 반드
 - 가용성: 99.9% (월간 다운타임 43분 이내)
 
 #### 7.2 보안 요구사항
-**최소 5개 이상 작성하세요:**
+**최소 10개 이상 작성하세요:**
+
+**7.2.1 인증 및 권한**
 - [ ] 이메일 인증 기반 회원가입
-- [ ] JWT 기반 인증/인가
+- [ ] JWT 기반 인증/인가 (Access Token 15분, Refresh Token 30일)
+- [ ] **세션 만료: 로그인 후 30분**
+- [ ] **2단계 인증 (TOTP)**: Pro 플랜 이상 선택사항
+
+**7.2.2 다중 테넌트 데이터 격리 (SaaS 필수)**
+- [ ] **Row-Level Security**: 모든 쿼리에 tenant_id 필수 포함
+- [ ] **API 키 암호화**: 서드파티 토큰 AES-256 양방향 암호화
+- [ ] **스토리지 격리**: 유저별 경로 분리 (/users/{user_id}/)
+
+**7.2.3 애플리케이션 보안**
 - [ ] HTTPS 통신 (TLS 1.3 이상)
-- [ ] 민감 데이터 암호화 저장 (AES-256)
-- [ ] SQL Injection, XSS 방지
+- [ ] SQL Injection, XSS, CSRF 방지
+- [ ] Rate Limiting: 플랜별 API 호출 제한
+- [ ] **감사 로그**: 데이터 접근 로그 기록 (보존 90일)
+
+**7.2.4 컴플라이언스**
+- [ ] **개인정보 처리방침**: 관련 법규 준수
 - [ ] 월 1회 취약점 점검
+- [ ] **데이터 보존 정책**: [TTL 명시, 예: 72시간 후 삭제]
 
 #### 7.3 호환성 요구사항
 **구체적인 버전 명시:**
@@ -250,21 +267,30 @@ SaaS 제품인 경우 다음 요소들을 **12절 SaaS 운영 요소**에 반드
 #### 8.2 주요 화면 구성
 **회의에서 논의된 주요 화면을 최소 3개 이상 기술하세요:**
 
-**화면 1: [화면명]**
-- **목적**: 사용자가 이 화면에서 하는 일
+**화면 1: [화면명 - 예: 대시보드/Dashboard]**
+- **목적**: 주요 지표 모니터링, 빠른 액션 실행
 - **주요 요소**:
-  - 헤더: [설명]
-  - 본문: [설명]
-  - 하단: [설명]
-- **인터랙션**: [사용자 동작과 반응]
+  - **헤더**: 로고, 사용자 프로필, 알림 bell, 크레딧 잔액 표시
+  - **본문 - 상단**: 통계 카드 4개 (총 매출, 활성 사용자, 진행 중 작업, 완료 작업)
+  - **본문 - 중앙**: 주요 지표 그래프 (최근 7일/30일 트렌드)
+  - **본문 - 하단**: 최근 활동 리스트, 빠른 액션 버튼
+- **인터랙션**: 실시간 WebSocket 업데이트, 카드 클릭 시 상세 이동
 
-**화면 2: [화면명 - 예: 대시보드/관리 화면]**
-- **목적**: SaaS의 경우 데이터 관리/모니터링
+**화면 2: [화면명 - 예: 작업 관리/Task Management]**
+- **목적**: 작업 목록 조회, 필터링, 일괄 처리
 - **주요 요소**:
-  - 통계 카드: 주요 지표 표시
-  - 데이터 테이블: 목록/관리
-  - 필터/검색: 데이터 조회
-- **인터랙션**: 실시간 업데이트, 정렬, 페이지네이션
+  - **필터 영역**: 상태(전체/진행중/완료), 기간, 카테고리
+  - **데이터 테이블**: 체크박스, ID, 상태, 생성일, 완료일, 액션 버튼
+  - **페이지네이션**: 1-10 / 100건, [이전] [다음]
+- **인터랙션**: 스크롤 시 무한 로딩, 체크박스 다중 선택 후 일괄 액션
+
+**화면 3: [화면명 - 예: 결과 상세/Result Detail]**
+- **목적**: 작업 결과 확인, 다운로드, 공유
+- **주요 요소**:
+  - **미리보기 영역**: 생성된 결과물 (이미지/비디오/PDF)
+  - **메타데이터**: 생성일, 소요 시간, 사용 크레딧, 관련 태그
+  - **액션 버튼**: 다운로드, 재생성, 공유, 삭제
+- **인터랙션**: 드래그앤드롭으로 재정렬, 키보드 단축키 지원
 
 ### 9. 기술 요구사항
 
@@ -326,14 +352,74 @@ graph TB
 \`\`\`
 
 #### 9.3 데이터베이스 설계
-**테이블별 구조를 작성하세요:**
+**ERD와 테이블 구조를 작성하세요:**
+
+**9.3.1 ERD (Entity Relationship Diagram)**
+\`\`\`mermaid
+erDiagram
+    USER ||--o{ SUBSCRIPTION : has
+    USER ||--o{ TASK : creates
+    USER ||--o{ CREDIT : owns
+    USER ||--o{ AUDIT_LOG : generates
+    SUBSCRIPTION ||--o{ TRANSACTION : contains
+
+    USER {
+        uuid id PK
+        string email UK
+        string password_hash
+        string stripe_customer_id
+        string plan_type
+        datetime created_at
+        datetime last_login
+    }
+
+    SUBSCRIPTION {
+        uuid id PK
+        uuid user_id FK
+        string plan_id
+        string status
+        datetime current_period_start
+        datetime current_period_end
+        boolean active
+    }
+
+    CREDIT {
+        uuid id PK
+        uuid user_id FK
+        int balance
+        datetime expires_at
+    }
+
+    TASK {
+        uuid id PK
+        uuid user_id FK
+        string type
+        string status
+        json input_data
+        json result_data
+        datetime created_at
+        datetime completed_at
+    }
+
+    AUDIT_LOG {
+        uuid id PK
+        uuid user_id FK
+        string action
+        string ip_address
+        json metadata
+        datetime created_at
+    }
+\`\`\`
+
+**9.3.2 테이블 상세**
 
 | 테이블명 | 주요 컬럼 | 관계 | 예상 데이터 수 | 백업 전략 |
 |---------|-----------|------|---------------|-----------|
-| users | id, email, password_hash, plan_type, created_at | 1:N | 10만건 | 일일 |
-| subscriptions | id, user_id, plan_id, status, current_period_start, current_period_end | N:1 | 10만건 | 일일 |
-| products | id, name, price, description, category (SaaS/커머스인 경우) | 1:N | 가변 | 주간 |
-| orders | id, user_id, product_id, amount, status, created_at (커머스인 경우) | N:1 | 100만건 | 주간 |
+| users | id, email, password_hash, plan_type, stripe_id, created_at | 1:N | 10만건 | 일일 |
+| subscriptions | id, user_id, plan_id, status, period_start, period_end | N:1 | 10만건 | 일일 |
+| credits | id, user_id, balance, expires_at | N:1 | 10만건 | 일일 |
+| tasks | id, user_id, type, status, input_data, result_data | N:1 | 100만건 | 주간 |
+| audit_logs | id, user_id, action, ip_address, metadata, created_at | N:1 | 500만건 | 월간 |
 
 ### 10. 릴리스 계획
 
