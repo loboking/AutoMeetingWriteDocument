@@ -20,7 +20,7 @@ import OpenAI from 'openai';
 export const runtime = 'nodejs';
 
 // Z.ai GLM 모델 설정 (코딩 플랜 구독 권장)
-const ZAI_MODEL = process.env.ZAI_MODEL || 'glm-4-plus';
+const ZAI_MODEL = process.env.ZAI_MODEL || 'glm-5';
 
 // OpenAI 클라이언트 초기화 함수 (빌드 시 실행 방지)
 function createOpenAIClient() {
@@ -256,12 +256,15 @@ async function generateDocumentWithContext(
     transcriptLength: transcript.length,
   });
 
+  // 최대 출력 토큰 (모델별 동적 설정)
+  const maxTokens = MODEL.includes('glm') ? 32768 : 16384; // GLM-5: 32k, GPT-4o: 16k
+
   try {
     const openai = createOpenAIClient();
     const response = await openai.chat.completions.create({
       model: MODEL,
       messages: [{ role: 'user', content: prompt }],
-      max_tokens: 16384, // 최대 출력 토큰 (GPT-4o: 16k, GLM-4: 8k)
+      max_tokens: maxTokens,
     });
 
     return response.choices[0]?.message?.content || '';

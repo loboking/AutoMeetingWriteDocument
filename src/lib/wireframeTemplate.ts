@@ -4,6 +4,21 @@ export function getWireframePrompt(baseInfo: string, transcript: string): string
 
 ${baseInfo}
 
+## 구체적 추출 가이드 (Concrete Extraction Guide)
+
+회의 내용에서 다음 정보를 **반드시 추출**하세요. 없는 경우 "추정 필요"라고 표시하세요.
+
+### 와이어프레임 추출 체크리스트
+- [ ] **레이아웃 구조**: 헤더/메인/사이드바/푸터
+- [ ] **UI 요소**: 버튼, 입력필드, 카드, 테이블
+- [ ] **요소 크기**: 너비, 높이, 간격(px 단위)
+- [ ] **색상**: Primary, Secondary, 배경색
+- [ ] **폰트**: 크기, 굵기, 행간
+- [ ] **인터랙션**: 호버, 포커스, 활성 상태
+- [ ] **반응형**: 데스크톱/태블릿/모바일 레이아웃
+
+---
+
 ## 원본 회의 내용 (분석 대상)
 ${transcript}
 

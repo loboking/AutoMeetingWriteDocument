@@ -4,6 +4,22 @@ export function getApiSpecPrompt(baseInfo: string, transcript: string): string {
 
 ${baseInfo}
 
+## 구체적 추출 가이드 (Concrete Extraction Guide)
+
+회의 내용에서 다음 정보를 **반드시 추출**하세요. 없는 경우 "추정 필요"라고 표시하세요.
+
+### API 추출 체크리스트
+- [ ] **엔드포인트**: HTTP 메서드, URL 경로, 목적
+- [ ] **요청 파라미터**: Query, Path, Body 필드명과 타입
+- [ ] **응답 형식**: 성공/실패 시 JSON 구조
+- [ ] **상태 코드**: 사용되는 HTTP 상태 코드 (200, 201, 400, 401, 404, 500 등)
+- [ ] **인증方式**: JWT, API Key, OAuth 등
+- [ ] **Rate Limit**: 요청 횟수 제한
+- [ ] **타임아웃**: API 응답 시간 제한
+- [ ] **버전 관리**: API 버전 (v1, v2)
+
+---
+
 ## 원본 회의 내용 (분석 대상)
 ${transcript}
 

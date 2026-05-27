@@ -4,6 +4,22 @@ export function getDatabasePrompt(baseInfo: string, transcript: string): string 
 
 ${baseInfo}
 
+## 구체적 추출 가이드 (Concrete Extraction Guide)
+
+회의 내용에서 다음 정보를 **반드시 추출**하세요. 없는 경우 "추정 필요"라고 표시하세요.
+
+### 데이터베이스 추출 체크리스트
+- [ ] **엔티티**: 테이블명, 목적, 주요 필드
+- [ ] **관계**: 1:1, 1:N, N:N 관계
+- [ ] **필드 명세**: 컬럼명, 타입, 길이, NULL 여부
+- [ ] **제약조건**: PK, FK, UNIQUE, CHECK
+- [ ] **인덱스**: 검색 자주使用的 컬럼
+- [ ] **데이터 크기**: 예상 레코드 수, 증가율
+- [ ] **트랜잭션**: ACID 요구사항
+- [ ] **백업/복구**: RPO/RTO 목표
+
+---
+
 ## 원본 회의 내용 (분석 대상)
 ${transcript}
 

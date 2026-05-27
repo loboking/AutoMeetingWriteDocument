@@ -4,6 +4,22 @@ export function getDeploymentPrompt(baseInfo: string, transcript: string): strin
 
 ${baseInfo}
 
+## 구체적 추출 가이드 (Concrete Extraction Guide)
+
+회의 내용에서 다음 정보를 **반드시 추출**하세요. 없는 경우 "추정 필요"라고 표시하세요.
+
+### 배포 추출 체크리스트
+- [ ] **환경**: 개발/스테이징/프로덕션 URL
+- [ ] **리소스**: CPU, 메모리, 디스크 사양
+- [ ] **배포 방식**: Vercel, Docker, Kubernetes 등
+- [ ] **환경변수**: 필수 환경변수 목록
+- [ ] **배포 일정**: 배포 시간대, 빈도
+- [ ] **다운타임**: 허용 가능한 중단 시간
+- [ ] **롤백**: 롤백 절차 및 시간
+- [ ] **모니터링**: 헬스체크 URL, 알림 채널
+
+---
+
 ## 원본 회의 내용 (분석 대상)
 ${transcript}
 
