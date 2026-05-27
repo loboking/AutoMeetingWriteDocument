@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { FileText, Download, Copy, Check, Loader2, Plus, Edit, Save, Eye, File, Code, BookOpen, Presentation, Printer, ChevronLeft, ChevronRight, Terminal, CheckCircle2, Circle, ToggleLeft, ToggleRight, Lock, Unlock, AlertTriangle } from 'lucide-react';
+import { FileText, Download, Copy, Check, Loader2, Plus, Edit, Save, Eye, File, Code, BookOpen, Presentation, Printer, ChevronLeft, ChevronRight, Terminal, CheckCircle2, Circle, ToggleLeft, ToggleRight, Lock, Unlock, AlertTriangle, Share2 } from 'lucide-react';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { saveAs } from 'file-saver';
 import * as XLSX from 'xlsx';
@@ -85,6 +85,8 @@ export function PrdViewer() {
 
   const [editedContent, setEditedContent] = useState('');
   const [copied, setCopied] = useState(false);
+  const [sharing, setSharing] = useState(false);
+  const [showShareSuccess, setShowShareSuccess] = useState(false);
   const [viewMode, setViewMode] = useState<'raw' | 'preview' | 'visual' | 'terminal'>('visual'); // 기본을 시각화로 변경
   const [terminalCommands, setTerminalCommands] = useState<string[]>([]);
   const treeRef = useRef<HTMLDivElement>(null);
@@ -503,6 +505,43 @@ export function PrdViewer() {
 
     const blob = new Blob([combinedContent], { type: 'text/markdown' });
     saveAs(blob, `${safeTitle}-전체문서-${timestamp}.md`);
+  };
+
+  const handleShare = async () => {
+    if (!currentMeeting) return;
+
+    // 최소 하나의 문서가 있는지 확인
+    const hasDoc = Object.values(documents).some(d => d && d.trim().length > 0);
+    if (!hasDoc) {
+      alert('공유할 문서가 없습니다. 먼저 문서를 생성해주세요.');
+      return;
+    }
+
+    setSharing(true);
+    try {
+      const response = await fetch('/api/share', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(currentMeeting),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || '공유 링크 생성 실패');
+      }
+
+      const { shareUrl } = await response.json();
+      const fullUrl = `${window.location.origin}${shareUrl}`;
+
+      await navigator.clipboard.writeText(fullUrl);
+      setShowShareSuccess(true);
+      setTimeout(() => setShowShareSuccess(false), 3000);
+    } catch (error) {
+      console.error('Share error:', error);
+      alert(error instanceof Error ? error.message : '공유 링크 생성에 실패했습니다.');
+    } finally {
+      setSharing(false);
+    }
   };
 
   const handleSaveEdit = () => {
@@ -1304,6 +1343,32 @@ export function PrdViewer() {
                 </div>
               </div>
             )}
+
+            {/* 공유 버튼 */}
+            <Button
+              onClick={handleShare}
+              disabled={sharing || Object.keys(documents).filter(k => documents[k as DocType]).length === 0}
+              size="sm"
+              variant="outline"
+              className="h-8"
+            >
+              {sharing ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  생성 중...
+                </>
+              ) : showShareSuccess ? (
+                <>
+                  <CheckCircle2 className="w-4 h-4 mr-2 text-green-500" />
+                  링크 복사됨!
+                </>
+              ) : (
+                <>
+                  <Share2 className="w-4 h-4 mr-2" />
+                  공유
+                </>
+              )}
+            </Button>
 
             {/* 모두 내보내기 버튼 */}
             <Button
