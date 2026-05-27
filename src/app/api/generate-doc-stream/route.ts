@@ -88,13 +88,6 @@ const DOCUMENT_TITLES: Record<DocType, string> = {
   'test-plan': '테스트 계획',
 };
 
-// 텍스트 자르기
-const MAX_TRANSCRIPT_LENGTH = 20000;
-function truncateTranscript(text: string): string {
-  if (text.length <= MAX_TRANSCRIPT_LENGTH) return text;
-  return text.substring(0, MAX_TRANSCRIPT_LENGTH) + '\n\n[녹취록이 너무 길어서 잘렸습니다.]';
-}
-
 // 프롬프트 생성 함수 (기존과 동일)
 function getPromptForDocType(
   docType: DocType,
@@ -108,10 +101,8 @@ function getPromptForDocType(
     contextSection = '\n## 이전에 생성된 문서\n\n';
     for (const [key, content] of Object.entries(contextDocs)) {
       const title = DOCUMENT_TITLES[key as DocType] || key;
-      const truncatedContent = content.length > 6000
-        ? content.substring(0, 6000) + '\n\n... (생략) ...'
-        : content;
-      contextSection += `### ${title}\n\n${truncatedContent}\n\n---\n\n`;
+      // 전체 컨텍스트 전달 (GLM-4의 128K 토큰 활용)
+      contextSection += `### ${title}\n\n${content}\n\n---\n\n`;
     }
   }
 
@@ -151,8 +142,7 @@ async function generateDocument(
   meetingInfo: { title: string; date: string },
   contextDocs: Record<string, string> = {}
 ): Promise<string> {
-  const truncatedTranscript = truncateTranscript(transcript);
-  const prompt = getPromptForDocType(docType, summary, truncatedTranscript, meetingInfo, contextDocs);
+  const prompt = getPromptForDocType(docType, summary, transcript, meetingInfo, contextDocs);
 
   const hasOpenAI = !!process.env.OPENAI_API_KEY;
   const useZai = !hasOpenAI && !!process.env.ZAI_API_KEY;
@@ -173,7 +163,7 @@ async function generateDocument(
   }
 }
 
-// GET 요청에 대한 SSE 스트림
+// GET 요청에 대한 SSE 스트림 (작은 데이터용)
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const summaryParam = searchParams.get('summary');
@@ -188,6 +178,32 @@ export async function GET(request: NextRequest) {
   const summary: MeetingSummary = JSON.parse(summaryParam);
   const meetingInfo = { title, date };
 
+  return generateDocumentStream(summary, transcript, meetingInfo);
+}
+
+// POST 요청에 대한 SSE 스트림 (큰 데이터용)
+export async function POST(request: NextRequest) {
+  const body = await request.json();
+  const summary = body.summary as MeetingSummary;
+  const transcript = body.transcript || '';
+  const title = body.title || '회의';
+  const date = body.date || new Date().toLocaleDateString('ko-KR');
+
+  if (!summary) {
+    return new Response('summary 파라미터가 필요합니다.', { status: 400 });
+  }
+
+  const meetingInfo = { title, date };
+
+  return generateDocumentStream(summary, transcript, meetingInfo);
+}
+
+// 공통 스트림 생성 함수
+function generateDocumentStream(
+  summary: MeetingSummary,
+  transcript: string,
+  meetingInfo: { title: string; date: string }
+): Response {
   // SSE 스트림 생성
   const encoder = new TextEncoder();
   const stream = new ReadableStream({

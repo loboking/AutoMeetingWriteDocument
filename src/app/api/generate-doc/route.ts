@@ -137,10 +137,7 @@ async function generateDocument(
   transcript: string,
   meetingInfo: { title: string; date: string }
 ): Promise<string> {
-  // transcript 길이 제한
-  const truncatedTranscript = truncateTranscript(transcript);
-
-  const prompt = getPromptForDocType(docType, summary, truncatedTranscript, meetingInfo, {});
+  const prompt = getPromptForDocType(docType, summary, transcript, meetingInfo, {});
 
   // OpenAI 우선 명확히
   const hasOpenAI = !!process.env.OPENAI_API_KEY;
@@ -237,13 +234,6 @@ function getContextDocs(dependsOn: DocType[], docs: GeneratedDocs): Record<strin
   return context;
 }
 
-// 텍스트 자르기 (길이 제한)
-const MAX_TRANSCRIPT_LENGTH = 20000; // 약 8000 토큰 (상세한 문서 생성 위해 증가)
-function truncateTranscript(text: string): string {
-  if (text.length <= MAX_TRANSCRIPT_LENGTH) return text;
-  return text.substring(0, MAX_TRANSCRIPT_LENGTH) + '\n\n[참고: 녹취록이 너무 길어서 잘렸습니다. 전체 내용은 회의 요약을 참고해주세요.]';
-}
-
 // 컨텍스트(이전 문서)를 참조하여 문서 생성
 async function generateDocumentWithContext(
   docType: DocType,
@@ -252,10 +242,7 @@ async function generateDocumentWithContext(
   meetingInfo: { title: string; date: string },
   contextDocs: Record<string, string>
 ): Promise<string> {
-  // transcript 길이 제한
-  const truncatedTranscript = truncateTranscript(transcript);
-
-  const prompt = getPromptForDocType(docType, summary, truncatedTranscript, meetingInfo, contextDocs);
+  const prompt = getPromptForDocType(docType, summary, transcript, meetingInfo, contextDocs);
 
   // OpenAI 우선 명확히
   const hasOpenAI = !!process.env.OPENAI_API_KEY;
@@ -267,7 +254,6 @@ async function generateDocumentWithContext(
     hasContextDocs: Object.keys(contextDocs).length > 0,
     contextKeys: Object.keys(contextDocs),
     transcriptLength: transcript.length,
-    truncatedLength: truncatedTranscript.length,
   });
 
   try {
@@ -298,11 +284,8 @@ function getPromptForDocType(
     contextSection = '\n## 이전에 생성된 문서 (참고용)\n\n';
     for (const [key, content] of Object.entries(contextDocs)) {
       const title = DOCUMENT_TITLES[key as DocType] || key;
-      // 너무 길면 앞부분만 사용 (최대 6000자로 증가)
-      const truncatedContent = content.length > 6000
-        ? content.substring(0, 6000) + '\n\n... (내용 생략) ...'
-        : content;
-      contextSection += `### ${title}\n\n${truncatedContent}\n\n---\n\n`;
+      // 전체 컨텍스트 전달 (GLM-4의 128K 토큰 활용)
+      contextSection += `### ${title}\n\n${content}\n\n---\n\n`;
     }
   }
 

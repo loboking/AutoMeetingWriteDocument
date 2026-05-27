@@ -36,12 +36,6 @@ import { InAppTerminal } from '@/components/InAppTerminal';
 import { CommandPanel } from '@/components/CommandPanel';
 
 export function PrdViewer() {
-  // 디버그: DOCUMENTS 배열 출력
-  if (typeof window !== 'undefined') {
-    console.log('DOCUMENTS array:', DOCUMENTS);
-    console.log('DOCUMENTS length:', DOCUMENTS.length);
-  }
-
   const { currentMeeting, updateCurrentMeeting, toggleCompleteDoc, isDocCompleted, getNextIncompleteDoc, setAutoAdvance } = useMeetingStore();
   const {
     getDocStatus,
@@ -384,17 +378,22 @@ export function PrdViewer() {
     });
 
     try {
-      // SSE 스트림 연결
-      const params = new URLSearchParams({
-        summary: JSON.stringify(currentMeeting.summary),
-        transcript: currentMeeting.transcript || '',
-        title: currentMeeting.title,
-        date: new Date(currentMeeting.createdAt).toLocaleDateString('ko-KR'),
+      // SSE 스트림 연결 (POST 사용)
+      const response = await fetch('/api/generate-doc-stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          summary: currentMeeting.summary,
+          transcript: currentMeeting.transcript || '',
+          title: currentMeeting.title,
+          date: new Date(currentMeeting.createdAt).toLocaleDateString('ko-KR'),
+        }),
       });
 
-      const response = await fetch(`/api/generate-doc-stream?${params.toString()}`);
-
-      if (!response.ok) throw new Error('스트림 연결 실패');
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(errorText || '스트림 연결 실패');
+      }
 
       const reader = response.body?.getReader();
       const decoder = new TextDecoder();
@@ -1023,8 +1022,8 @@ export function PrdViewer() {
         <div
           id="document-list-container"
           ref={treeRef}
-          className="overflow-y-auto"
-          style={{ height: 'calc(100% - 60px)' }}
+          className="overflow-y-auto overflow-x-hidden"
+          style={{ height: 'calc(100% - 60px)', minHeight: '400px' }}
         >
           <Tabs value={activeDoc} onValueChange={(v) => {
             const newDoc = v as DocType;
@@ -1053,11 +1052,7 @@ export function PrdViewer() {
               className="bg-transparent border-none p-0 h-auto flex flex-col items-start gap-0.5 rounded-none w-full"
               style={{ scrollBehavior: 'auto', overflowAnchor: 'none', scrollPaddingTop: 0 }}
             >
-              {DOCUMENTS.map((doc, index) => {
-                // 디버그: 콘솔에 인덱스 출력
-                if (typeof window !== 'undefined') {
-                  console.log(`Rendering doc ${index}:`, doc.key, doc.title);
-                }
+              {DOCUMENTS.map((doc) => {
                 const hasDoc = !!documents[doc.key];
                 const { canGenerate } = canGenerateDoc(doc.key, documents);
                 const isDisabled = !hasDoc && !canGenerate;

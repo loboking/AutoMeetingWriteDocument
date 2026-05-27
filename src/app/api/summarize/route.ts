@@ -32,15 +32,6 @@ function createOpenAIClient() {
   });
 }
 
-// 최대 입력 길이 (토큰 제한 고려, 한국어 1글자 ≈ 0.4 토큰)
-const MAX_INPUT_LENGTH = 15000; // 약 6000 토큰
-
-// 텍스트 자르기 (길이 제한)
-function truncateText(text: string, maxLength: number): string {
-  if (text.length <= maxLength) return text;
-  return text.substring(0, maxLength) + '... [요약을 위해 텍스트가 잘렸습니다]';
-}
-
 // 코딩 플랜 GLM API를 통한 요약 생성
 async function summarizeWithGPT(text: string, context?: string): Promise<MeetingSummary> {
   // OpenAI 우선 명확히 (함수 시작 시점에 한 번만 결정)
@@ -48,19 +39,13 @@ async function summarizeWithGPT(text: string, context?: string): Promise<Meeting
   const useZai = !hasOpenAI && !!process.env.ZAI_API_KEY;
   const MODEL = useZai ? (process.env.ZAI_MODEL || 'glm-5.1') : 'gpt-4o';
 
-  console.log('[API] 요약 모델 선택', { hasOpenAI, useZai, MODEL });
-
-  // 입력 길이 확인 및 제한
-  const truncatedText = truncateText(text, MAX_INPUT_LENGTH);
-  if (text.length > MAX_INPUT_LENGTH) {
-    console.warn(`[API] 텍스트가 너무 길어서 자름: ${text.length} → ${MAX_INPUT_LENGTH}`);
-  }
+  console.log('[API] 요약 모델 선택', { hasOpenAI, useZai, MODEL, textLength: text.length });
 
   const prompt = `당신은 회의록 전문가입니다. 다음 회의 내용을 **상세하게 분석**하여 구조화된 요약을 제공해주세요.
 
 ## 회의 녹취록 (전체)
 \`\`\`
-${truncatedText}
+${text}
 \`\`\`
 
 ${context ? `## 추가 맥락\n${context}` : ''}
