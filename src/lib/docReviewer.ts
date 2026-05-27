@@ -57,7 +57,7 @@ const REVIEW_RULES: ReviewRule[] = [
   {
     name: '최소 길이',
     description: '문서의 최소 길이를 충족하는지 확인',
-    weight: 0.15,
+    weight: 0.10,
     check: (content) => {
       const length = content.length;
       const minLength = 1500;
@@ -77,7 +77,7 @@ const REVIEW_RULES: ReviewRule[] = [
   {
     name: '섹션 완성',
     description: '필수 섹션이 모두 포함되어 있는지 확인',
-    weight: 0.25,
+    weight: 0.20,
     check: (content) => {
       const issues: string[] = [];
       const lines = content.split('\n');
@@ -160,7 +160,7 @@ const REVIEW_RULES: ReviewRule[] = [
   {
     name: '구체성',
     description: '모호한 표현(TBD, 추후, 등)이 과도하게 사용되지 않았는지 확인',
-    weight: 0.15,
+    weight: 0.12,
     check: (content) => {
       const vaguePatterns = [
         /\bTBD\b/g,
@@ -201,7 +201,7 @@ const REVIEW_RULES: ReviewRule[] = [
   {
     name: '상세성',
     description: '각 섹션이 충분히 상세하게 작성되었는지 확인',
-    weight: 0.15,
+    weight: 0.10,
     check: (content) => {
       const lines = content.split('\n');
       const sections = lines.filter((line) => line.match(/^#+\s/));
@@ -224,7 +224,7 @@ const REVIEW_RULES: ReviewRule[] = [
   {
     name: '전문성',
     description: '전문 용어와 기술적인 내용이 포함되어 있는지 확인',
-    weight: 0.1,
+    weight: 0.08,
     check: (content) => {
       const technicalTerms = [
         'API', 'REST', 'JSON', 'SQL', 'ERD', 'WBS', 'PRD', 'UI', 'UX',
@@ -242,6 +242,174 @@ const REVIEW_RULES: ReviewRule[] = [
       return {
         passed: foundTerms.length >= 3,
         score: Math.min(foundTerms.length / 3, 1) * 100,
+        issues,
+      };
+    },
+  },
+  {
+    name: 'AI 모델명 통일',
+    description: 'AI 모델명이 일관되게 사용되었는지 확인 (GLM-5 권장)',
+    weight: 0.05,
+    check: (content) => {
+      const issues: string[] = [];
+      const hasGPT4 = /GPT-?4/gi.test(content);
+      const hasGLM = /GLM-?[545]/gi.test(content);
+      const hasGemini = /Gemini/gi.test(content);
+
+      if (hasGPT4 && !hasGLM) {
+        issues.push('GPT-4가 명시되어 있습니다. 현재 프로젝트는 GLM-5를 사용 중입니다. 모델명을 통일해주세요.');
+      }
+      if (hasGemini && hasGPT4) {
+        issues.push('복수의 AI 모델(GPT-4, Gemini)이 혼재되어 있습니다. 하나의 모델로 통일해주세요.');
+      }
+
+      return {
+        passed: !hasGPT4 || hasGLM,
+        score: (hasGPT4 && !hasGLM) ? 0 : 100,
+        issues,
+      };
+    },
+  },
+  {
+    name: 'DB 구조 적합성',
+    description: 'SaaS/커머스에 적합한 테이블 구조인지 확인',
+    weight: 0.07,
+    check: (content) => {
+      const issues: string[] = [];
+      const hasUsersTable = /users?.*id|users\s*id/i.test(content);
+      const hasOnlyPosts = /posts?.*id|posts\s*id/i.test(content);
+      const hasSaaSFields = /(subscriptions|products|orders|plans).*id/i.test(content);
+
+      if (hasUsersTable && hasOnlyPosts && !hasSaaSFields) {
+        issues.push('DB 구조가 게시판 형태(users, posts)입니다. SaaS/커머스인 경우 subscriptions, products, orders 테이블이 필요합니다.');
+      }
+
+      return {
+        passed: !hasOnlyPosts || hasSaaSFields,
+        score: hasSaaSFields ? 100 : (hasOnlyPosts ? 30 : 100),
+        issues,
+      };
+    },
+  },
+  {
+    name: '수치 정합성',
+    description: '인원 수, 일정 등 수치가 문서 전체에서 일치하는지 확인',
+    weight: 0.08,
+    check: (content) => {
+      const issues: string[] = [];
+      const betaTesterMatches = content.match(/베타.*?(\d+)\s*명/gi);
+      const successCriteriaMatches = content.match(/테스터.*?(\d+)\s*명/gi);
+
+      if (betaTesterMatches && successCriteriaMatches) {
+        const betaNumbers = betaTesterMatches.map(m => parseInt(m.match(/\d+/)?.[0] || '0'));
+        const successNumbers = successCriteriaMatches.map(m => parseInt(m.match(/\d+/)?.[0] || '0'));
+
+        for (const beta of betaNumbers) {
+          for (const success of successNumbers) {
+            if (beta !== success && Math.abs(beta - success) > 5) {
+              issues.push(`베타 테스터 수(${beta}명)와 성공 기준(${success}명)이 일치하지 않습니다.`);
+            }
+          }
+        }
+      }
+
+      return {
+        passed: issues.length === 0,
+        score: issues.length === 0 ? 100 : 50,
+        issues,
+      };
+    },
+  },
+  {
+    name: '세션 정책 일치',
+    description: '보안 요구사항과 컴플라이언스의 세션 만료 시간이 일치하는지 확인',
+    weight: 0.05,
+    check: (content) => {
+      const issues: string[] = [];
+      const sessionMatches = content.match(/세션.*?(\d+)\s*(시간|분)/gi);
+
+      if (sessionMatches && sessionMatches.length > 1) {
+        const values = sessionMatches.map(m => {
+          const num = parseInt(m.match(/\d+/)?.[0] || '0');
+          const unit = m.includes('시간') ? 60 : 1; // 시간→분 변환
+          return num * unit;
+        });
+
+        const uniqueValues = [...new Set(values)];
+        if (uniqueValues.length > 1) {
+          issues.push(`세션 만료 시간이 문서에서 서로 다르게 명시되어 있습니다 (${sessionMatches.join(', ')}). 하나로 통일해주세요.`);
+        }
+      }
+
+      return {
+        passed: issues.length === 0,
+        score: issues.length === 0 ? 100 : 0,
+        issues,
+      };
+    },
+  },
+  {
+    name: '화면 구성 충실',
+    description: '최소 3개 이상의 화면이 정의되어 있는지 확인',
+    weight: 0.05,
+    check: (content) => {
+      const issues: string[] = [];
+      const screenSectionMatches = content.match(/화면\s*\d+[:\s]*[^\n]+/gi);
+
+      if (screenSectionMatches && screenSectionMatches.length < 3) {
+        issues.push(`화면 구성이 ${screenSectionMatches.length}개뿐입니다. 최소 3개 이상의 화면을 정의해주세요.`);
+      }
+
+      return {
+        passed: !screenSectionMatches || screenSectionMatches.length >= 3,
+        score: screenSectionMatches && screenSectionMatches.length >= 3 ? 100 : 50,
+        issues,
+      };
+    },
+  },
+  {
+    name: 'API 명세서 링크',
+    description: '부록에 API 명세서 링크가 포함되어 있는지 확인',
+    weight: 0.02,
+    check: (content) => {
+      const issues: string[] = [];
+      const hasApiLink = /API.*링크.*TBD|api.*명세|\/docs\/api|API.*endpoint/i.test(content);
+
+      if (!hasApiLink) {
+        issues.push('부록에 API 명세서 링크가 누락되어 있습니다. 15.2절에 "[API 명세서 링크: TBD 또는 /docs/api]"를 추가해주세요.');
+      }
+
+      return {
+        passed: hasApiLink,
+        score: hasApiLink ? 100 : 0,
+        issues,
+      };
+    },
+  },
+  {
+    name: '용어 일관성',
+    description: '문서 전체에서 용어가 일관되게 사용되는지 확인',
+    weight: 0.04,
+    check: (content) => {
+      const issues: string[] = [];
+
+      // "사용자" vs "유저" 혼용 체크
+      const hasUser = /사용자/gi.test(content);
+      const hasUserKorean = /유저/gi.test(content);
+      if (hasUser && hasUserKorean) {
+        issues.push('"사용자"와 "유저"가 혼용되어 있습니다. 하나로 통일해주세요.');
+      }
+
+      // "원" vs "원화" 혼용 체크
+      const wonMatches = content.match(/(\d+)\s*원/g);
+      const wonHwaMatches = content.match(/(\d+)\s*원화/g);
+      if (wonMatches && wonHwaMatches && wonMatches.length > 2 && wonHwaMatches.length > 0) {
+        issues.push('"원"과 "원화"가 혼용되어 있습니다. 하나로 통일해주세요.');
+      }
+
+      return {
+        passed: issues.length === 0,
+        score: issues.length === 0 ? 100 : 70,
         issues,
       };
     },
@@ -315,6 +483,13 @@ function getSuggestion(ruleName: string): string {
     '구체성': 'TBD, 미정 등을 구체적인 내용으로 대체해주세요.',
     '상세성': '각 섹션에 배경, 목적, 세부 내용, 예시 등을 추가해주세요.',
     '전문성': '관련 분야의 전문 용어와 기술적 내용을 포함해주세요.',
+    'AI 모델명 통일': 'AI 모델명을 프로젝트 표준(GLM-5)으로 통일해주세요.',
+    'DB 구조 적합성': 'SaaS/커머스에 맞는 테이블 구조(subscriptions, products, orders)로 설계해주세요.',
+    '수치 정합성': '베타 테스터 수, 일정 등 수치가 문서 전체에서 일치하는지 확인해주세요.',
+    '세션 정책 일치': '보안 요구사항과 컴플라이언스의 세션 만료 시간을 통일해주세요.',
+    '화면 구성 충실': '최소 3개 이상의 화면을 상세하게 정의해주세요.',
+    'API 명세서 링크': '부록 15.2절에 API 명세서 링크를 추가해주세요.',
+    '용어 일관성': '문서 전체에서 용어(사용자/유저, 원/원화 등)를 일관되게 사용해주세요.',
   };
 
   return suggestions[ruleName] || '항목을 개선하여 문서 품질을 높여주세요.';

@@ -19,7 +19,7 @@ import OpenAI from 'openai';
 export const runtime = 'nodejs';
 
 // Z.ai GLM 모델 설정
-const ZAI_MODEL = process.env.ZAI_MODEL || 'glm-4-plus';
+const ZAI_MODEL = process.env.ZAI_MODEL || 'glm-5';
 
 // OpenAI 클라이언트 초기화
 function createOpenAIClient() {
@@ -101,7 +101,7 @@ function getPromptForDocType(
     contextSection = '\n## 이전에 생성된 문서\n\n';
     for (const [key, content] of Object.entries(contextDocs)) {
       const title = DOCUMENT_TITLES[key as DocType] || key;
-      // 전체 컨텍스트 전달 (GLM-4의 128K 토큰 활용)
+      // 전체 컨텍스트 전달 (GLM-5의 128K 토큰 활용)
       contextSection += `### ${title}\n\n${content}\n\n---\n\n`;
     }
   }

@@ -149,7 +149,7 @@ async function generateDocument(
     const response = await openai.chat.completions.create({
       model: MODEL,
       messages: [{ role: 'user', content: prompt }],
-      max_tokens: 16384, // 최대 출력 토큰 (GPT-4o: 16k, GLM-4: 8k)
+      max_tokens: 32768, // 최대 출력 토큰 (GLM-5: 32k)
     });
 
     return response.choices[0]?.message?.content || '';
@@ -257,7 +257,7 @@ async function generateDocumentWithContext(
   });
 
   // 최대 출력 토큰 (모델별 동적 설정)
-  const maxTokens = MODEL.includes('glm') ? 32768 : 16384; // GLM-5: 32k, GPT-4o: 16k
+  const maxTokens = MODEL.includes('glm') ? 32768 : 16384; // GLM-5: 32k, fallback: 16k
 
   try {
     const openai = createOpenAIClient();
