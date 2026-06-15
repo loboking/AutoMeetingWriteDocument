@@ -627,7 +627,248 @@ const REVIEW_RULES: ReviewRule[] = [
       };
     },
   },
+  {
+    name: '핵심 지표 수치 일관성',
+    description: '같은 표준 지표(ARPU/MRR/객단가/전환율/이탈률)가 문서 전체에서 단일 값으로 쓰였는지 확인',
+    weight: 0.05,
+    check: (content) => {
+      const issues: string[] = [];
+      if (!isPrdContent(content)) {
+        return { passed: true, score: 100, issues };
+      }
+      // 지표명 뒤 0~12자 내 "숫자(,포함)+원/%" 형태 값을 수집해, 한 지표에 2개 이상 서로 다른 값이면 모순
+      const metrics = ['ARPU', 'MRR', 'ARR', '객단가', '전환율', '이탈률', 'LTV', 'CAC'];
+      let contradictions = 0;
+      for (const metric of metrics) {
+        const re = new RegExp(`${metric}[^0-9%]{0,12}?([\\d,]+)\\s*(원|%)`, 'g');
+        const values = new Set<string>();
+        let m: RegExpExecArray | null;
+        while ((m = re.exec(content)) !== null) {
+          values.add(`${m[1].replace(/,/g, '')}${m[2]}`);
+        }
+        if (values.size >= 2) {
+          contradictions++;
+          issues.push(`'${metric}' 지표가 문서에서 서로 다른 값(${[...values].join(', ')})으로 나타납니다. 하나의 값으로 통일하세요.`);
+        }
+      }
+      return {
+        passed: contradictions === 0,
+        score: contradictions === 0 ? 100 : Math.max(30, 100 - contradictions * 25),
+        issues,
+      };
+    },
+  },
+  {
+    name: '과장 표현 탐지',
+    description: '입증 불가능한 단정 표현(완벽/원천 차단/100% 등)이 사용되지 않았는지 확인',
+    weight: 0.04,
+    check: (content) => {
+      const issues: string[] = [];
+      if (!isPrdContent(content)) {
+        return { passed: true, score: 100, issues };
+      }
+
+      const exaggerationPattern = /완벽(히|하게)?|원천\s*차단|100%\s*(보장|차단|우회)|무조건|절대\s*안|완전히\s*우회/g;
+      const matches = content.match(exaggerationPattern);
+      const count = matches ? matches.length : 0;
+
+      if (count > 0) {
+        issues.push(`입증 불가능한 단정 표현(완벽/원천 차단/100% 등)이 ${count}곳 발견되었습니다. 측정 가능한 한정적 표현으로 바꾸세요.`);
+      }
+
+      return {
+        passed: count === 0,
+        score: count === 0 ? 100 : 50,
+        issues,
+      };
+    },
+  },
+  {
+    name: '기능 순환 의존성',
+    description: '기능 의존성에 순환 참조(F-A↔F-B)가 없는지 확인',
+    weight: 0.03,
+    check: (content) => {
+      const issues: string[] = [];
+      if (!isPrdContent(content)) {
+        return { passed: true, score: 100, issues };
+      }
+
+      // 각 줄에서 기능 ID(F-숫자)와 그 줄에 명시된 의존 기능(F-숫자) 추출
+      // 의존 컬럼/표현이 있는 줄만 대상으로 보수적으로 그래프 구성
+      const graph = new Map<string, Set<string>>();
+      const lines = content.split('\n');
+
+      for (const line of lines) {
+        // 줄에 "의존" 단서가 있어야 의존 관계로 간주 (false positive 방지)
+        if (!/의존/.test(line)) continue;
+
+        const ids = line.match(/F-\d+/g);
+        if (!ids || ids.length < 2) continue;
+
+        const source = ids[0];
+        // 첫 ID를 기능 주체로 보고, "의존" 키워드 이후의 ID들을 의존 대상으로 추출
+        const depPart = line.slice(line.indexOf('의존'));
+        const depTargets = depPart.match(/F-\d+/g);
+        if (!depTargets) continue;
+
+        if (!graph.has(source)) graph.set(source, new Set());
+        for (const target of depTargets) {
+          if (target !== source) {
+            graph.get(source)!.add(target);
+          }
+        }
+      }
+
+      if (graph.size === 0) {
+        return { passed: true, score: 100, issues };
+      }
+
+      // DFS로 사이클 검출
+      const WHITE = 0, GRAY = 1, BLACK = 2;
+      const colors = new Map<string, number>();
+      const cyclePairs = new Set<string>();
+      const parent = new Map<string, string>();
+
+      const dfs = (node: string) => {
+        colors.set(node, GRAY);
+        const neighbors = graph.get(node);
+        if (neighbors) {
+          for (const next of neighbors) {
+            const c = colors.get(next) ?? WHITE;
+            if (c === WHITE) {
+              parent.set(next, node);
+              dfs(next);
+            } else if (c === GRAY) {
+              // back-edge → 사이클. 보수적으로 직접/근접 두 노드를 경고
+              const a = node < next ? node : next;
+              const b = node < next ? next : node;
+              cyclePairs.add(`${a} ↔ ${b}`);
+            }
+          }
+        }
+        colors.set(node, BLACK);
+      };
+
+      for (const node of graph.keys()) {
+        if ((colors.get(node) ?? WHITE) === WHITE) {
+          dfs(node);
+        }
+      }
+
+      if (cyclePairs.size > 0) {
+        for (const pair of cyclePairs) {
+          issues.push(`기능 의존성에 순환 참조가 있습니다: ${pair}. 의존 방향을 단방향으로 정리하세요.`);
+        }
+      }
+
+      return {
+        passed: cyclePairs.size === 0,
+        score: cyclePairs.size === 0 ? 100 : 50,
+        issues,
+      };
+    },
+  },
+  {
+    name: 'KPI-콘셉트 불정합',
+    description: '비즈니스 모델(1인/무인/비SaaS)과 KPI 지표(MAU)가 정합한지 확인',
+    weight: 0.03,
+    check: (content) => {
+      const issues: string[] = [];
+      if (!isPrdContent(content)) {
+        return { passed: true, score: 100, issues };
+      }
+
+      const hasMau = /MAU|월간\s*활성\s*사용자/i.test(content);
+      const isNonSaaS = /1인|무인|SaaS\s*아님|SaaS\s*형태[\s\S]{0,10}?아닙니다/i.test(content);
+
+      if (hasMau && isNonSaaS) {
+        issues.push('이 사업은 SaaS/가입형이 아닌데 MAU 지표를 사용 중입니다. 매출·주문 건수 등 비즈니스 모델에 맞는 지표로 교체하세요.');
+      }
+
+      return {
+        passed: !(hasMau && isNonSaaS),
+        score: hasMau && isNonSaaS ? 50 : 100,
+        issues,
+      };
+    },
+  },
+  {
+    name: '컴플라이언스/PII 누락',
+    description: '크롤링/자동등록 및 개인정보 처리에 대한 리스크·정책이 다뤄졌는지 확인',
+    weight: 0.04,
+    check: (content) => {
+      const issues: string[] = [];
+      if (!isPrdContent(content)) {
+        return { passed: true, score: 100, issues };
+      }
+
+      // 1) 자동 크롤링/등록 기능 → 플랫폼 약관 리스크 언급 여부
+      const hasAutomation = /크롤링|스크래핑|자동\s*등록|자동\s*게시/.test(content);
+      const hasTosMention = /약관|ToS|플랫폼\s*정책/i.test(content);
+      if (hasAutomation && !hasTosMention) {
+        issues.push('자동 크롤링/등록 기능이 있으나 플랫폼 약관 위반 리스크가 다뤄지지 않았습니다.');
+      }
+
+      // 2) 개인정보 취급 → PII 처리 정책 언급 여부
+      const hasPii = /개인정보|이름|주소|연락처|구매자명|buyer/i.test(content);
+      const hasPiiPolicy = /개인정보|PII|암호화|보관기간/i.test(content);
+      if (hasPii && !hasPiiPolicy) {
+        issues.push('개인정보를 다루나 PII 처리 정책(보관기간/암호화/파기)이 누락되었습니다.');
+      }
+
+      return {
+        passed: issues.length === 0,
+        score: issues.length === 0 ? 100 : 50,
+        issues,
+      };
+    },
+  },
+  {
+    name: '마일스톤 기간-날짜 정합',
+    description: '마일스톤의 명시된 주(N주)와 시작~종료일이 정합한지 확인',
+    weight: 0.03,
+    check: (content) => {
+      const issues: string[] = [];
+      if (!isPrdContent(content)) {
+        return { passed: true, score: 100, issues };
+      }
+
+      const lines = content.split('\n');
+      for (const line of lines) {
+        // "N주"와 두 날짜(YYYY-MM-DD)가 같은 줄에 있어야 비교 (보수적)
+        const weekMatch = line.match(/(\d+)\s*주/);
+        const dateMatches = line.match(/\d{4}-\d{2}-\d{2}/g);
+        if (!weekMatch || !dateMatches || dateMatches.length < 2) continue;
+
+        const declaredWeeks = parseInt(weekMatch[1], 10);
+        const startMs = new Date(dateMatches[0]).getTime();
+        const endMs = new Date(dateMatches[1]).getTime();
+        if (Number.isNaN(startMs) || Number.isNaN(endMs)) continue;
+        if (endMs < startMs) continue;
+
+        const diffDays = (endMs - startMs) / (1000 * 60 * 60 * 24);
+        const actualWeeks = Math.ceil(diffDays / 7);
+
+        if (Math.abs(actualWeeks - declaredWeeks) >= 2) {
+          issues.push(`마일스톤 기간(${declaredWeeks}주)과 시작~종료일이 불일치합니다(실제 약 ${actualWeeks}주).`);
+        }
+      }
+
+      return {
+        passed: issues.length === 0,
+        score: issues.length === 0 ? 100 : 50,
+        issues,
+      };
+    },
+  },
 ];
+
+// PRD 문서 여부 휴리스틱 (check 함수가 docType을 받지 않으므로 본문으로 가드)
+function isPrdContent(content: string): boolean {
+  return /PRD/i.test(content)
+    || /제품\s*요구사항/.test(content)
+    || (/기능\s*요구사항/.test(content) && /비기능\s*요구사항/.test(content));
+}
 
 // 문서 검토 함수
 export function reviewDocument(docType: DocType, content: string): ReviewResult {
@@ -709,6 +950,11 @@ function getSuggestion(ruleName: string): string {
     '페르소나 구체성': '페르소나에 연령, 거주지, 인용구, 구체적 목표(수치 포함)를 모두 포함해주세요.',
     'ERD 포함': '9.3절 데이터베이스 설계에 Mermaid ERD 다이어그램을 추가해주세요.',
     '보안 섹션 상세성': '보안 섹션(7.2절)에 다중 테넌트, API 암호화, 세션 만료, 감사 로그를 포함해주세요.',
+    '과장 표현 탐지': '완벽/원천 차단/100% 등 단정 표현을 측정 가능한 한정적 표현(예: "오탐률 X% 이하 목표")으로 바꿔주세요.',
+    '기능 순환 의존성': '기능 간 의존 방향을 단방향으로 정리하여 순환 참조를 제거해주세요.',
+    'KPI-콘셉트 불정합': '비즈니스 모델에 맞는 지표(매출, 주문 건수 등)로 KPI를 교체해주세요.',
+    '컴플라이언스/PII 누락': '플랫폼 약관 위반 리스크와 PII 처리 정책(보관기간/암호화/파기)을 명시해주세요.',
+    '마일스톤 기간-날짜 정합': '마일스톤의 주(N주)와 시작~종료일이 일치하도록 일정을 정정해주세요.',
   };
 
   return suggestions[ruleName] || '항목을 개선하여 문서 품질을 높여주세요.';

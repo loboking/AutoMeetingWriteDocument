@@ -3,6 +3,8 @@ import type { MeetingSummary } from '@/types';
 import OpenAI from 'openai';
 
 export const runtime = 'nodejs';
+// Vercel 함수 상한 (요약은 단일 호출이라 180초로 충분, generate-doc은 300초)
+export const maxDuration = 300;
 
 // OpenAI 클라이언트 초기화 함수 (빌드 시 실행 방지)
 function createOpenAIClient() {
@@ -12,7 +14,7 @@ function createOpenAIClient() {
 
   const useZai = !hasOpenAI && hasZai;  // OpenAI가 없을 때만 Z.ai 사용
   const API_KEY = hasOpenAI ? process.env.OPENAI_API_KEY! : process.env.ZAI_API_KEY!;
-  const API_BASE = useZai ? (process.env.ZAI_BASE_URL || 'https://api.z.ai/api/coding/paas/v4') : 'https://api.openai.com/v1';
+  const API_BASE = useZai ? (process.env.ZAI_BASE_URL || 'https://open.bigmodel.cn/api/coding/paas/v4') : 'https://api.openai.com/v1';
 
   if (!API_KEY) {
     throw new Error('API_KEY가 필요합니다. ZAI_API_KEY 또는 OPENAI_API_KEY 환경변수를 설정하세요.');
@@ -28,7 +30,7 @@ function createOpenAIClient() {
   return new OpenAI({
     apiKey: API_KEY,
     baseURL: API_BASE,
-    timeout: 60000, // 60초 타임아웃 (Vercel 함수 제한: 60초)
+    timeout: 180000, // 180초 (요청별 timeout과 일치, 긴 회의록 대응)
   });
 }
 
@@ -37,7 +39,9 @@ async function summarizeWithGPT(text: string, context?: string): Promise<Meeting
   // OpenAI 우선 명확히 (함수 시작 시점에 한 번만 결정)
   const hasOpenAI = !!process.env.OPENAI_API_KEY;
   const useZai = !hasOpenAI && !!process.env.ZAI_API_KEY;
-  const MODEL = useZai ? (process.env.ZAI_MODEL || 'glm-5.1') : 'gpt-4o';
+  // 다른 엔드포인트(generate-doc, prdChunkGenerator)와 동일하게 glm-5-turbo로 통일
+  // glm-5.1은 서버에서 추론급 glm-5.2로 매핑되어 응답이 느려짐 → timeout 위험
+  const MODEL = useZai ? (process.env.ZAI_MODEL || 'glm-5-turbo') : 'gpt-4o';
 
   console.log('[API] 요약 모델 선택', { hasOpenAI, useZai, MODEL, textLength: text.length });
 
@@ -86,12 +90,16 @@ ${context ? `## 추가 맥락\n${context}` : ''}
     const openai = createOpenAIClient();
     console.log('[API] API 호출 시작 - Model:', MODEL);
 
-    const response = await openai.chat.completions.create({
+    const createParams = {
       model: MODEL,
-      messages: [{ role: 'user', content: prompt }],
+      messages: [{ role: 'user' as const, content: prompt }],
       max_tokens: 8192,
-    }, {
-      timeout: 45000, // 45초 타임아웃 (함수 제한 내에서 여유 있게)
+      // GLM 계열 thinking 비활성화 (reasoning 생략 → 속도 7배 향상, timeout 방지)
+      ...(MODEL.includes('glm') ? { thinking: { type: 'disabled' } } : {}),
+    } as OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming;
+
+    const response = await openai.chat.completions.create(createParams, {
+      timeout: 180000, // 180초 (긴 회의록도 여유 있게, generate-doc과 동일 기조)
     });
 
     console.log('[API] Z.ai API 응답 수신:', {

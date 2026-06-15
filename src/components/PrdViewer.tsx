@@ -1,14 +1,14 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { FileText, Download, Copy, Check, Loader2, Plus, Edit, Save, Eye, File, Code, BookOpen, Presentation, Printer, ChevronLeft, ChevronRight, Terminal, CheckCircle2, Circle, ToggleLeft, ToggleRight, Lock, Unlock, AlertTriangle, Share2 } from 'lucide-react';
+import { FileText, Download, Copy, Check, Loader2, Plus, Edit, Save, Eye, File, Code, BookOpen, Presentation, Printer, ChevronLeft, ChevronRight, Terminal, CheckCircle2, Circle, ToggleLeft, ToggleRight, Lock, Unlock, AlertTriangle, Share2, X } from 'lucide-react';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { saveAs } from 'file-saver';
 import * as XLSX from 'xlsx';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { sanitizeHtml } from '@/lib/sanitize';
-import { extractMermaidCode, docTypeToField, canGenerateDoc, getDependencyNames, DOCUMENTS, type DocType } from '@/lib/documentUtils';
+import { extractMermaidCode, docTypeToField, canGenerateDoc, getDependencyNames, DOCUMENTS, DEPENDENCIES, type DocType } from '@/lib/documentUtils';
 import PptxGenJS from 'pptxgenjs';
 import { Document as DocxDocument, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, Table, TableRow, TableCell, WidthType, BorderStyle } from 'docx';
 import { Button } from '@/components/ui/button';
@@ -71,17 +71,16 @@ export function PrdViewer() {
   });
 
   const [documents, setDocuments] = useState<Record<DocType, string>>(getDocumentsFromMeeting);
-  const [isGenerating, setIsGenerating] = useState(false);
+  // 전체 생성 상태는 store에서 구독 (백그라운드 지속 — PrdViewer 언마운트와 무관)
+  const isGenerating = useMeetingStore(s => s.isGenerating);
+  const generationProgress = useMeetingStore(s => s.generationProgress);
+  const startGeneration = useMeetingStore(s => s.startGeneration);
+  const cancelGeneration = useMeetingStore(s => s.cancelGeneration);
+  // 단일 문서 생성 전용 플래그 (전체 생성과 분리)
+  const [isSingleGenerating, setIsSingleGenerating] = useState(false);
   const [showGenerateConfirm, setShowGenerateConfirm] = useState(false);
   const [generateConfirmData, setGenerateConfirmData] = useState<{ count: number; isRegenerate: boolean; docsToRegenerate: DocType[] } | null>(null);
   const [isEditing, setIsEditing] = useState(false);
-  const [generationProgress, setGenerationProgress] = useState<{
-    currentLevel: number;
-    totalLevels: number;
-    currentDoc: string;
-    completedDocs: string[];
-    status: 'generating' | 'completed' | 'error';
-  } | null>(null);
 
   const [editedContent, setEditedContent] = useState('');
   const [copied, setCopied] = useState(false);
@@ -101,12 +100,10 @@ export function PrdViewer() {
   // 사이드바 상태
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
-  // 페이지 이탈 방지 훅 사용 (문서 생성 중 또는 편집 중)
+  // 페이지 이탈 방지 (편집 중) — 전체 생성 중 경고는 전역 GenerationGuard가 담당
   useBeforeUnload(
-    isGenerating || isEditing,
-    isGenerating
-      ? '문서 생성 중입니다. 페이지를 나가시면 생성이 취소됩니다.'
-      : '편집 중인 내용이 저장되지 않을 수 있습니다. 정말 나가시겠습니까?'
+    isEditing,
+    '편집 중인 내용이 저장되지 않을 수 있습니다. 정말 나가시겠습니까?'
   );
 
   // 컴포넌트 마운트 시 항상 activeDoc 초기화 및 강력한 스크롤 초기화
@@ -128,16 +125,11 @@ export function PrdViewer() {
         sessionStorage.clear();
       } catch (e) {}
 
-      // treeRef에 직접 강제 스타일 적용
+      // treeRef 스크롤만 맨 위로 초기화
+      // 주의: overflow='visible'이나 scrollIntoView()는 사이드바 콘텐츠를
+      // 위로 밀어 상위 항목(PRD 등)을 잘리게 하므로 사용 금지
       if (treeRef.current) {
-        treeRef.current.style.overflow = 'visible';
         treeRef.current.scrollTop = 0;
-        treeRef.current.style.maxHeight = 'none';
-        // 강제로 첫 번째 자식으로 스크롤
-        const firstChild = treeRef.current.firstElementChild;
-        if (firstChild) {
-          firstChild.scrollIntoView({ block: 'start', behavior: 'instant' });
-        }
       }
     };
 
@@ -150,9 +142,14 @@ export function PrdViewer() {
   }, []);
 
   // currentMeeting 변경 시 documents 동기화
+  // 전체 생성이 store(currentMeeting)에 문서를 추가하므로, 생성된 문서 개수 변화도 감지해 미러 갱신
+  const docCountKey = currentMeeting
+    ? DOCUMENTS.filter(d => !!(currentMeeting as unknown as Record<string, unknown>)[docTypeToField(d.key)]).length
+    : 0;
   useEffect(() => {
     setDocuments(getDocumentsFromMeeting());
-  }, [currentMeeting?.id]); // id만 의존성으로 사용
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentMeeting?.id, docCountKey]);
 
   // 스크롤 초기화 - 컴포넌트 마운트 시와 activeDoc 변경 시 실행
   useEffect(() => {
@@ -296,8 +293,13 @@ export function PrdViewer() {
       return;
     }
 
-    setIsGenerating(true);
+    setIsSingleGenerating(true);
     try {
+      // 의존 문서를 컨텍스트로 전달 (품질 향상)
+      const contextDocs: Record<string, string> = {};
+      for (const dep of (DEPENDENCIES[docType] || [])) {
+        if (documents[dep]) contextDocs[dep] = documents[dep]!;
+      }
       const response = await fetch('/api/generate-doc', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -309,6 +311,7 @@ export function PrdViewer() {
             title: currentMeeting.title,
             date: new Date(currentMeeting.createdAt).toLocaleDateString('ko-KR'),
           },
+          contextDocs,
         }),
       });
 
@@ -321,7 +324,7 @@ export function PrdViewer() {
       console.error('Doc generation error:', error);
       // 에러는 UI에서 자연스럽게 처리 (버튼 상태 등)
     } finally {
-      setIsGenerating(false);
+      setIsSingleGenerating(false);
     }
   };
 
@@ -366,114 +369,12 @@ export function PrdViewer() {
     });
   };
 
-  const confirmGenerateAll = async () => {
+  const confirmGenerateAll = () => {
     setShowGenerateConfirm(false);
+    setGenerateConfirmData(null);
     if (!currentMeeting?.summary) return;
-
-    setIsGenerating(true);
-    setGenerationProgress({
-      currentLevel: 1,
-      totalLevels: 5,
-      currentDoc: '',
-      completedDocs: [],
-      status: 'generating',
-    });
-
-    try {
-      // SSE 스트림 연결 (POST 사용)
-      const response = await fetch('/api/generate-doc-stream', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          summary: currentMeeting.summary,
-          transcript: currentMeeting.transcript || '',
-          title: currentMeeting.title,
-          date: new Date(currentMeeting.createdAt).toLocaleDateString('ko-KR'),
-        }),
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(errorText || '스트림 연결 실패');
-      }
-
-      const reader = response.body?.getReader();
-      const decoder = new TextDecoder();
-
-      if (!reader) throw new Error('스트림을 읽을 수 없습니다');
-
-      // SSE 이벤트 처리
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        const chunk = decoder.decode(value);
-        const lines = chunk.split('\n');
-
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            try {
-              const data = JSON.parse(line.slice(6));
-
-              switch (data.type) {
-                case 'level_start':
-                  setGenerationProgress(prev => prev ? {
-                    ...prev,
-                    currentLevel: data.level,
-                    totalLevels: data.totalLevels,
-                    currentDoc: '',
-                    status: 'generating',
-                  } : null);
-                  break;
-
-                case 'doc_start':
-                  setGenerationProgress(prev => prev ? {
-                    ...prev,
-                    currentDoc: data.docTitle,
-                  } : null);
-                  break;
-
-                case 'doc_complete':
-                  // 문서 내용 즉시 업데이트
-                  setDocuments(prev => ({ ...prev, [data.docType]: data.content }));
-                  updateCurrentMeeting({ [docTypeToField(data.docType)]: data.content });
-                  setGenerationProgress(prev => prev ? {
-                    ...prev,
-                    completedDocs: [...prev.completedDocs, data.docType],
-                  } : null);
-                  break;
-
-                case 'doc_error':
-                  console.error(`${data.docTitle} 생성 실패:`, data.error);
-                  break;
-
-                case 'all_complete':
-                  setGenerationProgress({
-                    currentLevel: 5,
-                    totalLevels: 5,
-                    currentDoc: '',
-                    completedDocs: Object.keys(data.docs),
-                    status: 'completed',
-                  });
-                  break;
-
-                case 'error':
-                  throw new Error(data.error);
-              }
-            } catch (e) {
-              console.error('SSE 파싱 오류:', e);
-            }
-          }
-        }
-      }
-    } catch (error) {
-      console.error('전체 생성 오류:', error);
-      setGenerationProgress(prev => prev ? { ...prev, status: 'error' } : null);
-    } finally {
-      setIsGenerating(false);
-      setGenerateConfirmData(null);
-      setTimeout(() => setGenerationProgress(null), 3000);
-    }
+    // 루프는 store에서 백그라운드로 실행됨 (PrdViewer 언마운트해도 지속). await 안 함.
+    startGeneration();
   };
 
 
@@ -1064,7 +965,9 @@ export function PrdViewer() {
           className="overflow-y-auto overflow-x-hidden"
           style={{ height: 'calc(100% - 60px)', minHeight: '400px' }}
         >
-          <Tabs value={activeDoc} onValueChange={(v) => {
+          {/* orientation="vertical" 필수: 없으면 Tabs 루트가 가로(flex-row)로 렌더되어
+              세로 사이드바 항목들이 컨테이너 밖으로 밀려 상위 항목(PRD 등)이 잘림 */}
+          <Tabs orientation="vertical" value={activeDoc} onValueChange={(v) => {
             const newDoc = v as DocType;
             const docIndex = DOCUMENTS.findIndex(d => d.key === newDoc);
 
@@ -1304,32 +1207,36 @@ export function PrdViewer() {
               )}
             </div>
 
-            {/* 전체 생성 버튼 */}
-            <Button
-              onClick={handleGenerateAll}
-              disabled={isGenerating || !currentMeeting?.summary}
-              size="sm"
-              className="h-8"
-            >
-              {isGenerating ? (
-                <>
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  {generationProgress ? `${generationProgress.currentLevel}/${generationProgress.totalLevels}뎁스` : '생성 중...'}
-                </>
-              ) : (
-                <>
-                  <Plus className="w-4 h-4 mr-2" />
-                  전체 생성
-                </>
-              )}
-            </Button>
+            {/* 전체 생성 버튼 (생성 중에는 취소 버튼으로 전환) */}
+            {isGenerating ? (
+              <Button
+                onClick={cancelGeneration}
+                size="sm"
+                variant="destructive"
+                className="h-8"
+                title="전체 생성 취소"
+              >
+                <X className="w-4 h-4 mr-2" />
+                취소 {generationProgress ? `(${generationProgress.completedDocs.length}/${generationProgress.totalLevels})` : ''}
+              </Button>
+            ) : (
+              <Button
+                onClick={handleGenerateAll}
+                disabled={!currentMeeting?.summary}
+                size="sm"
+                className="h-8"
+              >
+                <Plus className="w-4 h-4 mr-2" />
+                전체 생성
+              </Button>
+            )}
 
             {/* 진행률 표시 (생성 중일 때) */}
             {generationProgress && generationProgress.status === 'generating' && (
-              <div className="absolute -bottom-16 left-0 right-0 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-3 shadow-lg">
+              <div className="absolute -bottom-16 left-0 right-0 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-3 shadow-lg z-40">
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-xs font-medium text-slate-700 dark:text-slate-300">
-                    {generationProgress.currentDoc ? `${DOCUMENTS.find(d => d.key === generationProgress.currentDoc)?.title || generationProgress.currentDoc} 생성 중...` : '준비 중...'}
+                    {generationProgress.currentDoc ? `${generationProgress.currentDoc} 생성 중...` : '준비 중...'}
                   </span>
                   <span className="text-xs text-slate-500">
                     {generationProgress.completedDocs.length} / {totalCount}개 완료
@@ -1341,6 +1248,15 @@ export function PrdViewer() {
                     style={{ width: `${(generationProgress.completedDocs.length / totalCount) * 100}%` }}
                   />
                 </div>
+              </div>
+            )}
+
+            {/* 취소 완료 안내 */}
+            {generationProgress && generationProgress.status === 'cancelled' && (
+              <div className="absolute -bottom-12 left-0 right-0 bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-700 rounded-lg p-2.5 shadow-lg z-40">
+                <span className="text-xs font-medium text-amber-700 dark:text-amber-400">
+                  생성 취소됨 · {generationProgress.completedDocs.length}개 저장됨
+                </span>
               </div>
             )}
 
@@ -1506,12 +1422,12 @@ export function PrdViewer() {
                         </DropdownMenu>
                         <Button
                           onClick={() => handleGenerateDoc(doc.key)}
-                          disabled={isGenerating}
+                          disabled={isGenerating || isSingleGenerating}
                           variant="outline"
                           size="sm"
                           title="다시 생성"
                         >
-                          {isGenerating ? (
+                          {isSingleGenerating ? (
                             <Loader2 className="w-4 h-4 animate-spin" />
                           ) : (
                             <>
@@ -1524,10 +1440,10 @@ export function PrdViewer() {
                     ) : (
                       <Button
                         onClick={() => handleGenerateDoc(doc.key)}
-                        disabled={isGenerating}
+                        disabled={isGenerating || isSingleGenerating}
                         size="sm"
                       >
-                        {isGenerating ? (
+                        {isSingleGenerating ? (
                           <Loader2 className="w-4 h-4 animate-spin" />
                         ) : (
                           <>
@@ -1784,9 +1700,9 @@ export function PrdViewer() {
                   <p className="text-slate-500 mb-6">{doc.description}</p>
                   <Button
                     onClick={() => handleGenerateDoc(doc.key)}
-                    disabled={isGenerating || !currentMeeting?.summary}
+                    disabled={isGenerating || isSingleGenerating || !currentMeeting?.summary}
                   >
-                    {isGenerating ? (
+                    {isSingleGenerating ? (
                       <>
                         <Loader2 className="w-5 h-5 mr-2 animate-spin" />
                         생성 중...

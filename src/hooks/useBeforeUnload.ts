@@ -10,6 +10,7 @@ export function useBeforeUnload(
   message: string = '작업 중입니다. 페이지를 나가시면 진행 중인 작업이 취소됩니다.'
 ): void {
   useEffect(() => {
+    if (typeof window === 'undefined') return; // SSR 가드
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
       if (shouldPrevent) {
         e.preventDefault();

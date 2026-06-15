@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getPRDPrompt } from '@/lib/prdTemplate';
-import { generatePRDByChunks, PRDChunkProgress } from '@/lib/prd/prdChunkGenerator';
+import { generatePRDByChunks } from '@/lib/prd/prdChunkGenerator';
+import { inferMetadata } from '@/lib/prd/inferMetadata';
+import { resolveCoreMetrics } from '@/lib/prd/resolveCoreMetrics';
 import { getApiSpecPrompt } from '@/lib/apiSpecTemplate';
 import { getDeploymentPrompt } from '@/lib/deploymentTemplate';
 import { getTestCasePrompt } from '@/lib/testCaseTemplate';
@@ -14,14 +16,27 @@ import { getFlowchartPrompt } from '@/lib/flowchartTemplate';
 import { getStoryboardPrompt } from '@/lib/storyboardTemplate';
 import { getWBSPrompt } from '@/lib/wbsTemplate';
 import { getTestPlanPrompt } from '@/lib/testPlanTemplate';
-import { reviewDocument } from '@/lib/docReviewer';
+import { reviewDocument, type ReviewResult } from '@/lib/docReviewer';
 import type { MeetingSummary } from '@/types';
 import OpenAI from 'openai';
 
 export const runtime = 'nodejs';
+// Vercel Hobby 플랜 상한 = 300초. PRD 병렬 청킹(~3.5분)이 이 안에 완성됨.
+export const maxDuration = 300;
 
 // Z.ai GLM 모델 설정 (코딩 플랜 구독 권장)
-const ZAI_MODEL = process.env.ZAI_MODEL || 'glm-5';
+const ZAI_MODEL = process.env.ZAI_MODEL || 'glm-5-turbo';
+
+// 한국어 출력 강제 시스템 프롬프트 (GLM-5는 한/영/중 혼합 출력 경향 있음)
+const KOREAN_OUTPUT_SYSTEM_PROMPT =
+  '당신은 한국 기업의 시니어 PM/기획자입니다. 모든 출력은 반드시 한국어(한글)로 작성합니다. ' +
+  '영어 단어는 고유명사(제품명, 회사명, 기술 스택명 - 예: React, Next.js, AWS), ' +
+  '업계 표준 약어(API, DB, UI, UX, KPI, MAU, PRD, CRUD 등), 코드/명령어/식별자에만 허용합니다. ' +
+  '그 외 일반 명사, 동사, 형용사, 설명문은 모두 한국어로 작성하세요. ' +
+  '예: "user" → "사용자", "feature" → "기능", "implement" → "구현", "process" → "처리", "manage" → "관리". ' +
+  '문장은 자연스러운 한국어 어순과 어미를 사용하고, 어색한 직역체나 중국어식 표현을 피하세요. ' +
+  '절대 중국어 한자나 일본어 가나를 섞지 마세요 (예: "上述"→"위에서 언급한", "心理"→"심리"). 모든 한자어는 한글로만 표기합니다. ' +
+  '마크다운 표/제목/리스트의 항목명도 한국어로 작성합니다.';
 
 // OpenAI 클라이언트 초기화 함수 (빌드 시 실행 방지)
 function createOpenAIClient() {
@@ -47,8 +62,40 @@ function createOpenAIClient() {
   return new OpenAI({
     apiKey: API_KEY,
     baseURL: API_BASE,
-    timeout: 120000, // 2분 타임아웃 (문서 생성은 더 오래 걸림)
+    timeout: 900000, // 15분 (GLM 코딩플랜은 reasoning으로 긴 PRD에 수 분 소요)
+    maxRetries: 0,   // 재시도 시 시간 2배 → mock fallback 유발하므로 비활성화
   });
+}
+
+// GLM-5 응답에서 실제 본문 추출
+// - 정상: content에 한글 답변, reasoning_content에 영어 사고과정
+// - content가 비어있을 때만 reasoning_content를 fallback으로 사용
+function extractContent(message: { content?: string | null; reasoning_content?: string | null } | undefined): string {
+  if (!message) return '';
+  const content = (message.content || '').trim();
+  if (content) return content;
+  return (message.reasoning_content || '').trim();
+}
+
+// GLM-5 thinking 비활성화 파라미터 (reasoning 생략 → 생성 속도 대폭 향상)
+// thinking을 켜면 32k 토큰 PRD 생성이 10분+ 소요되어 timeout 발생
+function buildCreateParams(
+  model: string,
+  systemPrompt: string,
+  userPrompt: string,
+  maxTokens: number
+): OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming {
+  const base = {
+    model,
+    messages: [
+      { role: 'system' as const, content: systemPrompt },
+      { role: 'user' as const, content: userPrompt },
+    ],
+    max_tokens: maxTokens,
+    // GLM 계열만 thinking 비활성화 (gpt-4o 등에는 미적용)
+    ...(model.includes('glm') ? { thinking: { type: 'disabled' } } : {}),
+  };
+  return base as OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming;
 }
 
 // 문서 의존 관계 (1뎁스 → 2뎁스 → 3뎁스...)
@@ -137,33 +184,33 @@ async function generateDocument(
   summary: MeetingSummary,
   transcript: string,
   meetingInfo: { title: string; date: string },
-  onProgress?: (progress: PRDChunkProgress | GenerationProgress) => void
+  contextDocs: Record<string, string> = {}
 ): Promise<string> {
-  // PRD는 섹션별 청킹 방식 사용
+  // PRD는 병렬 섹션 청킹으로 생성 (z.ai 5분 단일요청 리밋 회피 + 섹션별 상세 품질 유지)
   if (docType === 'prd') {
-    console.log('[generate-doc] PRD 청킹 방식 생성 시작');
     try {
-      const result = await generatePRDByChunks(
-        summary,
-        transcript,
-        meetingInfo,
-        (progress) => {
-          onProgress?.(progress);
-        }
-      );
-      console.log('[generate-doc] PRD 청킹 방식 생성 완료', {
-        sectionCount: Object.keys(result.sections).length,
-        totalLength: result.fullDocument.length,
+      // 품질 가드용 메타데이터 추론(콘셉트/핵심수치/컴플라이언스) → 섹션 프롬프트에 주입
+      const metadata = inferMetadata(summary, transcript);
+      // 핵심+파생 수치를 생성 전 1회 확정 → 전 섹션이 단일 출처를 따르게 (SaaS 수치 정합성)
+      metadata.coreMetrics = await resolveCoreMetrics(summary, transcript, metadata.coreMetrics);
+      const result = await generatePRDByChunks(summary, transcript, meetingInfo, undefined, metadata);
+      console.log('[generate-doc] PRD 병렬 청킹 완료', {
+        sections: Object.keys(result.sections).length,
+        length: result.fullDocument.length,
       });
-      return result.fullDocument;
+      // 섹션 대부분이 실패했으면 단일 생성 fallback으로
+      const failed = Object.values(result.sections).filter((c) => c.includes('생성 실패')).length;
+      if (failed <= 3 && result.fullDocument.length > 1000) {
+        return result.fullDocument;
+      }
+      console.warn(`[generate-doc] 청킹 실패 섹션 ${failed}개 → 단일 생성 fallback`);
     } catch (error) {
-      console.error('[generate-doc] PRD 청킹 생성 실패:', error);
-      // 실패 시 기존 방식으로 fallback
+      console.error('[generate-doc] PRD 청킹 실패 → 단일 생성 fallback:', error);
     }
   }
 
-  // PRD 외 또는 fallback: 기존 방식
-  const prompt = getPromptForDocType(docType, summary, transcript, meetingInfo, {});
+  // PRD 외 문서 또는 청킹 fallback: 단일 통합 프롬프트 (의존 문서를 컨텍스트로 전달)
+  const prompt = getPromptForDocType(docType, summary, transcript, meetingInfo, contextDocs);
 
   // OpenAI 우선 명확히
   const hasOpenAI = !!process.env.OPENAI_API_KEY;
@@ -172,13 +219,14 @@ async function generateDocument(
 
   try {
     const openai = createOpenAIClient();
-    const response = await openai.chat.completions.create({
-      model: MODEL,
-      messages: [{ role: 'user', content: prompt }],
-      max_tokens: 32768, // 최대 출력 토큰 (GLM-5: 32k)
-    });
+    // 16k가 속도·안정성·상세도의 검증된 최적점 (32k는 turbo로도 timeout 위험)
+    const response = await openai.chat.completions.create(
+      buildCreateParams(MODEL, KOREAN_OUTPUT_SYSTEM_PROMPT, prompt, 16384)
+    );
 
-    return response.choices[0]?.message?.content || '';
+    // GLM-5 실제 답변은 content에 있음 (reasoning_content는 영어 사고과정이므로 fallback만)
+    const message = response.choices[0]?.message;
+    return extractContent(message);
   } catch (error) {
     console.error('OpenAI API 오류:', error);
     return getMockDoc(docType, summary, meetingInfo);
@@ -268,19 +316,18 @@ async function generateDocumentWithContext(
   meetingInfo: { title: string; date: string },
   contextDocs: Record<string, string>
 ): Promise<string> {
-  // PRD는 섹션별 청킹 방식 사용 (컨텍스트 무시 - 이미 청킹 로직 내에서 처리)
+  // PRD는 병렬 섹션 청킹으로 생성 (단일 호출은 z.ai 5분 리밋 초과)
   if (docType === 'prd') {
-    console.log('[generate-doc] PRD 청킹 방식 생성 시작 (generateDocumentWithContext)');
     try {
-      const result = await generatePRDByChunks(summary, transcript, meetingInfo);
-      console.log('[generate-doc] PRD 청킹 방식 생성 완료', {
-        sectionCount: Object.keys(result.sections).length,
-        totalLength: result.fullDocument.length,
-      });
-      return result.fullDocument;
+      const metadata = inferMetadata(summary, transcript);
+      metadata.coreMetrics = await resolveCoreMetrics(summary, transcript, metadata.coreMetrics);
+      const result = await generatePRDByChunks(summary, transcript, meetingInfo, undefined, metadata);
+      const failed = Object.values(result.sections).filter((c) => c.includes('생성 실패')).length;
+      if (failed <= 3 && result.fullDocument.length > 1000) {
+        return result.fullDocument;
+      }
     } catch (error) {
-      console.error('[generate-doc] PRD 청킹 생성 실패:', error);
-      // 실패 시 기존 방식으로 fallback
+      console.error('[generate-doc] PRD 청킹 실패 → 단일 생성 fallback:', error);
     }
   }
 
@@ -298,18 +345,18 @@ async function generateDocumentWithContext(
     transcriptLength: transcript.length,
   });
 
-  // 최대 출력 토큰 (모델별 동적 설정)
-  const maxTokens = MODEL.includes('glm') ? 32768 : 16384; // GLM-5: 32k, fallback: 16k
+  // 최대 출력 토큰 (16k가 속도·안정성·상세도의 검증된 최적점)
+  const maxTokens = MODEL.includes('glm') ? 16384 : 12288;
 
   try {
     const openai = createOpenAIClient();
-    const response = await openai.chat.completions.create({
-      model: MODEL,
-      messages: [{ role: 'user', content: prompt }],
-      max_tokens: maxTokens,
-    });
+    const response = await openai.chat.completions.create(
+      buildCreateParams(MODEL, KOREAN_OUTPUT_SYSTEM_PROMPT, prompt, maxTokens)
+    );
 
-    return response.choices[0]?.message?.content || '';
+    // GLM-5 실제 답변은 content에 있음 (reasoning_content는 영어 사고과정이므로 fallback만)
+    const message = response.choices[0]?.message;
+    return extractContent(message);
   } catch (error) {
     console.error('OpenAI API 오류:', error);
     throw error;
@@ -844,7 +891,7 @@ flowchart TD
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { docType, summary, transcript, meetingInfo, mode, review = true } = body;
+    const { docType, summary, transcript, meetingInfo, mode, review = true, contextDocs = {} } = body;
 
     if (!summary || !meetingInfo) {
       return NextResponse.json(
@@ -862,10 +909,10 @@ export async function POST(request: NextRequest) {
       );
 
       // 검토 수행
-      const reviews: Record<string, any> = {};
+      const reviews: Record<string, ReviewResult> = {};
       if (review) {
         for (const [key, content] of Object.entries(result.docs)) {
-          reviews[key] = reviewDocument(key as any, content);
+          reviews[key] = reviewDocument(key as DocType, content);
         }
       }
 
@@ -884,7 +931,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const content = await generateDocument(docType, summary, transcript || '', meetingInfo);
+    const content = await generateDocument(docType, summary, transcript || '', meetingInfo, contextDocs);
 
     // 검토 수행
     let docReview;

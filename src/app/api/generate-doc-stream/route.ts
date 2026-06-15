@@ -17,9 +17,29 @@ import type { MeetingSummary } from '@/types';
 import OpenAI from 'openai';
 
 export const runtime = 'nodejs';
+// Vercel Hobby 플랜 상한 = 300초.
+export const maxDuration = 300;
 
 // Z.ai GLM 모델 설정
-const ZAI_MODEL = process.env.ZAI_MODEL || 'glm-5';
+const ZAI_MODEL = process.env.ZAI_MODEL || 'glm-5-turbo';
+
+// 한국어 출력 강제 시스템 프롬프트 (GLM-5는 한/영/중 혼합 출력 경향 있음)
+const KOREAN_OUTPUT_SYSTEM_PROMPT =
+  '당신은 한국 기업의 시니어 PM/기획자입니다. 모든 출력은 반드시 한국어(한글)로 작성합니다. ' +
+  '영어 단어는 고유명사(제품명, 회사명, 기술 스택명 - 예: React, Next.js, AWS), ' +
+  '업계 표준 약어(API, DB, UI, UX, KPI, MAU, PRD, CRUD 등), 코드/명령어/식별자에만 허용합니다. ' +
+  '그 외 일반 명사, 동사, 형용사, 설명문은 모두 한국어로 작성하세요. ' +
+  '예: "user" → "사용자", "feature" → "기능", "implement" → "구현", "process" → "처리", "manage" → "관리". ' +
+  '문장은 자연스러운 한국어 어순과 어미를 사용하고, 어색한 직역체나 중국어식 표현을 피하세요. ' +
+  '마크다운 표/제목/리스트의 항목명도 한국어로 작성합니다.';
+
+// GLM-5 응답에서 실제 본문 추출 (content 우선, 비었을 때만 reasoning_content fallback)
+function extractContent(message: { content?: string | null; reasoning_content?: string | null } | undefined): string {
+  if (!message) return '';
+  const content = (message.content || '').trim();
+  if (content) return content;
+  return (message.reasoning_content || '').trim();
+}
 
 // OpenAI 클라이언트 초기화
 function createOpenAIClient() {
@@ -37,7 +57,8 @@ function createOpenAIClient() {
   return new OpenAI({
     apiKey: API_KEY,
     baseURL: API_BASE,
-    timeout: 120000,
+    timeout: 600000, // 10분 타임아웃 (GLM-5 문서 생성은 수 분 소요)
+    maxRetries: 1,
   });
 }
 
@@ -150,13 +171,23 @@ async function generateDocument(
 
   try {
     const openai = createOpenAIClient();
-    const response = await openai.chat.completions.create({
+    const params = {
       model: MODEL,
-      messages: [{ role: 'user', content: prompt }],
-      max_tokens: 16384,
-    });
+      messages: [
+        { role: 'system' as const, content: KOREAN_OUTPUT_SYSTEM_PROMPT },
+        { role: 'user' as const, content: prompt },
+      ],
+      max_tokens: MODEL.includes('glm') ? 16384 : 12288,
+      // GLM 계열은 thinking 비활성화 시도 (코딩플랜은 무시할 수 있으나 무해)
+      ...(MODEL.includes('glm') ? { thinking: { type: 'disabled' } } : {}),
+    };
+    const response = await openai.chat.completions.create(
+      params as unknown as OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming
+    );
 
-    return response.choices[0]?.message?.content || '';
+    // GLM-5 실제 답변은 content에 있음 (reasoning_content는 영어 사고과정이므로 fallback만)
+    const message = response.choices[0]?.message;
+    return extractContent(message);
   } catch (error) {
     console.error(`${docType} 생성 오류:`, error);
     throw error;
@@ -210,9 +241,9 @@ function generateDocumentStream(
     async start(controller) {
       const docs: Record<string, string> = {};
       const totalLevels = DOCUMENT_DEPENDENCIES.length;
-      let completedDocs: string[] = [];
+      const completedDocs: string[] = [];
 
-      const send = (data: any) => {
+      const send = (data: Record<string, unknown>) => {
         controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
       };
 

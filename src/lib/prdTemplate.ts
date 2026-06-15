@@ -2,6 +2,11 @@
 export function getPRDPrompt(baseInfo: string, transcript: string, meetingInfo: { title: string; date: string }): string {
   return `당신은 10년 경력의 시니어 기획자입니다. 다음 회의 내용을 바탕으로 **매우 상세하고 전문적인 PRD**를 작성해주세요.
 
+⚠️ **출력 언어 규칙 (최우선 준수)**
+- 모든 본문, 제목, 표 항목, 설명은 **반드시 한국어(한글)**로 작성합니다.
+- 영어는 고유명사(React, Next.js, AWS 등), 표준 약어(API, DB, UI, KPI, MAU 등), 코드/식별자에만 허용합니다.
+- 영어 문장이나 영어 설명문을 절대 쓰지 마세요. 사고 과정(reasoning)이 아닌 **완성된 한국어 PRD 본문**만 출력하세요.
+
 ${baseInfo}
 
 ## 원본 회의 내용 (분석 대상)

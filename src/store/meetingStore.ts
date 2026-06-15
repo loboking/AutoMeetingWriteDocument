@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { Meeting, MeetingStep, MeetingSummary, DocType, DocStatus } from '@/types';
-import { DOCUMENTS, getAllDependents } from '@/lib/documentUtils';
+import { DOCUMENTS, DEPENDENCIES, docTypeToField, getAllDependents } from '@/lib/documentUtils';
 
 // UUID 생성 유틸 (브라우저 호환성)
 function generateId(): string {
@@ -16,11 +16,55 @@ function generateId(): string {
   });
 }
 
+// 전체 생성 진행 상태 (persist 제외, 새로고침 시 리셋)
+export interface GenerationProgress {
+  currentLevel: number;
+  totalLevels: number;
+  currentDoc: string;
+  completedDocs: DocType[];
+  status: 'generating' | 'completed' | 'error' | 'cancelled';
+}
+
+// 직렬화 불가한 캔슬 제어는 store state가 아닌 모듈 스코프에 보관.
+// HMR(dev) 시 모듈 재평가로 끊기지 않도록 globalThis에 캐시.
+type GenAbort = { controller: AbortController | null; cancelled: boolean };
+const __g = globalThis as unknown as { __genAbort?: GenAbort };
+const genAbort: GenAbort = __g.__genAbort ?? (__g.__genAbort = { controller: null, cancelled: false });
+
+// DEPENDENCIES 위상정렬 (Kahn): 의존 문서가 먼저 오도록 14개 순서 결정
+function topoSortDocs(): DocType[] {
+  const allKeys = DOCUMENTS.map((d) => d.key);
+  const result: DocType[] = [];
+  const remaining = new Set(allKeys);
+  while (remaining.size > 0) {
+    let progressed = false;
+    for (const k of allKeys) {
+      if (!remaining.has(k)) continue;
+      const depsLeft = (DEPENDENCIES[k] || []).filter((d) => remaining.has(d));
+      if (depsLeft.length === 0) {
+        result.push(k);
+        remaining.delete(k);
+        progressed = true;
+      }
+    }
+    if (!progressed) {
+      remaining.forEach((k) => result.push(k));
+      break;
+    }
+  }
+  return result;
+}
+
 interface MeetingStore {
   // 상태
   meetings: Meeting[];
   currentMeeting: Meeting | null;
   currentStep: MeetingStep;
+
+  // 전체 생성 상태 (persist 제외)
+  isGenerating: boolean;
+  generationProgress: GenerationProgress | null;
+  generatingMeetingId: string | null;
 
   // 문서 상태 관리 (meetingId -> docType -> status)
   docStatuses: Record<string, Record<DocType, DocStatus>>;
@@ -52,6 +96,10 @@ interface MeetingStore {
   isDocFrozen: (meetingId: string, docType: DocType) => boolean;
   markDependentsOutdated: (meetingId: string, docType: DocType) => void;
   canRegenerateDoc: (meetingId: string, docType: DocType) => { can: boolean; reason?: string };
+
+  // 전체 문서 생성 (백그라운드 지속 + 캔슬)
+  startGeneration: () => Promise<void>;
+  cancelGeneration: () => void;
 }
 
 export const useMeetingStore = create<MeetingStore>()(
@@ -63,6 +111,9 @@ export const useMeetingStore = create<MeetingStore>()(
       docStatuses: {},
       docVersions: {},
       frozenDocs: {},
+      isGenerating: false,
+      generationProgress: null,
+      generatingMeetingId: null,
 
       createMeeting: (title) => {
         const newMeeting: Meeting = {
@@ -301,6 +352,134 @@ export const useMeetingStore = create<MeetingStore>()(
         }
         return { can: true };
       },
+
+      // 전체 문서 생성: 14개를 의존성 순서대로 1개씩 개별 API 호출.
+      // 루프가 store(React 밖)에서 돌아 PrdViewer 언마운트(탭 이동)에도 지속됨.
+      startGeneration: async () => {
+        if (get().isGenerating) return; // 중복 방지
+        const meeting = get().currentMeeting;
+        if (!meeting?.summary) return;
+
+        const meetingId = meeting.id; // 회의 전환 가드용 캡쳐
+        genAbort.cancelled = false;
+        genAbort.controller = null;
+
+        const order = topoSortDocs();
+        set({
+          isGenerating: true,
+          generatingMeetingId: meetingId,
+          generationProgress: {
+            currentLevel: 0,
+            totalLevels: order.length,
+            currentDoc: '',
+            completedDocs: [],
+            status: 'generating',
+          },
+        });
+
+        // 이미 생성된 문서를 컨텍스트 시드로 수집
+        const generated: Record<string, string> = {};
+        for (const doc of DOCUMENTS) {
+          const field = docTypeToField(doc.key) as keyof Meeting;
+          const val = meeting[field];
+          if (typeof val === 'string' && val) generated[doc.key] = val;
+        }
+
+        const summary = meeting.summary;
+        const transcript = meeting.transcript || '';
+        const meetingInfo = {
+          title: meeting.title,
+          date: new Date(meeting.createdAt).toLocaleDateString('ko-KR'),
+        };
+
+        let completed = 0;
+        let failed = 0;
+
+        try {
+          for (let i = 0; i < order.length; i++) {
+            if (genAbort.cancelled) break; // 반복 전 캔슬 가드
+
+            const docType = order[i];
+            const meta = DOCUMENTS.find((d) => d.key === docType);
+            set((st) =>
+              st.generationProgress
+                ? { generationProgress: { ...st.generationProgress, currentLevel: i + 1, currentDoc: meta?.title || docType } }
+                : {}
+            );
+
+            const contextDocs: Record<string, string> = {};
+            for (const dep of DEPENDENCIES[docType] || []) {
+              if (generated[dep]) contextDocs[dep] = generated[dep];
+            }
+
+            const controller = new AbortController();
+            genAbort.controller = controller;
+            try {
+              const res = await fetch('/api/generate-doc', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ docType, summary, transcript, meetingInfo, contextDocs, review: false }),
+                signal: controller.signal,
+              });
+              if (!res.ok) throw new Error((await res.text()) || `${docType} 생성 실패`);
+              const { content } = await res.json();
+              if (!content) throw new Error(`${docType} 빈 응답`);
+
+              generated[docType] = content;
+              const field = docTypeToField(docType);
+              // 회의 전환 가드: 같은 회의일 때만 currentMeeting 갱신, 아니면 meetings 배열 직접 패치
+              if (get().currentMeeting?.id === meetingId) {
+                get().updateCurrentMeeting({ [field]: content });
+              } else {
+                const meetings = get().meetings;
+                const idx = meetings.findIndex((m) => m.id === meetingId);
+                if (idx >= 0) {
+                  const updated = [...meetings];
+                  updated[idx] = { ...updated[idx], [field]: content };
+                  set({ meetings: updated });
+                }
+              }
+              completed++;
+              set((st) =>
+                st.generationProgress
+                  ? { generationProgress: { ...st.generationProgress, completedDocs: [...st.generationProgress.completedDocs, docType] } }
+                  : {}
+              );
+            } catch (e) {
+              // 캔슬(AbortError)은 실패로 세지 않고 루프 종료
+              if ((e as Error)?.name === 'AbortError' || controller.signal.aborted || genAbort.cancelled) break;
+              failed++;
+              console.error(`${docType} 생성 실패 (계속 진행):`, e);
+            } finally {
+              genAbort.controller = null;
+            }
+          }
+
+          set((st) => ({
+            generationProgress: st.generationProgress
+              ? {
+                  ...st.generationProgress,
+                  currentDoc: '',
+                  status: genAbort.cancelled ? 'cancelled' : failed > 0 && completed === 0 ? 'error' : 'completed',
+                }
+              : null,
+          }));
+        } finally {
+          set({ isGenerating: false, generatingMeetingId: null });
+          setTimeout(() => {
+            if (!get().isGenerating) set({ generationProgress: null });
+          }, 4000);
+        }
+      },
+
+      cancelGeneration: () => {
+        if (!get().isGenerating) return;
+        genAbort.cancelled = true;
+        genAbort.controller?.abort();
+        set((st) =>
+          st.generationProgress ? { generationProgress: { ...st.generationProgress, status: 'cancelled', currentDoc: '' } } : {}
+        );
+      },
     }),
     {
       name: 'meeting-storage',
@@ -311,6 +490,14 @@ export const useMeetingStore = create<MeetingStore>()(
         docVersions: state.docVersions,
         frozenDocs: state.frozenDocs,
       }),
+      // 새로고침 후 좀비 생성 상태 리셋 (partialize에서 제외했으나 안전망)
+      onRehydrateStorage: () => (state) => {
+        if (state) {
+          state.isGenerating = false;
+          state.generationProgress = null;
+          state.generatingMeetingId = null;
+        }
+      },
     }
   )
 );

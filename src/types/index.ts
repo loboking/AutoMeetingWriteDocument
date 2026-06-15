@@ -119,3 +119,66 @@ export interface GeneratePrdRequest {
 export interface GeneratePrdResponse {
   prd: string;
 }
+
+// ===== 회의록 메타데이터 (Stage 1: 핵심 제약조건 추출) =====
+export type TeamSizeType = '1인' | '2-5인' | '6-10인' | '11인 이상';
+export type BudgetType = '무료' | '자체' | '투자';
+export type MetadataConfidence = 'high' | 'medium' | 'low';
+
+// 비즈니스 콘셉트 유형 — KPI/비용 지표 분기 기준
+export type ConceptType = 'commerce' | 'saas' | 'web' | 'marketplace' | 'community';
+
+export interface MeetingMetadata {
+  teamSize: number;
+  teamSizeType: TeamSizeType;
+  budgetType: BudgetType;
+  estimatedBudget?: string;
+  isSaaS: boolean;
+  hasPayment: boolean;
+  targetUsersCount: number;
+  hasMobileApp: boolean;
+  hasDatabase: boolean;
+  hasAuth: boolean;
+  confidence: MetadataConfidence;
+  // 콘셉트 유형 (KPI 분기용). 미설정 시 isSaaS로 추론
+  conceptType?: ConceptType;
+  // 회의에서 추출된 핵심 수치 단일 출처 (예: { '영상 원가': '45원', '배송비': '2500원' })
+  coreMetrics?: Record<string, string>;
+  // 다뤄야 할 컴플라이언스 리스크 (예: ['플랫폼 약관', '개인정보보호', '세관/통관'])
+  complianceRisks?: string[];
+}
+
+// ===== PRD 동적 파싱 메타데이터 =====
+export interface Persona {
+  id: string;
+  name: string;
+  occupation: string;
+  goals: string[];
+  painPoints: string[];
+  age?: string;
+  techLevel?: string;
+  quote?: string;
+}
+
+export interface FunctionalRequirement {
+  id: string;
+  name: string;
+  description: string;
+  priority: 'P0' | 'P1' | 'P2';
+}
+
+export interface PerformanceConstraints {
+  pageLoadTimeMs?: number;
+  apiResponseTimeMs?: number;
+  concurrentUsers?: number;
+  availability?: string;
+  sessionTimeoutMinutes?: number;
+}
+
+export interface PRDMetadata {
+  personas: Persona[];
+  functionalRequirements: FunctionalRequirement[];
+  performanceConstraints: PerformanceConstraints;
+  isOnePersonBusiness: boolean;
+  isParsed: boolean;
+}

@@ -1,10 +1,11 @@
-import { MeetingSummary } from '@/types';
+import { MeetingSummary, MeetingMetadata } from '@/types';
 
 interface SectionPromptParams {
   summary: MeetingSummary;
   transcript: string;
   meetingInfo: { title: string; date: string };
   previousSections?: Record<string, string>;
+  metadata?: MeetingMetadata;
 }
 
 export interface SectionPrompt {
@@ -25,6 +26,60 @@ function getCommonHeader(meetingInfo: { title: string; date: string }, summary: 
 
 ---
 `;
+}
+
+// 공통 가드: 과장 표현 금지
+function getHyperboleGuard(): string {
+  return `
+[과장 표현 금지]
+절대 '완벽', '원천 차단', '100%', '무조건', '완전히 우회' 같은 입증 불가능한 단정 표현을 쓰지 마세요. 대신 '~% 감소', '~조건에서 달성', '~방식으로 개선' 등 측정 가능하고 한정적인 표현을 사용하세요.
+`;
+}
+
+// 공통 가드: PII/법규 준수
+function getComplianceGuard(metadata?: MeetingMetadata): string {
+  let guard = `
+[개인정보 및 법규 준수]
+개인정보(이름·주소·연락처)를 다루는 경우, 수집항목·보관기간·암호화 방식·파기정책을 반드시 명시하세요.
+크롤링·자동등록·스크래핑이 관련되면 해당 플랫폼 약관 위반 가능성을 리스크로 명시하세요.
+`;
+  if (metadata?.hasPayment) {
+    guard += `결제/정산 기능이 포함되므로 결제·정산 관련 규정(PG 약관, 정산 주기, 환불 정책 등)을 반드시 다루세요.\n`;
+  }
+  if (metadata?.complianceRisks && metadata.complianceRisks.length > 0) {
+    guard += `다음 컴플라이언스 항목을 반드시 다루세요: ${metadata.complianceRisks.join(', ')}.\n`;
+  }
+  return guard;
+}
+
+// 공통 가드: 수치 일관성
+function getNumericalConsistencyGuard(metadata?: MeetingMetadata): string {
+  let guard = `
+[수치 일관성 — 매우 중요]
+같은 의미의 수치(원가·배송비·마진율·ARPU·MRR·전환율·사용자 수·인원·기간 등)는 PRD 전체에서 반드시 하나의 값으로만 쓰세요. 같은 지표를 섹션마다 다른 값으로 쓰면 안 됩니다. 합계와 부품 합이 맞는지 검산하고, 계산 근거를 비고에 명시하세요.
+`;
+  if (metadata?.coreMetrics && Object.keys(metadata.coreMetrics).length > 0) {
+    const metrics = Object.entries(metadata.coreMetrics)
+      .map(([key, value]) => `- ${key}: ${value}`)
+      .join('\n');
+    guard += `
+[확정 수치 — 아래 값을 토씨 하나 틀리지 말고 그대로 사용하세요. 절대 다른 값으로 바꾸거나 재계산하지 마세요]
+${metrics}
+`;
+  }
+  return guard;
+}
+
+// 공통 가드: 현실성
+function getRealismGuard(metadata?: MeetingMetadata): string {
+  let guard = `
+[현실성]
+성능 목표는 외부 API 지연을 합산해 현실적으로 설정하세요(내부 처리 200ms와 외부 API를 포함한 종단(end-to-end) 응답 시간을 구분해 표기). 일정은 가정(인력 규모·기능 수)을 명시하세요.
+`;
+  if (metadata?.teamSizeType === '1인') {
+    guard += `1인 기준 주당 1~2개 기능 구현이 현실적이며, 무리한 일정은 우선순위 축소를 권고하세요.\n`;
+  }
+  return guard;
 }
 
 // 섹션 1: 문서 정보
@@ -54,9 +109,44 @@ export const docInfoPrompt: SectionPrompt = {
 
 // 섹션 2: 개요 (Executive Summary)
 export const overviewPrompt: SectionPrompt = {
-  getPrompt: ({ summary, transcript }) => {
+  getPrompt: ({ summary, transcript, metadata }) => {
+    // 콘셉트 유형별 KPI 지표 세트 (특정 수치 하드코딩 없이 지표명만 분기)
+    const concept = metadata?.conceptType
+      ?? (metadata?.isSaaS === true ? 'saas' : metadata?.isSaaS === false ? 'commerce' : undefined);
+    const kpiByConcept: Record<string, { guide: string; rows: string[] }> = {
+      commerce: {
+        guide: '이 사업은 SaaS가 아니므로 MAU/DAU/전환율 같은 가입자 지표를 쓰지 마세요. 매출·주문·재구매 등 커머스 지표를 사용하세요.',
+        rows: ['| 비즈니스 | 월 매출 |', '| 비즈니스 | 월 주문 건수 |', '| 비즈니스 | 재구매율 |', '| 비즈니스 | 평균 객단가 |'],
+      },
+      saas: {
+        guide: '이 사업은 SaaS이므로 MAU·구독 전환율·ARPU·이탈률 등 구독 기반 지표를 사용하세요.',
+        rows: ['| 비즈니스 | MAU |', '| 비즈니스 | 유료 전환율 |', '| 비즈니스 | ARPU |', '| 비즈니스 | 월 이탈률 |'],
+      },
+      marketplace: {
+        guide: '양면 시장이므로 거래액(GMV)·거래 건수·공급자/수요자 수 등 마켓플레이스 지표를 사용하세요.',
+        rows: ['| 비즈니스 | GMV(총 거래액) |', '| 비즈니스 | 월 거래 건수 |', '| 비즈니스 | 활성 공급자 수 |', '| 비즈니스 | 활성 수요자 수 |'],
+      },
+      community: {
+        guide: '커뮤니티이므로 활성 사용자·게시/참여 수·리텐션 등 참여 지표를 사용하세요.',
+        rows: ['| 비즈니스 | MAU |', '| 비즈니스 | 월 게시/참여 수 |', '| 비즈니스 | 재방문율(리텐션) |'],
+      },
+      web: {
+        guide: '서비스 성격에 맞는 지표(방문자·핵심 액션 완료율·재방문율 등)를 회의 내용 기반으로 선택하세요.',
+        rows: ['| 비즈니스 | 월 활성 사용자 |', '| 비즈니스 | 핵심 액션 완료율 |', '| 비즈니스 | 재방문율 |'],
+      },
+    };
+    const kpiSet = concept ? kpiByConcept[concept] : undefined;
+    const kpiConceptGuide = kpiSet
+      ? `\n[KPI 분기 지침]\n${kpiSet.guide}\n`
+      : `\n[KPI 분기 지침]\n회의에서 드러난 비즈니스 모델에 맞는 지표만 선택하세요. 모델과 무관한 지표(예: 비SaaS인데 MAU)는 쓰지 마세요.\n`;
+    // 비즈니스 지표 행: 콘셉트별 지표명 + 빈 목표(GLM이 회의 기반으로 채우도록), 없으면 일반 안내
+    const businessRows = (kpiSet?.rows ?? ['| 비즈니스 | (모델에 맞는 지표) |'])
+      .map(r => `${r} 0 | [목표값] | [측정 시점] | - |`)
+      .join('\n');
     return `
 ${getCommonHeader({ title: '', date: '' }, summary)}
+${getHyperboleGuard()}
+${getNumericalConsistencyGuard(metadata)}
 
 ## 작성 섹션: 2. 개요 (Executive Summary)
 
@@ -88,20 +178,16 @@ ${transcript}
 - 핵심 가치 제안(Value Proposition)
 
 ### 2.4 기대 효과 및 성공 지표 (KPI)
-**반드시 테이블 형식으로 작성:**
-- 회의에서 언급된 **구체적인 수치**를 모두 포함하세요
-- 언급된 수치가 없으면, 프로젝트 규모에 맞는 **합리적인 기본값**을 제시하세요
-- "TBD", "N원" 같은 모호한 표현 대신 **구체적인 추정치**를 작성하세요
+${kpiConceptGuide}
+**반드시 아래 형식의 테이블로 작성하세요. 목표값/측정 시점은 회의 내용에 근거해 채우되, 회의에 수치가 없으면 합리적 추정치를 쓰고 '추정'임을 비고에 명시하세요.**
 
 | 지표 분류 | 지표명 | 현재 | 목표 | 측정 시점 | 담당자 |
 |-----------|--------|------|------|----------|--------|
-| 비즈니스 | MAU | [추정] | [회의 내용 또는 추정] | [구체적 시점] | - |
-| 비즈니스 | 전환율 | [추정] | [회의 내용 또는 추정] | [구체적 시점] | - |
-| 비즈니스 | 운영 비용 절감 | - | [회의 내용 또는 추정] | [구체적 시점] | - |
+${businessRows}
 | 제품 | 기능 완료도 | 0% | 100% | 출시 시 | 개발팀 |
-| 제품 | 버그률 | - | 1% 이하 | 출시 1개월 후 | QA팀 |
+| 제품 | 버그율 | - | [목표값] | 출시 1개월 후 | QA팀 |
 
-**중요**: 회의에서 언급된 모든 수치를 반드시 포함하세요. 없으면 프로젝트 규모에 맞는 합리적인 추정치를 작성하세요.
+**중요**: 위 비즈니스 지표는 이 사업의 콘셉트에 맞춘 것입니다. 회의에서 다른 핵심 지표가 언급되면 추가하되, 콘셉트에 맞지 않는 지표는 넣지 마세요.
 `;
   },
   estimatedTokens: 4000,
@@ -158,10 +244,12 @@ ${transcript}
 
 // 섹션 4: 목표
 export const goalsPrompt: SectionPrompt = {
-  getPrompt: ({ summary, transcript, previousSections }) => {
+  getPrompt: ({ summary, transcript, previousSections, metadata }) => {
     const context = previousSections?.['overview'] || previousSections?.['problem'] || '';
     return `
 ${getCommonHeader({ title: '', date: '' }, summary)}
+${getRealismGuard(metadata)}
+${getNumericalConsistencyGuard(metadata)}
 
 ${context ? `## 이전 섹션 참고
 ${context}
@@ -297,9 +385,11 @@ ${transcript}
 
 // 섹션 7: 비기능 요구사항
 export const nonFunctionalReqPrompt: SectionPrompt = {
-  getPrompt: ({ summary, transcript }) => {
+  getPrompt: ({ summary, transcript, metadata }) => {
     return `
 ${getCommonHeader({ title: '', date: '' }, summary)}
+${getComplianceGuard(metadata)}
+${getRealismGuard(metadata)}
 
 ## 작성 섹션: 7. 비기능 요구사항 (Non-functional Requirements)
 
@@ -328,6 +418,13 @@ ${transcript}
 - [ ] 민감 데이터 암호화 저장 (AES-256)
 - [ ] SQL Injection, XSS 방지
 - [ ] 월 1회 취약점 점검
+
+**개인정보(PII) 처리 정책 (필수 하위항목):**
+개인정보를 다루는 경우 아래 4개 항목을 반드시 표 또는 목록으로 명시하세요.
+- **수집항목**: 수집하는 개인정보 항목(이름·연락처·주소 등)
+- **보관기간**: 항목별 보관 기간 및 보관 종료 시점
+- **암호화 방식**: 저장/전송 시 암호화 방식(예: AES-256, TLS 1.3)
+- **파기정책**: 보관기간 경과·목적 달성 시 파기 절차와 방법
 
 ### 7.3 호환성 요구사항
 **구체적인 버전 명시:**
@@ -418,86 +515,59 @@ ${transcript}
 
 ## 작성 가이드
 
-다음 3개 소섹션을 **매우 상세하게** 작성하세요:
+**반드시 첫 줄에 H2 대제목 "## 9. 기술 요구사항"을 출력한 뒤**, 아래 3개 소섹션을 **매우 상세하게** 작성하세요:
 
 ### 9.1 기술 스택
-**구체적인 버전과 선택 이유 포함:**
+이 프로젝트의 실제 요구사항(회의 내용)에 맞는 기술을 선정하세요. 아래 표 구조로 작성하되, 각 기술은 이 제품에 필요한 이유를 근거로 선택하세요. (특정 스택을 무조건 넣지 말고, 회의에서 드러난 성격에 맞게 결정)
 
 | 분야 | 기술 | 버전 | 선택 이유 |
 |------|------|------|-----------|
-| 프론트엔드 | Next.js | 14+ | SSR, SEO 최적화 |
-| 스타일 | Tailwind CSS | 3+ | 빠른 개발, 일관된 디자인 |
-| 상태 관리 | Zustand | - | 가볍고 간단한 API |
-| 백엔드 | Node.js | 18+ | - |
-| 데이터베이스 | PostgreSQL | 14+ | 안정성, ACID 보장 |
-| 배포 | Vercel | - | 간편한 CI/CD |
+| 프론트엔드 | [회의 내용 기반 선택] | [버전] | [이 제품에 적합한 이유] |
+| 백엔드 | [선택] | [버전] | [이유] |
+| 데이터베이스 | [선택] | [버전] | [이유] |
+| 인프라/배포 | [선택] | - | [이유] |
+| (필요 시 추가) | | | |
 
 ### 9.2 상세 아키텍처 설계
-**최소 3문단 이상 작성:**
-- **시스템 컴포넌트**: 각 컴포넌트의 역할과 책임
+**최소 3문단 이상 작성 (이 제품의 실제 구조에 맞게):**
+- **시스템 컴포넌트**: 이 제품에 실제로 필요한 컴포넌트와 각 역할
 - **데이터 흐름**: 사용자 요청부터 응답까지의 전체 흐름
-- **확장성 전략**: 수평 확장, 수직 확장 계획
-- **기술적 선택 사유**: GPU가 필요한 영상 렌더링은 **로컬 워크스테이션에서 처리**하여 비용 절감, 나머지는 클라우드에서 처리
+- **확장성 전략**: 수평/수직 확장 계획
+
+아래는 일반적인 웹 서비스 아키텍처의 **빈 골격**입니다. 이 제품에 맞게 컴포넌트를 추가/삭제/이름변경하세요. 이 제품과 무관한 컴포넌트(예: 회의에 없는 외부 서비스)는 절대 넣지 마세요.
 
 \`\`\`mermaid
 graph TB
-    subgraph "프론트엔드 / Frontend"
-        A[웹 앱]
+    subgraph "클라이언트"
+        A[클라이언트 앱]
     end
-    subgraph "로컬 워크스테이션 / Local Worker"
-        LW[GPU 렌더링 엔진]
-        LQ[Task Queue]
-    end
-    subgraph "API 게이트웨이 / API Gateway"
+    subgraph "애플리케이션"
         C[인증/인가]
-        D[로드 밸런싱]
+        F[핵심 비즈니스 로직]
     end
-    subgraph "백엔드 서비스 / Backend Services"
-        E[사용자 서비스]
-        F[비즈니스 서비스]
-        G[알림 서비스]
+    subgraph "데이터 계층"
+        H[(주 데이터베이스)]
+        I[(캐시)]
     end
-    subgraph "데이터 계층 / Data Layer"
-        H[(Primary DB)]
-        I[(Cache/Queue)]
-        J[(File Storage)]
-    end
-    subgraph "외부 서비스 / External Services"
-        K[결제 gateway]
-        L[이메일 서비스]
-        M[Gemini API]
-        N[ElevenLabs API]
+    subgraph "외부 서비스"
+        K[이 제품에 필요한 외부 연동만]
     end
 
     A --> C
-    C --> E
     C --> F
-    E --> H
     F --> H
     F --> I
-    F --> LQ
-    LQ --> LW
-    LW --> M
-    LW --> N
-    LW --> F
-    G --> L
     F --> K
 \`\`\`
 
-**아키텍처 주의사항**:
-- 영상 렌더링(GPU 작업)은 로컬 워크스테이션에서 비동기 Queue 방식으로 처리하여 **클라우드 GPU 비용을 0원**으로 절감
-- 크롤링 및 API 통신은 클라우드 백엔드에서 처리
-- 렌더링 완료 후 결과물을 S3/Cloud Storage에 업로드
-
 ### 9.3 데이터베이스 설계
-**테이블별 구조를 작성:**
+이 제품의 핵심 도메인 엔터티에 맞는 테이블을 설계하세요. 아래는 **빈 골격**이며 컬럼/테이블명은 이 제품 도메인에 맞게 채우세요. 예상 데이터 수는 회의의 사용량 가정에 근거해 산정하고(근거를 백업 전략 옆에 간단히), 회의에 없는 기능의 테이블(예: 무관한 결제/영상)은 넣지 마세요.
 
 | 테이블명 | 주요 컬럼 | 관계 | 예상 데이터 수 | 백업 전략 |
 |---------|-----------|------|---------------|-----------|
-| users | id, email, password_hash, plan_type, created_at | 1:N | 10만건 | 일일 |
-| subscriptions | id, user_id, plan_id, status, current_period_start, current_period_end | N:1 | 10만건 | 일일 |
-| tasks | id, user_id, product_id, video_render_status, tiktok_upload_status, created_at | N:1 | 100만건 | 주간 |
-| products | id, name, source_url, price, category, crawled_at | 1:N | 100만건 | 일일 |
+| [핵심 엔터티1] | id, ... | 1:N | [근거 기반 추정] | [전략] |
+| [핵심 엔터티2] | id, ... | N:1 | [추정] | [전략] |
+| [필요 시 추가] | | | | |
 `;
   },
   estimatedTokens: 5000,
@@ -505,11 +575,12 @@ graph TB
 
 // 섹션 10: 릴리스 계획
 export const releasePlanPrompt: SectionPrompt = {
-  getPrompt: ({ summary, transcript, previousSections }) => {
+  getPrompt: ({ summary, transcript, previousSections, metadata }) => {
     const funcContext = previousSections?.['functional-req'] || '';
     const techContext = previousSections?.['technical-req'] || '';
     return `
 ${getCommonHeader({ title: '', date: '' }, summary)}
+${getRealismGuard(metadata)}
 
 ${funcContext ? `## 기능 요구사항 참고
 ${funcContext}
@@ -533,23 +604,37 @@ ${transcript}
 회의에서 언급된 **모든 날짜와 기간**을 반드시 포함하세요.
 
 ### 10.1 상세 마일스톤
-**회의에서 언급된 **모든 날짜와 기간**을 반드시 포함하세요:**
-- 회의에서 언급된 마감일, 이슈 날짜, 스프린트 기간을 모두 추출하세요
-- 언급이 없으면 **작성일 기준 합리적인 일정**을 제시하세요
-- 연도는 현재 연도를 기준으로 작성하세요
+회의에서 논의된 날짜/기간을 반영해 작성하세요. **담당자는 이 프로젝트의 실제 팀 역할로 채우고, 기간(주)은 시작일~종료일과 일치하도록 계산하세요.** 회의에 일정이 없으면 합리적으로 추정하되 추정임을 명시하세요.
 
 | 단계 | 작업 항목 | 기간 | 시작일 | 종료일 | 담당자 | 선행 조건 | 산출물 |
 |------|----------|------|--------|--------|--------|----------|--------|
-| 1단계 | [회의 내용 또는 추정] | [회의 내용 또는 추정] | [회의 내용 또는 추정] | [회의 내용 또는 추정] | [회의 내용 또는 추정] | - | [산출물] |
-| 2단계 | [회의 내용 또는 추정] | [회의 내용 또는 추정] | [회의 내용 또는 추정] | [회의 내용 또는 추정] | [회의 내용 또는 추정] | 1단계 완료 | [산출물] |
-| 3단계 | [회의 내용 또는 추정] | [회의 내용 또는 추정] | [회의 내용 또는 추정] | [회의 내용 또는 추정] | [회의 내용 또는 추정] | 2단계 완료 | [산출물] |
+| 1단계 | 기획 및 설계 | [N주] | [시작일] | [종료일] | [실제 담당 역할] | - | [산출물] |
+| 2단계 | 개발 | [N주] | [시작일] | [종료일] | [역할] | 1단계 완료 | [산출물] |
+| 3단계 | 테스트 | [N주] | [시작일] | [종료일] | [역할] | 2단계 완료 | [산출물] |
+| 4단계 | 출시 | [N주] | [시작일] | [종료일] | [역할] | 3단계 완료 | [산출물] |
+
+**타임라인 시각화:**
+\`\`\`mermaid
+gantt
+    title 프로젝트 타임라인 / Project Timeline
+    dateFormat YYYY-MM-DD
+    section 1단계 / Phase 1
+    기획 및 설계      :a1, 2026-06-01, 4w
+    section 2단계 / Phase 2
+    개발             :b1, 2026-07-01, 8w
+    section 3단계 / Phase 3
+    베타 테스트        :c1, 2026-09-01, 4w
+    section 4단계 / Phase 4
+    정식 출시         :d1, 2026-10-01, 2w
+\`\`\`
 
 ### 10.2 롤아웃 계획
-**회의에서 언급된 일정을 모두 포함하세요:**
-- **알파 테스트**: [회의 내용 또는 추정], 대상: [회의 내용 또는 추정]
-- **베타 테스트**: [회의 내용 또는 추정], 대상: [회의 내용 또는 추정]
-- **소프트 런칭**: [회의 내용 또는 추정], 대상: [회의 내용 또는 추정]
-- **정식 릴리스**: [회의 내용 또는 추정], 대상: 전체 사용자
+단계별 출시 일정을 작성하세요. **각 단계의 "대상"은 이 제품의 실제 사용자 유형에 맞게 정하세요.**
+(예: 외부 판매 제품이면 베타 사용자, 사내 도구면 특정 부서, 무료 앱이면 초기 테스터 등 — 회의에 없는 시장/고객을 임의로 만들지 마세요.)
+
+- **알파 테스트**: [기간], 대상: [이 제품에 맞는 내부/제한 대상]
+- **베타 테스트**: [기간], 대상: [이 제품에 맞는 대상]
+- **정식 출시**: [날짜], 대상: [실제 목표 사용자]
 `;
   },
   estimatedTokens: 4000,
@@ -557,9 +642,12 @@ ${transcript}
 
 // 섹션 11: 비용 및 리소스
 export const costResourcesPrompt: SectionPrompt = {
-  getPrompt: ({ summary, transcript }) => {
+  getPrompt: ({ summary, transcript, metadata }) => {
     return `
 ${getCommonHeader({ title: '', date: '' }, summary)}
+${getNumericalConsistencyGuard(metadata)}
+[비용 구분]
+11.1 개발 비용(일회성·초기 투자)과 11.2 운영 비용(반복·월간)을 명확히 구분하세요. 동일 항목을 개발비와 운영비에 중복 계상하지 마세요.
 
 ## 작성 섹션: 11. 비용 및 리소스 (Cost & Resources)
 
@@ -572,43 +660,30 @@ ${transcript}
 
 회의에서 언급된 **모든 비용 관련 정보**를 추출하세요.
 
-### 11.1 개발 비용 산출
-**회의 내용과 프로젝트 규모를 기반으로 작성:**
-- 회의에서 언급된 **구체적인 비용**을 모두 포함하세요
-- 인건비, 서버비, API 비용 등 항목별로 산출하세요
-- "N원", "TBD" 대신 **합리적인 추정치**를 작성하세요
+### 11.1 개발 비용 (일회성·초기 투자)
+이 제품을 만드는 데 드는 **초기/일회성** 비용만 작성하세요. 항목·단가·수량은 회의에서 언급된 실제 비용 정보에 근거하고, 각 행의 총비용은 단가×수량으로 검산하세요. 회의에 없는 비용 항목(예: 무관한 외부 API)은 넣지 마세요.
 
-| 항목 | 단위 | 단가 | 수량 | 기간 | 총비용 | 비고 |
+| 항목 | 단위 | 단가 | 수량 | 기간 | 총비용 | 비고(산출 근거) |
 |------|------|------|------|------|--------|------|
-| 인건비 | 인월 | [회의 내용] | [회의 내용] | [회의 내용] | [산출] | [비고] |
-| 서버비 | 월 | [추정] | - | - | [산출] | [비고] |
-| AI API | 건당 | [회의 내용 또는 추정] | [회의 내용 또는 추정] | - | [산출] | [비고] |
-| 기타 | - | - | - | - | [산출] | [비고] |
-| **합계** | - | - | - | - | **[총비용]** | - |
+| [회의 기반 항목] | [단위] | [단가] | [수량] | [기간] | [단가×수량] | [근거] |
+| (필요 시 추가) | | | | | | |
 
-### 11.2 운영 비용 (월간)
-**서비스 운영에 필요한 월 비용을 작성:**
-- 회의에서 언급된 **구체적인 비용**을 모두 포함하세요
-- "N원" 대신 **합리적인 추정치**를 작성하세요
+### 11.2 운영 비용 (월간·반복)
+출시 후 **매월 반복** 발생하는 비용만 작성하세요. 11.1과 같은 항목을 중복 계상하지 마세요. 합계는 각 행의 합으로 검산하세요.
 
 | 항목 | 예상 월 비용 | 산출 근거 |
 |------|-------------|-----------|
-| 인건비 | [회의 내용 또는 추정] | [산출 근거] |
-| 인프라 | [회의 내용 또는 추정] | 서버, DB, CDN |
-| SaaS/API | [회의 내용 또는 추정] | [산출 근거] |
-| 기타 | [회의 내용 또는 추정] | 도메인, 이메일 등 |
-| **합계** | **[총비용/월]** | - |
+| [회의 기반 항목] | [금액] | [단가 × 수량 등 계산식] |
+| (필요 시 추가) | | |
+| **합계** | **[행 합계]** | - |
 
 ### 11.3 리소스 계획
-**회의에서 언급된 팀 구성과 인력을 작성:**
-- 회의에서 언급된 **모든 역할과 인원**을 포함하세요
-- 언급이 없으면 프로젝트 규모에 맞게 **합리적으로 추정**하세요
+이 프로젝트의 **실제 팀 구성**에 맞게 작성하세요. 회의에서 1인/소규모라면 그에 맞게, 더 큰 팀이면 역할별로. 회의에 없는 역할(예: 1인 프로젝트인데 별도 디자이너/DevOps)을 임의로 만들지 마세요.
 
 | 역할 | 인원 | 기간 | 참여율 | 주요 업무 |
 |------|------|------|--------|-----------|
-| [회의 내용 또는 추정] | [회의 내용 또는 추정] | [회의 내용 또는 추정] | [회의 내용 또는 추정] | [회의 내용 또는 추정] |
-
-**비고**: 필요시 외주(N주) 또는 협업 활용 가능성 명시
+| [실제 역할] | [인원] | [기간] | [%] | [업무] |
+| (필요 시 추가) | | | | |
 `;
   },
   estimatedTokens: 3000,
@@ -647,16 +722,13 @@ ${transcript}
 | 조회 권한 | 조회만 | Read | 수정/삭제 불가 |
 
 ### 12.2 과금 및 결제 (Billing & Payment)
-**회의 내용과 시장 분석을 기반으로 작성:**
-- 회의에서 언급된 **구체적인 요금**을 모두 포함하세요
-- 언급이 없으면 타겟 시장에 맞는 **합리적인 요금제**를 제시하세요
-- "N원" 대신 **구체적인 추정치**를 작성하세요
+이 서비스의 가치와 타겟에 맞는 요금제를 설계하세요. 각 플랜의 가격/기능 제한은 회의 내용에 근거하고, 무료 플랜의 제한과 유료 플랜의 차별점을 명확히 하세요. (아래는 빈 구조이며 가격·기능은 이 서비스에 맞게 채우세요)
 
-| 플랜 | 가격 | 기능 | 결제 주기 | 할인 |
+| 플랜 | 가격 | 주요 기능/제한 | 결제 주기 | 할인 |
 |------|------|------|----------|------|
-| 무료 | 0원 | [회의 내용 또는 추정] | - | - |
-| 베이직 | [회의 내용 또는 추정] | [회의 내용 또는 추정] | [회의 내용 또는 추정] | - |
-| 프로 | [회의 내용 또는 추정] | [회의 내용 또는 추정] | [회의 내용 또는 추정] | [회의 내용 또는 추정] |
+| 무료 | 0원 | [무료 제공 범위] | - | - |
+| [유료 플랜명] | [가격] | [기능/한도] | 월간 | - |
+| [상위 플랜명] | [가격] | [기능/한도] | 월간 | [연간 할인 등] |
 
 ### 12.3 백오피스 기능 (Backoffice)
 - [ ] 사용자 관리 (가입 승인, 정지, 탈퇴)
@@ -686,11 +758,13 @@ ${transcript}
 
 // 섹션 13: 리스크 및 대응
 export const risksPrompt: SectionPrompt = {
-  getPrompt: ({ summary, transcript, previousSections }) => {
+  getPrompt: ({ summary, transcript, previousSections, metadata }) => {
     const overviewContext = previousSections?.['overview'] || '';
     const releaseContext = previousSections?.['release-plan'] || '';
     return `
 ${getCommonHeader({ title: '', date: '' }, summary)}
+${getHyperboleGuard()}
+${getComplianceGuard(metadata)}
 
 ${overviewContext ? `## 개요 참고
 ${overviewContext}
@@ -725,11 +799,13 @@ ${transcript}
 
 // 섹션 14: 성공 기준
 export const successCriteriaPrompt: SectionPrompt = {
-  getPrompt: ({ summary, transcript, previousSections }) => {
+  getPrompt: ({ summary, transcript, previousSections, metadata }) => {
     const goalsContext = previousSections?.['goals'] || '';
     const releaseContext = previousSections?.['release-plan'] || '';
     return `
 ${getCommonHeader({ title: '', date: '' }, summary)}
+${getHyperboleGuard()}
+${getNumericalConsistencyGuard(metadata)}
 
 ${goalsContext ? `## 목표 참고
 ${goalsContext}
