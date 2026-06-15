@@ -74,12 +74,13 @@ function VoiceRecorder() {
         await handleApiError(response, '변환 실패');
       }
 
-      const { text, duration: audioDuration } = await response.json();
+      const { text, duration: audioDuration, segments } = await response.json();
 
       stopSimulation();
 
       updateCurrentMeeting({
         transcript: text,
+        ...(segments ? { transcriptSegments: segments } : {}),
         duration: audioDuration || duration,
         audioUrl: audioUrl || undefined,
       });

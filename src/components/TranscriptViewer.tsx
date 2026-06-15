@@ -84,13 +84,32 @@ export function TranscriptViewer() {
         title: currentMeeting?.title,
       });
 
+      // 음성 STT 출처(transcriptSegments 존재)면 맥락 보정 1회 — 한국어 STT 오인식 교정(회의 내용 정확 파악 1순위)
+      let textForSummary = editedTranscript;
+      if (currentMeeting?.transcriptSegments && currentMeeting.transcriptSegments.length > 0) {
+        try {
+          setSummarizeProgress('회의 내용 맥락 보정 중...');
+          const refineRes = await fetch('/api/refine-transcript', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ transcript: editedTranscript }),
+          });
+          if (refineRes.ok) {
+            const { refined } = await refineRes.json();
+            if (refined && refined.trim()) textForSummary = refined;
+          }
+        } catch {
+          // 보정 실패 시 원문으로 진행 (파이프라인 끊지 않음)
+        }
+      }
+
       setSummarizeProgress('AI 모델에 요청 전송 중...');
 
       const response = await fetch('/api/summarize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          text: editedTranscript,
+          text: textForSummary,
           context: `${currentMeeting?.title} 회의`,
         }),
       });

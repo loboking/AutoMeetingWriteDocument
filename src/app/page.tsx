@@ -24,6 +24,8 @@ import { useBeforeUnload } from '@/hooks/useBeforeUnload';
 import { useProgressSimulation } from '@/hooks/useProgressSimulation';
 import { useMeetingStore } from '@/store/meetingStore';
 import { MeetingStep } from '@/types';
+import { routeInputFile } from '@/lib/inputRouter';
+import { validateAudio } from '@/lib/stt/audioValidation';
 import MeetingRecorder from '@/components/MeetingRecorder';
 import TranscriptViewer from '@/components/TranscriptViewer';
 import SummaryViewer from '@/components/SummaryViewer';
@@ -69,43 +71,66 @@ export default function Home() {
   const [showNewMeetingConfirm, setShowNewMeetingConfirm] = useState(false);
   const handleFileUpload = async (file: File) => {
     setUploadError('');
+
+    // 입력 종류 판정 (음성 vs 텍스트) — 음성 파일을 텍스트 추출로 보내던 버그 방지
+    const kind = routeInputFile({ name: file.name, type: file.type });
+    if (kind === 'unsupported') {
+      setUploadError('지원하지 않는 파일 형식입니다. (음성: mp3/wav/webm/m4a, 텍스트: txt/md/pdf)');
+      return;
+    }
+
+    // 오디오는 별도 검증 (형식/크기/빈 파일)
+    if (kind === 'audio') {
+      const v = validateAudio({ name: file.name, type: file.type, size: file.size });
+      if (!v.ok) {
+        setUploadError(v.error || '오디오 파일을 처리할 수 없습니다.');
+        return;
+      }
+    } else if (file.size > 50 * 1024 * 1024) {
+      setUploadError('파일 크기는 50MB 이하여야 합니다.');
+      return;
+    }
+
     setUploading(true);
     resetSimulation();
     startSimulation();
-
-    // 파일 크기 검증 (최대 50MB)
-    const MAX_SIZE = 50 * 1024 * 1024;
-    if (file.size > MAX_SIZE) {
-      setUploadError('파일 크기는 50MB 이하여야 합니다.');
-      setUploading(false);
-      stopSimulation();
-      return;
-    }
 
     const title = meetingTitle.trim() || file.name.replace(/\.[^/.]+$/, '');
 
     try {
       const formData = new FormData();
-      formData.append('document', file);
+      let text: string;
+      let transcriptSegments: import('@/types').TranscriptSegment[] | undefined;
 
-      const response = await fetch('/api/extract-text', {
-        method: 'POST',
-        body: formData,
-      });
-
-      stopSimulation();
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ error: '파일 처리 실패' }));
-        throw new Error(errorData.error || '파일 처리 실패');
+      if (kind === 'audio') {
+        // 음성 → STT (transcribe). 텍스트 추출 API로 보내지 않는다.
+        formData.append('audioFile', file);
+        const response = await fetch('/api/transcribe', { method: 'POST', body: formData });
+        stopSimulation();
+        if (!response.ok) {
+          const err = await response.json().catch(() => ({ error: '음성 변환 실패' }));
+          throw new Error(err.message || err.error || '음성 변환에 실패했습니다.');
+        }
+        const data = await response.json();
+        text = data.text || '';
+        transcriptSegments = data.segments;
+      } else {
+        // 텍스트 → 추출
+        formData.append('document', file);
+        const response = await fetch('/api/extract-text', { method: 'POST', body: formData });
+        stopSimulation();
+        if (!response.ok) {
+          const err = await response.json().catch(() => ({ error: '파일 처리 실패' }));
+          throw new Error(err.error || '파일 처리 실패');
+        }
+        text = (await response.json()).text;
       }
 
-      const { text } = await response.json();
+      if (!text || !text.trim()) throw new Error('변환된 텍스트가 비어 있습니다.');
 
-      // 업로드 성공 후에만 회의 생성
       createMeeting(title);
       setMeetingTitle('');
-      updateCurrentMeeting({ transcript: text });
+      updateCurrentMeeting({ transcript: text, ...(transcriptSegments ? { transcriptSegments } : {}) });
       updateMeetingStep('transcribing');
     } catch (error) {
       console.error('File upload error:', error);

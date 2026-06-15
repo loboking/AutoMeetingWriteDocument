@@ -1,3 +1,6 @@
+import type { TranscriptSegment } from '@/lib/stt/types';
+export type { TranscriptSegment } from '@/lib/stt/types';
+
 // 회의 상태 타입
 export type MeetingStep = 'idle' | 'recording' | 'transcribing' | 'summarizing' | 'done';
 
@@ -37,6 +40,7 @@ export interface Meeting {
   duration?: number; // 초 단위
   audioUrl?: string;
   transcript?: string;
+  transcriptSegments?: TranscriptSegment[]; // 화자분리/타임스탬프 (옵셔널, 기존 transcript와 병행)
   summary?: MeetingSummary;
   step: MeetingStep;
   // 12개 기획 문서
