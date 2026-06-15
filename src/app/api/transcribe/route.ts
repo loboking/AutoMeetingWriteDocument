@@ -9,7 +9,13 @@ const MAX_AUDIO_BYTES = 50 * 1024 * 1024;
 
 export async function POST(request: NextRequest) {
   try {
-    const formData = await request.formData();
+    // formData 파싱 실패(빈 body 등)도 400으로 처리 — 500 방지
+    let formData: FormData;
+    try {
+      formData = await request.formData();
+    } catch {
+      return NextResponse.json({ error: '오디오 파일이 필요합니다.' }, { status: 400 });
+    }
     const audioFile = formData.get('audioFile') as File | null;
     const language = (formData.get('language') as string) || 'ko';
 

@@ -26,6 +26,8 @@ import { useMeetingStore } from '@/store/meetingStore';
 import { MeetingStep } from '@/types';
 import { routeInputFile } from '@/lib/inputRouter';
 import { validateAudio } from '@/lib/stt/audioValidation';
+import { useBrowserSTT } from '@/hooks/useBrowserSTT';
+import { isNoSttProviderResponse } from '@/lib/stt/browserSTT';
 import MeetingRecorder from '@/components/MeetingRecorder';
 import TranscriptViewer from '@/components/TranscriptViewer';
 import SummaryViewer from '@/components/SummaryViewer';
@@ -46,6 +48,8 @@ export default function Home() {
 
   // 진행률 시뮬레이션 훅 사용
   const { progress: uploadProgress, startSimulation, stopSimulation, resetSimulation } = useProgressSimulation(200, 15, 90);
+  // 서버 STT(키) 없을 때 브라우저 무료 STT(transformers.js) 폴백
+  const browserSTT = useBrowserSTT();
 
   useEffect(() => {
     setMounted(true);
@@ -106,14 +110,25 @@ export default function Home() {
         // 음성 → STT (transcribe). 텍스트 추출 API로 보내지 않는다.
         formData.append('audioFile', file);
         const response = await fetch('/api/transcribe', { method: 'POST', body: formData });
-        stopSimulation();
-        if (!response.ok) {
-          const err = await response.json().catch(() => ({ error: '음성 변환 실패' }));
-          throw new Error(err.message || err.error || '음성 변환에 실패했습니다.');
+        const data = await response.json().catch(() => ({}));
+        if (response.ok) {
+          stopSimulation();
+          text = data.text || '';
+          transcriptSegments = data.segments;
+        } else if (isNoSttProviderResponse(data)) {
+          // 서버에 STT 키 없음 → 브라우저 무료 STT(transformers.js)로 폴백
+          setUploadError('');
+          const result = await browserSTT.transcribeBlob(file, 'ko');
+          stopSimulation();
+          if (!result || !result.text.trim()) {
+            throw new Error(browserSTT.error || '브라우저 음성 변환에 실패했습니다.');
+          }
+          text = result.text;
+          transcriptSegments = result.segments;
+        } else {
+          stopSimulation();
+          throw new Error(data.message || data.error || '음성 변환에 실패했습니다.');
         }
-        const data = await response.json();
-        text = data.text || '';
-        transcriptSegments = data.segments;
       } else {
         // 텍스트 → 추출
         formData.append('document', file);
