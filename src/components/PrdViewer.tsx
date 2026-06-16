@@ -8,7 +8,7 @@ import * as XLSX from 'xlsx';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { sanitizeHtml } from '@/lib/sanitize';
-import { extractMermaidCode, docTypeToField, canGenerateDoc, getDependencyNames, DOCUMENTS, DEPENDENCIES, type DocType } from '@/lib/documentUtils';
+import { extractMermaidCode, docTypeToField, canGenerateDoc, getDependencyNames, getAllDependents, getDirectParentTitles, DOCUMENTS, DEPENDENCIES, type DocType } from '@/lib/documentUtils';
 import PptxGenJS from 'pptxgenjs';
 import { Document as DocxDocument, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, Table, TableRow, TableCell, WidthType, BorderStyle } from 'docx';
 import { Button } from '@/components/ui/button';
@@ -81,6 +81,13 @@ export function PrdViewer() {
   const [showGenerateConfirm, setShowGenerateConfirm] = useState(false);
   const [generateConfirmData, setGenerateConfirmData] = useState<{ count: number; isRegenerate: boolean; docsToRegenerate: DocType[] } | null>(null);
   const [isEditing, setIsEditing] = useState(false);
+
+  // 수정모드 저장 분기 확인 (사소 수정 / 주요 변경)
+  const [showSaveConfirm, setShowSaveConfirm] = useState(false);
+  // 저장 후 "영향받은 N개 문서" 안내 배너 (위상순서 하위 목록)
+  const [impactedDocs, setImpactedDocs] = useState<DocType[]>([]);
+  // 자식 수정 저장 시 상위(부모) 모순 경고 모달
+  const [parentWarning, setParentWarning] = useState<{ docType: DocType; parents: string[] } | null>(null);
 
   const [editedContent, setEditedContent] = useState('');
   const [copied, setCopied] = useState(false);
@@ -320,6 +327,10 @@ export function PrdViewer() {
       const { content } = await response.json();
       setDocuments(prev => ({ ...prev, [docType]: content }));
       updateCurrentMeeting({ [docTypeToField(docType)]: content });
+      // 재생성 성공 → self latest + 버전++ + 하위 재전파 (outdated 배지 해소 + 그래프 연결)
+      markRegenerated(docType, true);
+      // 방금 갱신한 문서를 영향 배너 목록에서 제거
+      setImpactedDocs(prev => prev.filter(d => d !== docType));
     } catch (error) {
       console.error('Doc generation error:', error);
       // 에러는 UI에서 자연스럽게 처리 (버튼 상태 등)
@@ -445,21 +456,50 @@ export function PrdViewer() {
     }
   };
 
-  const handleSaveEdit = () => {
-    setDocuments(prev => ({ ...prev, [activeDoc]: editedContent }));
-    updateCurrentMeeting({ [docTypeToField(activeDoc)]: editedContent });
+  // 문서 본문이 바뀐 뒤 공통으로 부르는 상태 갱신:
+  // 자기 자신 latest + 버전++ (+ major면 하위 전파). 단일 재생성/편집 저장이 공유.
+  const markRegenerated = (docType: DocType, propagate: boolean) => {
+    if (!currentMeeting?.id) return;
+    setDocStatus(currentMeeting.id, docType, 'latest');
+    incrementDocVersion(currentMeeting.id, docType);
+    if (propagate) {
+      // 하위 문서들을 outdated로 표시 (frozen 제외는 store가 처리)
+      markDependentsOutdated(currentMeeting.id, docType);
+    }
+  };
 
-    // 문서 상태 업데이트
-    if (currentMeeting?.id) {
-      // 사용자가 직접 수정하면 latest로 표시
-      setDocStatus(currentMeeting.id, activeDoc, 'latest');
-      incrementDocVersion(currentMeeting.id, activeDoc);
+  // 실제 저장 수행. major=true면 하위 전파 + 영향 배너, 부모 모순 경고.
+  const performSaveEdit = (major: boolean) => {
+    const savedDoc = activeDoc;
+    setDocuments(prev => ({ ...prev, [savedDoc]: editedContent }));
+    updateCurrentMeeting({ [docTypeToField(savedDoc)]: editedContent });
 
-      // 하위 문서들을 outdated로 표시
-      markDependentsOutdated(currentMeeting.id, activeDoc);
+    markRegenerated(savedDoc, major);
+
+    if (major && currentMeeting?.id) {
+      // 영향받은 하위 문서(존재하면서 frozen 아닌) 위상순서로 안내
+      const order = DOCUMENTS.map(d => d.key);
+      const affected = getAllDependents(savedDoc)
+        .filter(d => documents[d] && getDocStatus(currentMeeting.id, d) === 'outdated')
+        .sort((a, b) => order.indexOf(a) - order.indexOf(b));
+      setImpactedDocs(affected);
+
+      // 자식을 수정했으면 직계 부모와의 모순 가능성을 모달로 강하게 경고
+      const parents = getDirectParentTitles(savedDoc);
+      if (parents.length > 0) {
+        setParentWarning({ docType: savedDoc, parents });
+      }
+    } else {
+      setImpactedDocs([]);
     }
 
+    setShowSaveConfirm(false);
     setIsEditing(false);
+  };
+
+  // 저장 버튼: 분기 선택 모달을 띄움
+  const handleSaveEdit = () => {
+    setShowSaveConfirm(true);
   };
 
   // 문서 네비게이션
@@ -1053,7 +1093,10 @@ export function PrdViewer() {
                         const status = getDocStatus(currentMeeting.id, doc.key);
                         if (status === 'outdated') {
                           return (
-                            <span className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-50 text-amber-700 border border-amber-200 dark:bg-amber-900/30 dark:text-amber-300 dark:border-amber-700">
+                            <span
+                              className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-50 text-amber-700 border border-amber-200 dark:bg-amber-900/30 dark:text-amber-300 dark:border-amber-700"
+                              title="상위 문서가 수정되어 내용이 오래되었을 수 있어요. 이 문서를 열어 '재생성'하면 최신으로 갱신됩니다."
+                            >
                               <AlertTriangle className="w-2.5 h-2.5" />
                               업데이트 필요
                             </span>
@@ -1302,6 +1345,46 @@ export function PrdViewer() {
 
         {/* 문서 컨텐츠 영역 */}
         <div className="p-6" ref={contentRef}>
+        {/* 저장 후 영향받은 하위 문서 안내 배너 */}
+        {impactedDocs.length > 0 && (
+          <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 dark:border-amber-700 dark:bg-amber-900/30 p-3">
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 mt-0.5 text-amber-600 dark:text-amber-400 flex-shrink-0" />
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-amber-800 dark:text-amber-300">
+                  이 변경으로 {impactedDocs.length}개 하위 문서가 영향을 받았습니다.
+                </p>
+                <p className="text-xs text-amber-700 dark:text-amber-400 mt-0.5">
+                  아래 순서대로 다시 만들 수 있어요. 자동으로 바뀌지 않으니 원할 때 갱신하세요.
+                </p>
+                <div className="flex flex-wrap gap-1.5 mt-2">
+                  {impactedDocs.map(d => {
+                    const t = DOCUMENTS.find(x => x.key === d)?.title || d;
+                    return (
+                      <button
+                        key={d}
+                        onClick={() => { setActiveDoc(d); handleGenerateDoc(d); }}
+                        disabled={isSingleGenerating || isGenerating}
+                        className="flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium bg-white dark:bg-slate-800 border border-amber-300 dark:border-amber-600 text-amber-800 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/50 disabled:opacity-50"
+                        title={`${t} 지금 갱신`}
+                      >
+                        <Plus className="w-3 h-3" />
+                        {t}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              <button
+                onClick={() => setImpactedDocs([])}
+                className="text-amber-500 hover:text-amber-700 dark:hover:text-amber-300 flex-shrink-0"
+                title="닫기"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        )}
         <div className="min-w-0">
           {DOCUMENTS.map((doc) => {
             const docContent = documents[doc.key] || '';
@@ -1770,6 +1853,52 @@ export function PrdViewer() {
           </AlertDialogContent>
         </AlertDialog>
       )}
+
+      {/* 수정모드 저장 분기: 사소 수정 / 주요 변경 */}
+      <AlertDialog open={showSaveConfirm} onOpenChange={setShowSaveConfirm}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>변경 내용을 저장할까요?</AlertDialogTitle>
+            <AlertDialogDescription>
+              <span className="block mb-2">
+                <strong>주요 변경</strong>: 내용이 의미 있게 바뀌었어요. 이 문서에서 파생된 하위 문서에 &lsquo;업데이트 필요&rsquo; 표시가 떠요.
+              </span>
+              <span className="block">
+                <strong>사소 수정</strong>: 오타·표현 등 가벼운 수정이에요. 하위 문서는 그대로 둬요.
+              </span>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>취소</AlertDialogCancel>
+            <Button variant="outline" onClick={() => performSaveEdit(false)}>
+              사소 수정
+            </Button>
+            <AlertDialogAction onClick={() => performSaveEdit(true)}>
+              주요 변경
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* 자식 문서 수정 → 상위(부모) 모순 가능성 경고 */}
+      <AlertDialog open={!!parentWarning} onOpenChange={(open) => { if (!open) setParentWarning(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>상위 문서와 어긋날 수 있어요</AlertDialogTitle>
+            <AlertDialogDescription>
+              방금 수정한 내용이 아래 상위 문서와 맞지 않을 수 있습니다. 시스템이 상위 문서를 자동으로 바꾸지는 않으니, 직접 확인해 주세요.
+              <span className="mt-3 block font-medium text-slate-700 dark:text-slate-200">
+                {parentWarning?.parents.join(', ')}
+              </span>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogAction onClick={() => setParentWarning(null)}>
+              확인했어요
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

@@ -289,6 +289,23 @@ export function flattenTree(nodes: TreeNode[], parentKey: string | null = null):
 
 export const FLAT_DOCUMENTS = flattenTree(DOCUMENT_TREE);
 
+// 직계 부모(1-hop 의존 대상)의 한글 제목 목록
+export function getDirectParentTitles(docType: DocType): string[] {
+  const parents = DEPENDENCIES[docType] || [];
+  return parents.map(dep => DOCUMENTS.find(d => d.key === dep)?.title || dep);
+}
+
+// 직계 부모 중 "이미 존재하면서 outdated(stale)인" 문서들.
+// 자식 재생성 시 stale한 부모를 컨텍스트로 덮어쓰는 위험을 경고하는 데 사용.
+export function getStaleParents(
+  docType: DocType,
+  documents: Record<DocType, string>,
+  getStatus: (d: DocType) => string
+): DocType[] {
+  const parents = DEPENDENCIES[docType] || [];
+  return parents.filter(dep => documents[dep] && getStatus(dep) === 'outdated');
+}
+
 // 특정 문서의 모든 하위 문서를 재귀적으로 찾기
 export function getAllDependents(docType: DocType, visited: Set<DocType> = new Set()): DocType[] {
   if (visited.has(docType)) return [];
