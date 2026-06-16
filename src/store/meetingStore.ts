@@ -16,13 +16,23 @@ function generateId(): string {
   });
 }
 
-// 전체 생성 진행 상태 (persist 제외, 새로고침 시 리셋)
+// 전체 생성 진행 상태 (런타임 표시용, persist 제외)
 export interface GenerationProgress {
   currentLevel: number;
   totalLevels: number;
   currentDoc: string;
   completedDocs: DocType[];
   status: 'generating' | 'completed' | 'error' | 'cancelled';
+}
+
+// 진행 중 잡 체크포인트 (persist에 저장 → 새로고침/재방문 시 "남은 문서부터" 재개).
+// 완성된 문서 본문은 이미 meetings에 저장되므로 여기엔 메타만.
+export interface ActiveGenerationJob {
+  meetingId: string;
+  order: DocType[]; // 생성 순서 스냅샷
+  completedDocs: DocType[]; // 완료된 문서
+  status: 'running' | 'completed' | 'cancelled' | 'error';
+  updatedAt: number; // heartbeat
 }
 
 // 직렬화 불가한 캔슬 제어는 store state가 아닌 모듈 스코프에 보관.
@@ -55,6 +65,141 @@ function topoSortDocs(): DocType[] {
   return result;
 }
 
+// 생성 루프 (start/resume 공용). activeJob을 기준으로 남은 문서를 순차 생성하고,
+// 각 문서 완료 시 activeJob.completedDocs를 갱신(persist 체크포인트) → 새로고침 재개 가능.
+type SetFn = (partial: Partial<MeetingStore> | ((s: MeetingStore) => Partial<MeetingStore>)) => void;
+type GetFn = () => MeetingStore;
+
+async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
+  const job = get().activeJob;
+  if (!job) return;
+  const meetingId = job.meetingId;
+  const meeting = get().meetings.find((m) => m.id === meetingId) || get().currentMeeting;
+  if (!meeting?.summary) {
+    set({ activeJob: null });
+    return;
+  }
+
+  genAbort.cancelled = false;
+  genAbort.controller = null;
+
+  const order = job.order;
+  const doneSet = new Set<DocType>(job.completedDocs);
+
+  set({
+    isGenerating: true,
+    generatingMeetingId: meetingId,
+    generationProgress: {
+      currentLevel: doneSet.size,
+      totalLevels: order.length,
+      currentDoc: '',
+      completedDocs: [...doneSet],
+      status: 'generating',
+    },
+  });
+
+  // 컨텍스트 시드: 이미 생성된 문서 본문 수집
+  const generated: Record<string, string> = {};
+  for (const doc of DOCUMENTS) {
+    const field = docTypeToField(doc.key) as keyof Meeting;
+    const val = meeting[field];
+    if (typeof val === 'string' && val) generated[doc.key] = val;
+  }
+
+  const summary = meeting.summary;
+  const transcript = meeting.transcript || '';
+  const meetingInfo = { title: meeting.title, date: new Date(meeting.createdAt).toLocaleDateString('ko-KR') };
+
+  let completed = doneSet.size;
+  let failed = 0;
+
+  try {
+    for (let i = 0; i < order.length; i++) {
+      if (genAbort.cancelled) break;
+      const docType = order[i];
+      if (doneSet.has(docType)) continue; // 이미 완료된 문서 스킵 (재개)
+
+      const meta = DOCUMENTS.find((d) => d.key === docType);
+      set((st) =>
+        st.generationProgress
+          ? { generationProgress: { ...st.generationProgress, currentLevel: completed + 1, currentDoc: meta?.title || docType } }
+          : {}
+      );
+
+      const contextDocs: Record<string, string> = {};
+      for (const dep of DEPENDENCIES[docType] || []) {
+        if (generated[dep]) contextDocs[dep] = generated[dep];
+      }
+
+      const controller = new AbortController();
+      genAbort.controller = controller;
+      try {
+        const res = await fetch('/api/generate-doc', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ docType, summary, transcript, meetingInfo, contextDocs, review: false }),
+          signal: controller.signal,
+        });
+        if (!res.ok) throw new Error((await res.text()) || `${docType} 생성 실패`);
+        const { content } = await res.json();
+        if (!content) throw new Error(`${docType} 빈 응답`);
+
+        generated[docType] = content;
+        const field = docTypeToField(docType);
+        if (get().currentMeeting?.id === meetingId) {
+          get().updateCurrentMeeting({ [field]: content });
+        } else {
+          const meetings = get().meetings;
+          const idx = meetings.findIndex((m) => m.id === meetingId);
+          if (idx >= 0) {
+            const updated = [...meetings];
+            updated[idx] = { ...updated[idx], [field]: content };
+            set({ meetings: updated });
+          }
+        }
+        completed++;
+        doneSet.add(docType);
+        // ★ 체크포인트: activeJob 갱신(persist 저장) + 진행률
+        set((st) => ({
+          activeJob: st.activeJob ? { ...st.activeJob, completedDocs: [...doneSet], updatedAt: Date.now() } : null,
+          generationProgress: st.generationProgress
+            ? { ...st.generationProgress, completedDocs: [...doneSet] }
+            : null,
+        }));
+      } catch (e) {
+        if ((e as Error)?.name === 'AbortError' || controller.signal.aborted || genAbort.cancelled) break;
+        failed++;
+        console.error(`${docType} 생성 실패 (계속 진행):`, e);
+      } finally {
+        genAbort.controller = null;
+      }
+    }
+
+    const finalStatus = genAbort.cancelled ? 'cancelled' : failed > 0 && completed === doneSet.size && doneSet.size === 0 ? 'error' : 'completed';
+    const allDone = doneSet.size >= order.length;
+    set((st) => ({
+      generationProgress: st.generationProgress
+        ? { ...st.generationProgress, currentDoc: '', status: genAbort.cancelled ? 'cancelled' : allDone || failed === 0 ? 'completed' : 'error' }
+        : null,
+      // 완료/취소면 activeJob 종료 표시(다음 마운트에서 재개 안 함). 중간 실패로 안 끝났으면 running 유지(재개 대상)
+      activeJob: st.activeJob
+        ? { ...st.activeJob, completedDocs: [...doneSet], status: genAbort.cancelled ? 'cancelled' : allDone ? 'completed' : 'running', updatedAt: Date.now() }
+        : null,
+    }));
+    void finalStatus;
+  } finally {
+    set({ isGenerating: false, generatingMeetingId: null });
+    setTimeout(() => {
+      const st = get();
+      if (!st.isGenerating) {
+        set({ generationProgress: null });
+        // 완료/취소된 잡은 정리
+        if (st.activeJob && st.activeJob.status !== 'running') set({ activeJob: null });
+      }
+    }, 4000);
+  }
+}
+
 interface MeetingStore {
   // 상태
   meetings: Meeting[];
@@ -65,6 +210,8 @@ interface MeetingStore {
   isGenerating: boolean;
   generationProgress: GenerationProgress | null;
   generatingMeetingId: string | null;
+  // 진행 중 잡 체크포인트 (persist 저장 → 새로고침 재개용)
+  activeJob: ActiveGenerationJob | null;
 
   // 문서 상태 관리 (meetingId -> docType -> status)
   docStatuses: Record<string, Record<DocType, DocStatus>>;
@@ -97,9 +244,10 @@ interface MeetingStore {
   markDependentsOutdated: (meetingId: string, docType: DocType) => void;
   canRegenerateDoc: (meetingId: string, docType: DocType) => { can: boolean; reason?: string };
 
-  // 전체 문서 생성 (백그라운드 지속 + 캔슬)
+  // 전체 문서 생성 (백그라운드 지속 + 캔슬 + 새로고침 재개)
   startGeneration: () => Promise<void>;
   cancelGeneration: () => void;
+  resumeGeneration: () => Promise<void>; // 미완성 잡 재개 (새로고침/재방문)
 }
 
 export const useMeetingStore = create<MeetingStore>()(
@@ -114,6 +262,7 @@ export const useMeetingStore = create<MeetingStore>()(
       isGenerating: false,
       generationProgress: null,
       generatingMeetingId: null,
+      activeJob: null,
 
       createMeeting: (title) => {
         const newMeeting: Meeting = {
@@ -354,131 +503,57 @@ export const useMeetingStore = create<MeetingStore>()(
       },
 
       // 전체 문서 생성: 14개를 의존성 순서대로 1개씩 개별 API 호출.
-      // 루프가 store(React 밖)에서 돌아 PrdViewer 언마운트(탭 이동)에도 지속됨.
+      // 루프가 store(React 밖)에서 돌아 탭 이동에도 지속. 각 문서 완료 시 activeJob(persist)에
+      // 체크포인트를 기록해, 새로고침/재방문 후에도 "남은 문서부터" 재개 가능.
       startGeneration: async () => {
         if (get().isGenerating) return; // 중복 방지
         const meeting = get().currentMeeting;
         if (!meeting?.summary) return;
 
-        const meetingId = meeting.id; // 회의 전환 가드용 캡쳐
-        genAbort.cancelled = false;
-        genAbort.controller = null;
-
         const order = topoSortDocs();
-        set({
-          isGenerating: true,
-          generatingMeetingId: meetingId,
-          generationProgress: {
-            currentLevel: 0,
-            totalLevels: order.length,
-            currentDoc: '',
-            completedDocs: [],
-            status: 'generating',
-          },
+        // 이미 생성된(완료로 간주) 문서를 시작 시점 completedDocs에 반영
+        const preCompleted = order.filter((dt) => {
+          const v = meeting[docTypeToField(dt) as keyof Meeting];
+          return typeof v === 'string' && v;
         });
 
-        // 이미 생성된 문서를 컨텍스트 시드로 수집
-        const generated: Record<string, string> = {};
-        for (const doc of DOCUMENTS) {
-          const field = docTypeToField(doc.key) as keyof Meeting;
-          const val = meeting[field];
-          if (typeof val === 'string' && val) generated[doc.key] = val;
+        set({
+          activeJob: { meetingId: meeting.id, order, completedDocs: preCompleted, status: 'running', updatedAt: Date.now() },
+        });
+        await runGenerationLoop(set, get);
+      },
+
+      // 미완성 잡 재개 (새로고침/재방문). activeJob.status가 'running'이고 남은 문서가 있을 때.
+      resumeGeneration: async () => {
+        if (get().isGenerating) return;
+        const job = get().activeJob;
+        if (!job || job.status !== 'running') return;
+        const meeting = get().meetings.find((m) => m.id === job.meetingId) || get().currentMeeting;
+        if (!meeting?.summary) {
+          set({ activeJob: null }); // 회의 사라짐 → 잡 폐기
+          return;
         }
-
-        const summary = meeting.summary;
-        const transcript = meeting.transcript || '';
-        const meetingInfo = {
-          title: meeting.title,
-          date: new Date(meeting.createdAt).toLocaleDateString('ko-KR'),
-        };
-
-        let completed = 0;
-        let failed = 0;
-
-        try {
-          for (let i = 0; i < order.length; i++) {
-            if (genAbort.cancelled) break; // 반복 전 캔슬 가드
-
-            const docType = order[i];
-            const meta = DOCUMENTS.find((d) => d.key === docType);
-            set((st) =>
-              st.generationProgress
-                ? { generationProgress: { ...st.generationProgress, currentLevel: i + 1, currentDoc: meta?.title || docType } }
-                : {}
-            );
-
-            const contextDocs: Record<string, string> = {};
-            for (const dep of DEPENDENCIES[docType] || []) {
-              if (generated[dep]) contextDocs[dep] = generated[dep];
-            }
-
-            const controller = new AbortController();
-            genAbort.controller = controller;
-            try {
-              const res = await fetch('/api/generate-doc', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ docType, summary, transcript, meetingInfo, contextDocs, review: false }),
-                signal: controller.signal,
-              });
-              if (!res.ok) throw new Error((await res.text()) || `${docType} 생성 실패`);
-              const { content } = await res.json();
-              if (!content) throw new Error(`${docType} 빈 응답`);
-
-              generated[docType] = content;
-              const field = docTypeToField(docType);
-              // 회의 전환 가드: 같은 회의일 때만 currentMeeting 갱신, 아니면 meetings 배열 직접 패치
-              if (get().currentMeeting?.id === meetingId) {
-                get().updateCurrentMeeting({ [field]: content });
-              } else {
-                const meetings = get().meetings;
-                const idx = meetings.findIndex((m) => m.id === meetingId);
-                if (idx >= 0) {
-                  const updated = [...meetings];
-                  updated[idx] = { ...updated[idx], [field]: content };
-                  set({ meetings: updated });
-                }
-              }
-              completed++;
-              set((st) =>
-                st.generationProgress
-                  ? { generationProgress: { ...st.generationProgress, completedDocs: [...st.generationProgress.completedDocs, docType] } }
-                  : {}
-              );
-            } catch (e) {
-              // 캔슬(AbortError)은 실패로 세지 않고 루프 종료
-              if ((e as Error)?.name === 'AbortError' || controller.signal.aborted || genAbort.cancelled) break;
-              failed++;
-              console.error(`${docType} 생성 실패 (계속 진행):`, e);
-            } finally {
-              genAbort.controller = null;
-            }
-          }
-
-          set((st) => ({
-            generationProgress: st.generationProgress
-              ? {
-                  ...st.generationProgress,
-                  currentDoc: '',
-                  status: genAbort.cancelled ? 'cancelled' : failed > 0 && completed === 0 ? 'error' : 'completed',
-                }
-              : null,
-          }));
-        } finally {
-          set({ isGenerating: false, generatingMeetingId: null });
-          setTimeout(() => {
-            if (!get().isGenerating) set({ generationProgress: null });
-          }, 4000);
+        // 실제 meetings에 저장된 문서를 기준으로 completedDocs 보정(저장 누락 방지)
+        const completed = job.order.filter((dt) => {
+          const v = meeting[docTypeToField(dt) as keyof Meeting];
+          return typeof v === 'string' && v;
+        });
+        if (completed.length >= job.order.length) {
+          set({ activeJob: null }); // 이미 다 됨
+          return;
         }
+        set({ activeJob: { ...job, completedDocs: completed, updatedAt: Date.now() } });
+        await runGenerationLoop(set, get);
       },
 
       cancelGeneration: () => {
         if (!get().isGenerating) return;
         genAbort.cancelled = true;
         genAbort.controller?.abort();
-        set((st) =>
-          st.generationProgress ? { generationProgress: { ...st.generationProgress, status: 'cancelled', currentDoc: '' } } : {}
-        );
+        set((st) => ({
+          generationProgress: st.generationProgress ? { ...st.generationProgress, status: 'cancelled', currentDoc: '' } : null,
+          activeJob: st.activeJob ? { ...st.activeJob, status: 'cancelled', updatedAt: Date.now() } : null,
+        }));
       },
     }),
     {
@@ -489,13 +564,20 @@ export const useMeetingStore = create<MeetingStore>()(
         docStatuses: state.docStatuses,
         docVersions: state.docVersions,
         frozenDocs: state.frozenDocs,
+        // 진행 중 잡 체크포인트 저장 → 새로고침/재방문 후 재개
+        activeJob: state.activeJob,
       }),
-      // 새로고침 후 좀비 생성 상태 리셋 (partialize에서 제외했으나 안전망)
+      // 새로고침 후: 런타임 생성 상태는 리셋(좀비 방지), activeJob은 보존(재개 대상).
+      // 실제 재개는 useGenerationRecovery 훅이 마운트 시 resumeGeneration() 호출로 수행.
       onRehydrateStorage: () => (state) => {
         if (state) {
           state.isGenerating = false;
           state.generationProgress = null;
           state.generatingMeetingId = null;
+          // activeJob.status='running'이면 그대로 둠(재개). cancelled/completed면 정리.
+          if (state.activeJob && state.activeJob.status !== 'running') {
+            state.activeJob = null;
+          }
         }
       },
     }
