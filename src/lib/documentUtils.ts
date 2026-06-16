@@ -237,6 +237,7 @@ export function docTypeToField(docType: string): string {
     'user-story': 'userStory',
     'api-spec': 'apiSpec',
     'test-plan': 'testPlan',
+    'test-case': 'testCase', // 누락 시 test-case 문서가 Meeting에 저장 안 됨
   };
   return mapping[docType] || docType;
 }

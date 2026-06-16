@@ -70,11 +70,37 @@ function topoSortDocs(): DocType[] {
 type SetFn = (partial: Partial<MeetingStore> | ((s: MeetingStore) => Partial<MeetingStore>)) => void;
 type GetFn = () => MeetingStore;
 
+const GENERATION_LOCK = 'meeting-auto-docs:doc-generation';
+
+// 멀티탭 중복 생성 방지: navigator.locks로 단일 탭만 루프 실행.
+// 다른 탭이 락을 쥐고 있으면(ifAvailable=false) 이 탭은 생성하지 않음(중복/덮어쓰기 방지).
+// Web Locks 미지원 환경은 락 없이 그대로 실행(graceful).
+async function runGenerationWithLock(set: SetFn, get: GetFn): Promise<void> {
+  const locks = (typeof navigator !== 'undefined' ? navigator.locks : undefined) as
+    | { request: (name: string, opts: { ifAvailable: boolean }, cb: (lock: unknown) => Promise<void>) => Promise<void> }
+    | undefined;
+  if (!locks?.request) {
+    await runGenerationLoop(set, get);
+    return;
+  }
+  await locks.request(GENERATION_LOCK, { ifAvailable: true }, async (lock) => {
+    if (!lock) {
+      // 다른 탭이 이미 생성 중 → 이 탭은 진행하지 않음(폴링/표시는 persist 구독으로 자동 반영)
+      console.log('[generation] 다른 탭이 생성 중 — 이 탭은 대기(중복 방지)');
+      return;
+    }
+    await runGenerationLoop(set, get);
+  });
+}
+
 async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
   const job = get().activeJob;
   if (!job) return;
   const meetingId = job.meetingId;
-  const meeting = get().meetings.find((m) => m.id === meetingId) || get().currentMeeting;
+  // job.meetingId와 일치하는 회의만 사용. currentMeeting은 id가 같을 때만 fallback
+  // (새 회의가 meetings 배열에 아직 동기화 안 된 경우 대비). 다른 회의에 저장 방지.
+  const cur = get().currentMeeting;
+  const meeting = get().meetings.find((m) => m.id === meetingId) || (cur?.id === meetingId ? cur : undefined);
   if (!meeting?.summary) {
     set({ activeJob: null });
     return;
@@ -175,27 +201,40 @@ async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
       }
     }
 
-    const finalStatus = genAbort.cancelled ? 'cancelled' : failed > 0 && completed === doneSet.size && doneSet.size === 0 ? 'error' : 'completed';
     const allDone = doneSet.size >= order.length;
+    // 잡 최종 상태 결정:
+    // - 취소: cancelled
+    // - 전부 완료: completed
+    // - 실패가 있어 미완료로 끝남: error (★running 유지하면 매 마운트마다 무한 재개되므로 금지)
+    // - 그 외(실패 0인데 미완료 — 정상적으론 발생 안 함): completed로 종료
+    const jobStatus: ActiveGenerationJob['status'] = genAbort.cancelled
+      ? 'cancelled'
+      : allDone
+        ? 'completed'
+        : failed > 0
+          ? 'error'
+          : 'completed';
     set((st) => ({
       generationProgress: st.generationProgress
-        ? { ...st.generationProgress, currentDoc: '', status: genAbort.cancelled ? 'cancelled' : allDone || failed === 0 ? 'completed' : 'error' }
+        ? { ...st.generationProgress, currentDoc: '', status: jobStatus === 'cancelled' ? 'cancelled' : jobStatus === 'error' ? 'error' : 'completed' }
         : null,
-      // 완료/취소면 activeJob 종료 표시(다음 마운트에서 재개 안 함). 중간 실패로 안 끝났으면 running 유지(재개 대상)
       activeJob: st.activeJob
-        ? { ...st.activeJob, completedDocs: [...doneSet], status: genAbort.cancelled ? 'cancelled' : allDone ? 'completed' : 'running', updatedAt: Date.now() }
+        ? { ...st.activeJob, completedDocs: [...doneSet], status: jobStatus, updatedAt: Date.now() }
         : null,
     }));
-    void finalStatus;
   } finally {
     set({ isGenerating: false, generatingMeetingId: null });
-    setTimeout(() => {
+    // 종료된 잡(completed/cancelled/error)은 즉시 정리 → 재마운트 시 재개 안 함(좀비 방지).
+    // running이 아닌데도 남아있으면 useGenerationRecovery가 건드리지 않으나, 명시적으로 비운다.
+    {
       const st = get();
-      if (!st.isGenerating) {
-        set({ generationProgress: null });
-        // 완료/취소된 잡은 정리
-        if (st.activeJob && st.activeJob.status !== 'running') set({ activeJob: null });
+      if (st.activeJob && st.activeJob.status !== 'running') {
+        set({ activeJob: null });
       }
+    }
+    // 진행바는 사용자가 완료/취소 상태를 잠깐 볼 수 있도록 4초 후 정리.
+    setTimeout(() => {
+      if (!get().isGenerating) set({ generationProgress: null });
     }, 4000);
   }
 }
@@ -520,7 +559,7 @@ export const useMeetingStore = create<MeetingStore>()(
         set({
           activeJob: { meetingId: meeting.id, order, completedDocs: preCompleted, status: 'running', updatedAt: Date.now() },
         });
-        await runGenerationLoop(set, get);
+        await runGenerationWithLock(set, get);
       },
 
       // 미완성 잡 재개 (새로고침/재방문). activeJob.status가 'running'이고 남은 문서가 있을 때.
@@ -528,9 +567,11 @@ export const useMeetingStore = create<MeetingStore>()(
         if (get().isGenerating) return;
         const job = get().activeJob;
         if (!job || job.status !== 'running') return;
-        const meeting = get().meetings.find((m) => m.id === job.meetingId) || get().currentMeeting;
+        // ★ job.meetingId로만 회의를 찾는다. currentMeeting fallback 금지
+        //   (회의 삭제됐는데 currentMeeting이 다른 회의면 엉뚱한 곳에 문서 저장됨)
+        const meeting = get().meetings.find((m) => m.id === job.meetingId);
         if (!meeting?.summary) {
-          set({ activeJob: null }); // 회의 사라짐 → 잡 폐기
+          set({ activeJob: null }); // 회의 없음/요약 없음 → 잡 폐기
           return;
         }
         // 실제 meetings에 저장된 문서를 기준으로 completedDocs 보정(저장 누락 방지)
@@ -543,7 +584,7 @@ export const useMeetingStore = create<MeetingStore>()(
           return;
         }
         set({ activeJob: { ...job, completedDocs: completed, updatedAt: Date.now() } });
-        await runGenerationLoop(set, get);
+        await runGenerationWithLock(set, get);
       },
 
       cancelGeneration: () => {
