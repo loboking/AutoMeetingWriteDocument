@@ -265,6 +265,8 @@ interface MeetingStore {
   deleteMeeting: (id: string) => void;
   setCurrentMeeting: (meeting: Meeting | null) => void;
   getMeeting: (id: string) => Meeting | undefined;
+  setMeetings: (meetings: Meeting[]) => void; // 서버 동기화 결과로 교체 (로그인 시)
+  resetForSignOut: () => void; // 로그아웃 시 메모리 상태 전체 리셋 (이전 사용자 데이터 잔류 차단)
 
   // 학습 완료 관련 액션
   toggleCompleteDoc: (docType: DocType) => void;
@@ -304,10 +306,12 @@ export const useMeetingStore = create<MeetingStore>()(
       activeJob: null,
 
       createMeeting: (title) => {
+        const now = new Date();
         const newMeeting: Meeting = {
           id: generateId(),
           title,
-          createdAt: new Date(),
+          createdAt: now,
+          updatedAt: now, // LWW 머지 기준 안정화
           step: 'idle',
         };
         set({ currentMeeting: newMeeting, currentStep: 'idle', meetings: [...get().meetings, newMeeting] });
@@ -341,8 +345,10 @@ export const useMeetingStore = create<MeetingStore>()(
       },
 
       saveCurrentMeeting: () => {
-        const current = get().currentMeeting;
-        if (!current) return;
+        const cur = get().currentMeeting;
+        if (!cur) return;
+        // updatedAt이 없으면 채워 LWW 머지 기준을 안정화
+        const current = cur.updatedAt ? cur : { ...cur, updatedAt: new Date() };
 
         const meetings = get().meetings;
         const existingIndex = meetings.findIndex((m) => m.id === current.id);
@@ -351,11 +357,30 @@ export const useMeetingStore = create<MeetingStore>()(
           // 이미 있으면 업데이트
           const updatedMeetings = [...meetings];
           updatedMeetings[existingIndex] = current;
-          set({ meetings: updatedMeetings });
+          set({ meetings: updatedMeetings, currentMeeting: current });
         } else {
           // 없으면 추가
-          set({ meetings: [...meetings, current] });
+          set({ meetings: [...meetings, current], currentMeeting: current });
         }
+      },
+
+      setMeetings: (meetings) => set({ meetings }),
+
+      resetForSignOut: () => {
+        // 이전 사용자 데이터가 메모리에 남지 않도록 전부 비움.
+        // (persist.clearStorage는 AuthGate에서 별도 호출)
+        set({
+          meetings: [],
+          currentMeeting: null,
+          currentStep: 'idle',
+          docStatuses: {},
+          docVersions: {},
+          frozenDocs: {},
+          activeJob: null,
+          isGenerating: false,
+          generationProgress: null,
+          generatingMeetingId: null,
+        });
       },
 
       deleteMeeting: (id) => {

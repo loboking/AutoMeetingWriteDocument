@@ -28,6 +28,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import { useBeforeUnload } from '@/hooks/useBeforeUnload';
 import { useMeetingStore } from '@/store/meetingStore';
+import { supabase } from '@/lib/supabase';
 import { MermaidDiagram } from '@/components/MermaidDiagram';
 import { ScreenDiagram, StoryboardViewer } from '@/components/ScreenDiagram';
 import { TestPlanViewer } from '@/components/TestPlanViewer';
@@ -431,9 +432,14 @@ export function PrdViewer() {
 
     setSharing(true);
     try {
+      // 공유 생성은 로그인 사용자만 — 토큰 첨부 (AuthGate가 미로그인을 이미 차단하지만 안전 처리)
+      const { data: { session } } = await supabase.auth.getSession();
       const response = await fetch('/api/share', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+        },
         body: JSON.stringify(currentMeeting),
       });
 

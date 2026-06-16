@@ -3,9 +3,19 @@ import { supabase, meetingToSupabase, supabaseToMeeting } from '@/lib/supabase';
 
 export const runtime = 'nodejs';
 
-// POST: 새로운 공유 문서 생성
+// POST: 새로운 공유 문서 생성 (로그인 사용자만)
 export async function POST(request: NextRequest) {
   try {
+    // 인증 확인: 로그인 사용자의 토큰이 있어야 공유 생성 가능 (무인증 쓰기 차단)
+    const token = request.headers.get('authorization')?.replace('Bearer ', '');
+    if (!token) {
+      return NextResponse.json({ error: '로그인이 필요합니다.' }, { status: 401 });
+    }
+    const { data: { user }, error: authError } = await supabase.auth.getUser(token);
+    if (authError || !user) {
+      return NextResponse.json({ error: '인증에 실패했습니다.' }, { status: 401 });
+    }
+
     const meeting = await request.json();
 
     if (!meeting.id || !meeting.title) {

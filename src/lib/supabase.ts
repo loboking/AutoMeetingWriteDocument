@@ -1,9 +1,18 @@
 import { createClient } from '@supabase/supabase-js';
+import type { Meeting } from '@/types';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+// 브라우저 Auth: 세션을 localStorage에 저장하고 자동 갱신.
+// detectSessionInUrl은 매직링크/소셜용인데 MVP는 비번 로그인이라 끔.
+export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+  auth: {
+    persistSession: true,
+    autoRefreshToken: true,
+    detectSessionInUrl: false,
+  },
+});
 
 // Meeting 타입을 Supabase 형식으로 변환
 export function meetingToSupabase(meeting: any) {
@@ -53,5 +62,32 @@ export function supabaseToMeeting(doc: any) {
     testCase: doc.test_case,
     database: doc.database,
     deployment: doc.deployment,
+  };
+}
+
+// ── meetings 테이블(로그인 사용자별 비공개) 전용 변환 ──
+// 본문 전체를 jsonb data 컬럼에 통째로 보관. user_id는 절대 포함하지 않음(DB default auth.uid()가 채움).
+export interface MeetingRow {
+  id: string;
+  client_id: string;
+  title: string;
+  data: Meeting;
+  created_at: string;
+  updated_at: string;
+}
+
+export function meetingToRow(meeting: Meeting): { client_id: string; title: string; data: Meeting } {
+  return {
+    client_id: meeting.id, // 클라가 가진 회의 id를 멱등 흡수 키로 보존
+    title: meeting.title || '',
+    data: meeting,
+  };
+}
+
+export function rowToMeeting(row: Pick<MeetingRow, 'client_id' | 'data' | 'updated_at'>): Meeting {
+  return {
+    ...row.data,
+    id: row.data?.id ?? row.client_id,
+    updatedAt: new Date(row.updated_at),
   };
 }
