@@ -1289,13 +1289,13 @@ export function PrdViewer() {
                     {generationProgress.currentDoc ? `${generationProgress.currentDoc} 생성 중...` : '준비 중...'}
                   </span>
                   <span className="text-xs text-slate-500">
-                    {generationProgress.completedDocs.length} / {totalCount}개 완료
+                    {generationProgress.completedDocs.length} / {generationProgress.totalLevels}개 완료
                   </span>
                 </div>
                 <div className="w-full h-1.5 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
                   <div
                     className="h-full bg-gradient-to-r from-blue-500 to-purple-500 transition-all duration-300"
-                    style={{ width: `${(generationProgress.completedDocs.length / totalCount) * 100}%` }}
+                    style={{ width: `${(generationProgress.completedDocs.length / generationProgress.totalLevels) * 100}%` }}
                   />
                 </div>
               </div>

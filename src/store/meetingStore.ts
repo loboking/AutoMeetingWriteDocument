@@ -23,6 +23,7 @@ export interface GenerationProgress {
   totalLevels: number;
   currentDoc: string;
   completedDocs: DocType[];
+  failedDocs: DocType[]; // 재시도 후에도 실패한 문서 (UI에 명시 → 사용자가 재생성 가능)
   status: 'generating' | 'completed' | 'error' | 'cancelled';
 }
 
@@ -121,6 +122,7 @@ async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
       totalLevels: order.length,
       currentDoc: '',
       completedDocs: [...doneSet],
+      failedDocs: [],
       status: 'generating',
     },
   });
@@ -158,19 +160,48 @@ async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
         if (generated[dep]) contextDocs[dep] = generated[dep];
       }
 
-      const controller = new AbortController();
-      genAbort.controller = controller;
-      try {
-        const res = await authedFetch('/api/generate-doc', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ docType, summary, transcript, meetingInfo, contextDocs, review: false }),
-          signal: controller.signal,
-        });
-        if (!res.ok) throw new Error((await res.text()) || `${docType} 생성 실패`);
-        const { content } = await res.json();
-        if (!content) throw new Error(`${docType} 빈 응답`);
+      // 단일 문서 생성 시도 (1회). 성공 시 content 반환, 실패 시 throw.
+      const attemptOnce = async (): Promise<string> => {
+        const controller = new AbortController();
+        genAbort.controller = controller;
+        try {
+          const res = await authedFetch('/api/generate-doc', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ docType, summary, transcript, meetingInfo, contextDocs, review: false }),
+            signal: controller.signal,
+          });
+          if (!res.ok) throw new Error((await res.text()) || `${docType} 생성 실패`);
+          const { content } = await res.json();
+          if (!content) throw new Error(`${docType} 빈 응답`);
+          return content;
+        } finally {
+          genAbort.controller = null;
+        }
+      };
 
+      // 일시적 실패(타임아웃/빈응답/429)는 1회 재시도로 완주율 향상.
+      // AbortError(사용자 취소)는 재시도 안 함.
+      let content: string | null = null;
+      let lastErr: unknown = null;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        if (genAbort.cancelled) break;
+        try {
+          content = await attemptOnce();
+          break;
+        } catch (e) {
+          lastErr = e;
+          if ((e as Error)?.name === 'AbortError' || genAbort.cancelled) { content = null; break; }
+          if (attempt === 0) {
+            console.warn(`${docType} 생성 실패 → 2초 후 1회 재시도:`, e);
+            await new Promise((r) => setTimeout(r, 2000));
+          }
+        }
+      }
+
+      if (genAbort.cancelled) break;
+
+      if (content) {
         generated[docType] = content;
         const field = docTypeToField(docType);
         if (get().currentMeeting?.id === meetingId) {
@@ -193,12 +224,15 @@ async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
             ? { ...st.generationProgress, completedDocs: [...doneSet] }
             : null,
         }));
-      } catch (e) {
-        if ((e as Error)?.name === 'AbortError' || controller.signal.aborted || genAbort.cancelled) break;
+      } else {
+        // 재시도 후에도 실패 → failedDocs에 기록(UI 노출), 다음 문서 계속
         failed++;
-        console.error(`${docType} 생성 실패 (계속 진행):`, e);
-      } finally {
-        genAbort.controller = null;
+        console.error(`${docType} 생성 최종 실패 (계속 진행):`, lastErr);
+        set((st) => ({
+          generationProgress: st.generationProgress
+            ? { ...st.generationProgress, failedDocs: [...st.generationProgress.failedDocs, docType] }
+            : null,
+        }));
       }
     }
 
@@ -233,10 +267,12 @@ async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
         set({ activeJob: null });
       }
     }
-    // 진행바는 사용자가 완료/취소 상태를 잠깐 볼 수 있도록 4초 후 정리.
+    // 진행바는 사용자가 완료/실패 결과를 읽을 수 있도록 정리 지연.
+    // 실패가 있으면 더 오래(실패 문서명 확인), 아니면 짧게.
+    const hadFailure = (get().generationProgress?.failedDocs?.length ?? 0) > 0;
     setTimeout(() => {
       if (!get().isGenerating) set({ generationProgress: null });
-    }, 4000);
+    }, hadFailure ? 12000 : 5000);
   }
 }
 

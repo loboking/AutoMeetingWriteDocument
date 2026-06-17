@@ -62,10 +62,10 @@ export const DEPENDENCIES: Record<DocType, DocType[]> = {
   'ia': ['screen-list'],
   'storyboard': ['flowchart'],
   'wireframe': ['ia', 'screen-list'],
-  'api-spec': ['feature-list'],
+  'api-spec': ['feature-list', 'database'],
   'test-plan': ['feature-list', 'api-spec'],
   'test-case': ['feature-list', 'api-spec', 'test-plan'],
-  'database': ['feature-list', 'api-spec'],
+  'database': ['feature-list'],
   'wbs': ['feature-list', 'api-spec', 'wireframe'],
   'deployment': ['prd', 'feature-list', 'api-spec'],
 };

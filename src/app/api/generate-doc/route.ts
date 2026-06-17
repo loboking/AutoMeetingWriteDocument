@@ -227,9 +227,19 @@ async function generateDocument(
 
     // GLM-5 실제 답변은 content에 있음 (reasoning_content는 영어 사고과정이므로 fallback만)
     const message = response.choices[0]?.message;
-    return extractContent(message);
+    const content = extractContent(message);
+    if (!content || !content.trim()) {
+      throw new Error('빈 응답');
+    }
+    return content;
   } catch (error) {
     console.error('OpenAI API 오류:', error);
+    // API 키가 아예 없으면(데모/개발) mock 허용. 키는 있는데 호출 실패면 throw해서
+    // 클라가 mock을 '진짜 문서'로 저장하지 않고 실패로 집계·재시도하게 한다.
+    const hasKey = !!process.env.OPENAI_API_KEY || !!process.env.ZAI_API_KEY;
+    if (hasKey) {
+      throw error instanceof Error ? error : new Error('문서 생성 실패');
+    }
     return getMockDoc(docType, summary, meetingInfo);
   }
 }
