@@ -12,12 +12,22 @@ import { useMeetingStore } from '@/store/meetingStore';
 export function useGenerationRecovery() {
   const resumeGeneration = useMeetingStore((s) => s.resumeGeneration);
   const tried = useRef(false);
+  const lastRun = useRef(0);
 
   useEffect(() => {
     // 미완성 잡이 있으면 재개 시도 (중복은 resumeGeneration 내부에서 차단)
+    // 모바일은 알림/키보드/시스템 다이얼로그로 visibilitychange가 연속 발화할 수 있어
+    // 1.5초 디바운스로 중복 호출/미세 race를 차단.
     const tryResume = () => {
+      const now = Date.now();
+      if (now - lastRun.current < 1500) return;
       const { activeJob, isGenerating } = useMeetingStore.getState();
-      if (activeJob && activeJob.status === 'running' && !isGenerating) {
+      // running(정상 미완) 또는 error(일부 실패 미완)면 재개 시도.
+      // 실제 재개 가부/횟수 상한은 resumeGeneration 내부에서 판정(여기선 넓게 호출).
+      const resumable =
+        !!activeJob && (activeJob.status === 'running' || activeJob.status === 'error');
+      if (resumable && !isGenerating) {
+        lastRun.current = now;
         void resumeGeneration();
       }
     };

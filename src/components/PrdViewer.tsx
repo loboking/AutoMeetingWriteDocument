@@ -391,7 +391,8 @@ export function PrdViewer() {
   };
 
 
-  const handleDownloadAll = () => {
+  // 생성된 전체 문서를 하나로 합쳐 내보낸다. 포맷: md(통합 마크다운) | docx(통합 Word).
+  const handleDownloadAll = async (format: 'md' | 'docx' = 'md') => {
     if (!currentMeeting) return;
 
     const generatedDocs = DOCUMENTS.filter(doc => documents[doc.key]);
@@ -417,8 +418,13 @@ export function PrdViewer() {
       }
     });
 
-    const blob = new Blob([combinedContent], { type: 'text/markdown' });
-    saveAs(blob, `${safeTitle}-전체문서-${timestamp}.md`);
+    const filename = `${safeTitle}-전체문서-${timestamp}`;
+    if (format === 'docx') {
+      await downloadDocx(combinedContent, `${filename}.docx`); // 기존 마크다운→Word 변환 재사용
+    } else {
+      const blob = new Blob([combinedContent], { type: 'text/markdown' });
+      saveAs(blob, `${filename}.md`);
+    }
   };
 
   const handleShare = async () => {
@@ -1336,17 +1342,26 @@ export function PrdViewer() {
               )}
             </Button>
 
-            {/* 모두 내보내기 버튼 */}
-            <Button
-              onClick={handleDownloadAll}
-              disabled={Object.keys(documents).filter(k => documents[k as DocType]).length === 0}
-              size="sm"
-              variant="outline"
-              className="h-8 flex-shrink-0"
-            >
-              <Download className="w-4 h-4 sm:mr-2" />
-              <span className="hidden sm:inline">모두 내보내기</span>
-            </Button>
+            {/* 모두 내보내기 (포맷 선택) */}
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                disabled={Object.keys(documents).filter(k => documents[k as DocType]).length === 0}
+                className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 border border-input bg-background shadow-sm hover:bg-accent hover:text-accent-foreground h-8 px-3 flex-shrink-0"
+              >
+                <Download className="w-4 h-4 sm:mr-2" />
+                <span className="hidden sm:inline">모두 내보내기</span>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={() => handleDownloadAll('md')}>
+                  <File className="w-4 h-4 mr-2" />
+                  전체 통합 Markdown (.md)
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => handleDownloadAll('docx')}>
+                  <File className="w-4 h-4 mr-2" />
+                  전체 통합 Word (.docx)
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         </div>
 

@@ -34,9 +34,15 @@ export interface ActiveGenerationJob {
   meetingId: string;
   order: DocType[]; // 생성 순서 스냅샷
   completedDocs: DocType[]; // 완료된 문서
+  // running: 진행/재개 대상. error: 일부 실패로 미완(복귀 시 자동 재개 대상, 단 횟수 상한).
+  // completed/cancelled: 종료(재개 안 함).
   status: 'running' | 'completed' | 'cancelled' | 'error';
   updatedAt: number; // heartbeat
+  resumeAttempts?: number; // error 잡 자동 재개 횟수(무한 재개 방지용 상한 카운터)
 }
+
+// error로 끝난 잡을 복귀 시 몇 번까지 자동 재개할지. 초과하면 사용자 수동 재생성에 위임.
+const MAX_RESUME_ATTEMPTS = 3;
 
 // 직렬화 불가한 캔슬 제어는 store state가 아닌 모듈 스코프에 보관.
 // HMR(dev) 시 모듈 재평가로 끊기지 않도록 globalThis에 캐시.
@@ -166,6 +172,12 @@ async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
     const attemptOnce = async (): Promise<string> => {
       const controller = new AbortController();
       genAbort.controllers.add(controller);
+      // ★ 클라 타임아웃: 모바일 백그라운드 등으로 fetch가 영영 settle 안 되면 isGenerating이
+      //   영구 고착(@finally 미도달)→복귀 재개 영구 차단(데드락). 시간 상한으로 강제 abort해
+      //   AbortError(reason=TimeoutError)로 떨어뜨려 재시도/실패 경로를 타게 한다.
+      //   PRD는 내부 청킹으로 길어 별도 상향. 서버 maxDuration=300s를 살짝 넘겨 잡음.
+      const TIMEOUT_MS = docType === 'prd' ? 600_000 : 320_000;
+      const to = setTimeout(() => controller.abort(new DOMException('timeout', 'TimeoutError')), TIMEOUT_MS);
       try {
         const res = await authedFetch('/api/generate-doc', {
           method: 'POST',
@@ -182,24 +194,31 @@ async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
         if (!content) throw new Error(`${docType} 빈 응답`);
         return content;
       } finally {
+        clearTimeout(to);
         genAbort.controllers.delete(controller);
       }
     };
 
-    // 일시 실패(타임아웃/빈응답/429) 재시도. 429는 지수 backoff로 더 길게.
+    // 일시 실패(타임아웃/빈응답/429/모바일 백그라운드 복귀 시 네트워크 끊김) 재시도.
+    // 모바일에서 백그라운드 진입 시 in-flight fetch가 'TypeError: Load failed' 등으로 떨어질 수
+    // 있어, 재시도 횟수를 늘려(총 3회) 복귀 후 자동 복구율을 높인다. 429는 더 길게 backoff.
+    const MAX_ATTEMPTS = 3;
     let content: string | null = null;
     let lastErr: unknown = null;
-    for (let attempt = 0; attempt < 2; attempt++) {
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
       if (genAbort.cancelled) break;
       try {
         content = await attemptOnce();
         break;
       } catch (e) {
         lastErr = e;
-        if ((e as Error)?.name === 'AbortError' || genAbort.cancelled) { content = null; break; }
-        if (attempt === 0) {
+        // 사용자 취소(cancel 버튼)만 즉시 중단. 타임아웃 abort(TimeoutError)·네트워크 끊김
+        // (TypeError: Load failed) 등은 일시 실패로 보고 재시도로 흘려 복귀 후 자동 복구.
+        if (genAbort.cancelled) { content = null; break; }
+        if (attempt < MAX_ATTEMPTS - 1) {
           const is429 = (e as { status?: number })?.status === 429;
-          const delay = is429 ? 5000 : 2000;
+          // 429: 5s,10s / 그 외: 2s,4s (지수 backoff)
+          const delay = (is429 ? 5000 : 2000) * Math.pow(2, attempt);
           console.warn(`${docType} 생성 실패 → ${delay / 1000}초 후 재시도${is429 ? '(429)' : ''}:`, e);
           await new Promise((r) => setTimeout(r, delay));
         }
@@ -287,12 +306,17 @@ async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
     }));
   } finally {
     set({ isGenerating: false, generatingMeetingId: null });
-    // 종료된 잡(completed/cancelled/error)은 즉시 정리 → 재마운트 시 재개 안 함(좀비 방지).
-    // running이 아닌데도 남아있으면 useGenerationRecovery가 건드리지 않으나, 명시적으로 비운다.
+    // 잡 정리 정책:
+    // - completed/cancelled: 즉시 정리(재개 안 함, 좀비 방지).
+    // - error: 보존 → 복귀 시 자동 재개(남은/실패 문서 재시도). 단 resumeAttempts가 상한을
+    //   넘었으면 무한 재개 방지 위해 정리(사용자 수동 재생성에 위임).
     {
       const st = get();
-      if (st.activeJob && st.activeJob.status !== 'running') {
-        set({ activeJob: null });
+      const job = st.activeJob;
+      if (job && job.status !== 'running') {
+        const keepForResume =
+          job.status === 'error' && (job.resumeAttempts ?? 0) < MAX_RESUME_ATTEMPTS;
+        if (!keepForResume) set({ activeJob: null });
       }
     }
     // 진행바는 사용자가 완료/실패 결과를 읽을 수 있도록 정리 지연.
@@ -652,11 +676,17 @@ export const useMeetingStore = create<MeetingStore>()(
         await runGenerationWithLock(set, get);
       },
 
-      // 미완성 잡 재개 (새로고침/재방문). activeJob.status가 'running'이고 남은 문서가 있을 때.
+      // 미완성 잡 재개 (새로고침/재방문/화면 복귀).
+      // status='running'(정상 진행 중 끊김) 또는 'error'(일부 실패 미완)인 잡을 이어서 생성.
+      // error 잡은 resumeAttempts 상한까지만 자동 재개(무한 재개 방지).
       resumeGeneration: async () => {
         if (get().isGenerating) return;
         const job = get().activeJob;
-        if (!job || job.status !== 'running') return;
+        if (!job) return;
+        const isResumable =
+          job.status === 'running' ||
+          (job.status === 'error' && (job.resumeAttempts ?? 0) < MAX_RESUME_ATTEMPTS);
+        if (!isResumable) return;
         // ★ job.meetingId로만 회의를 찾는다. currentMeeting fallback 금지
         //   (회의 삭제됐는데 currentMeeting이 다른 회의면 엉뚱한 곳에 문서 저장됨)
         const meeting = get().meetings.find((m) => m.id === job.meetingId);
@@ -673,7 +703,12 @@ export const useMeetingStore = create<MeetingStore>()(
           set({ activeJob: null }); // 이미 다 됨
           return;
         }
-        set({ activeJob: { ...job, completedDocs: completed, updatedAt: Date.now() } });
+        // error→running으로 되돌려 재개. error 재개면 시도 횟수 증가(상한 초과 시 다음엔 자동 재개 안 함).
+        const resumeAttempts =
+          job.status === 'error' ? (job.resumeAttempts ?? 0) + 1 : (job.resumeAttempts ?? 0);
+        set({
+          activeJob: { ...job, completedDocs: completed, status: 'running', resumeAttempts, updatedAt: Date.now() },
+        });
         await runGenerationWithLock(set, get);
       },
 
@@ -707,9 +742,14 @@ export const useMeetingStore = create<MeetingStore>()(
           state.isGenerating = false;
           state.generationProgress = null;
           state.generatingMeetingId = null;
-          // activeJob.status='running'이면 그대로 둠(재개). cancelled/completed면 정리.
-          if (state.activeJob && state.activeJob.status !== 'running') {
-            state.activeJob = null;
+          // running: 재개. error: resumeAttempts 상한 내면 재개 보존, 초과면 정리.
+          // cancelled/completed: 정리.
+          const job = state.activeJob;
+          if (job) {
+            const keep =
+              job.status === 'running' ||
+              (job.status === 'error' && (job.resumeAttempts ?? 0) < MAX_RESUME_ATTEMPTS);
+            if (!keep) state.activeJob = null;
           }
         }
       },
