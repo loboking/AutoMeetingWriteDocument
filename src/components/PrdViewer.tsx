@@ -1151,9 +1151,9 @@ export function PrdViewer() {
       <div className="flex-1 min-w-0">
         {/* 상단 헤더 바 */}
         <div className="sticky top-0 z-30 bg-white/95 dark:bg-slate-900/95 backdrop-blur-sm border-b border-slate-200 dark:border-slate-700 shadow-sm">
-          <div className="flex items-center justify-between gap-6 px-6 py-3">
-            {/* 왼쪽: 문서 생성 현황 */}
-            <div className="flex items-center gap-4">
+          <div className="flex items-center justify-between gap-3 sm:gap-6 px-4 sm:px-6 py-3 pl-16 sm:pl-6">
+            {/* 왼쪽: 문서 생성 현황 (모바일 숨김 — 햄버거 버튼 공간 + 플로팅 네비에 진행표시 있음) */}
+            <div className="hidden md:flex items-center gap-4">
               <div className="flex items-center gap-2">
                 <span className="text-sm font-medium text-slate-700 dark:text-slate-300">
                   문서 생성 현황
@@ -1171,19 +1171,19 @@ export function PrdViewer() {
               </div>
             </div>
 
-            {/* 중앙: 네비게이션 (이전/다음) */}
-            <div className="flex items-center gap-2">
+            {/* 중앙: 네비게이션 (이전/다음). 모바일은 화살표·제목 밀착(가운데 벌어짐 방지) */}
+            <div className="flex items-center gap-1.5 sm:gap-2 min-w-0">
               <Button
                 onClick={handlePreviousDoc}
                 disabled={flatIndex === 0}
                 variant="outline"
                 size="sm"
-                className="h-8"
+                className="h-8 flex-shrink-0"
               >
-                <ChevronLeft className="w-4 h-4 mr-1" />
-                이전
+                <ChevronLeft className="w-4 h-4 sm:mr-1" />
+                <span className="hidden sm:inline">이전</span>
               </Button>
-              <span className="text-sm font-medium text-slate-700 dark:text-slate-300 min-w-[120px] text-center">
+              <span className="text-sm font-medium text-slate-700 dark:text-slate-300 max-w-[120px] sm:min-w-[120px] text-center truncate">
                 {doc?.title || activeDoc}
               </span>
               <Button
@@ -1191,15 +1191,15 @@ export function PrdViewer() {
                 disabled={flatIndex === DOCUMENTS.length - 1 || (sequentialMode && isDocCompleted(activeDoc) === false && !!currentContent)}
                 variant="outline"
                 size="sm"
-                className="h-8"
+                className="h-8 flex-shrink-0"
               >
-                다음
-                <ChevronRight className="w-4 h-4 ml-1" />
+                <span className="hidden sm:inline">다음</span>
+                <ChevronRight className="w-4 h-4 sm:ml-1" />
               </Button>
             </div>
 
-            {/* 오른쪽: 학습 설정 */}
-            <div className="flex items-center gap-3 border-l border-slate-200 dark:border-slate-700 pl-4">
+            {/* 오른쪽: 학습 설정 (모바일 숨김 — 좁은 화면에서 네비 우선) */}
+            <div className="hidden lg:flex items-center gap-3 border-l border-slate-200 dark:border-slate-700 pl-4">
               {/* 순차적 진행 모드 토글 */}
               <button
                 onClick={() => setSequentialMode(!sequentialMode)}
@@ -1273,10 +1273,10 @@ export function PrdViewer() {
                 onClick={handleGenerateAll}
                 disabled={!currentMeeting?.summary}
                 size="sm"
-                className="h-8"
+                className="h-8 flex-shrink-0"
               >
-                <Plus className="w-4 h-4 mr-2" />
-                전체 생성
+                <Plus className="w-4 h-4 sm:mr-2" />
+                <span className="hidden sm:inline">전체 생성</span>
               </Button>
             )}
 
@@ -1315,22 +1315,22 @@ export function PrdViewer() {
               disabled={sharing || Object.keys(documents).filter(k => documents[k as DocType]).length === 0}
               size="sm"
               variant="outline"
-              className="h-8"
+              className="h-8 flex-shrink-0"
             >
               {sharing ? (
                 <>
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  생성 중...
+                  <Loader2 className="w-4 h-4 sm:mr-2 animate-spin" />
+                  <span className="hidden sm:inline">생성 중...</span>
                 </>
               ) : showShareSuccess ? (
                 <>
-                  <CheckCircle2 className="w-4 h-4 mr-2 text-green-500" />
-                  링크 복사됨!
+                  <CheckCircle2 className="w-4 h-4 sm:mr-2 text-green-500" />
+                  <span className="hidden sm:inline">링크 복사됨!</span>
                 </>
               ) : (
                 <>
-                  <Share2 className="w-4 h-4 mr-2" />
-                  공유
+                  <Share2 className="w-4 h-4 sm:mr-2" />
+                  <span className="hidden sm:inline">공유</span>
                 </>
               )}
             </Button>
@@ -1341,10 +1341,10 @@ export function PrdViewer() {
               disabled={Object.keys(documents).filter(k => documents[k as DocType]).length === 0}
               size="sm"
               variant="outline"
-              className="h-8"
+              className="h-8 flex-shrink-0"
             >
-              <Download className="w-4 h-4 mr-2" />
-              모두 내보내기
+              <Download className="w-4 h-4 sm:mr-2" />
+              <span className="hidden sm:inline">모두 내보내기</span>
             </Button>
           </div>
         </div>
@@ -1434,18 +1434,18 @@ export function PrdViewer() {
                 {/* 문서 헤더 */}
                 <Card>
                 <CardHeader>
-                  <div className="flex items-start justify-between gap-4">
+                  <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 sm:gap-4">
                     <div className="min-w-0 flex-1">
                       <CardTitle className="flex items-center gap-2">
                         <span className="text-2xl flex-shrink-0">{doc.icon}</span>
                         <span className="truncate">{doc.title}</span>
                         {isDocCompleted(doc.key) && (
-                          <CheckCircle2 className="w-6 h-6 text-green-500" />
+                          <CheckCircle2 className="w-6 h-6 text-green-500 flex-shrink-0" />
                         )}
                       </CardTitle>
                       <p className="text-sm text-slate-500 mt-1">{doc.description}</p>
                     </div>
-                    <div className="flex flex-wrap gap-2 flex-shrink-0">
+                    <div className="flex flex-wrap gap-2 sm:flex-shrink-0">
                       {docHasContent ? (
                         <>
                           <Button onClick={handleCopy} variant="outline" size="sm" title="복사">
@@ -1551,25 +1551,25 @@ export function PrdViewer() {
             {docHasContent ? (
               <>
                 {/* 플로팅 네비게이션 화살표 */}
-                <div className="sticky top-0 z-10 flex items-center gap-3 bg-white/90 dark:bg-slate-900/90 backdrop-blur-sm rounded-b-lg shadow-lg border border-slate-200 dark:border-slate-700 px-4 py-2 mb-4 -mx-4">
+                <div className="sticky top-0 z-10 flex items-center justify-between gap-2 bg-white/90 dark:bg-slate-900/90 backdrop-blur-sm rounded-b-lg shadow-lg border border-slate-200 dark:border-slate-700 px-3 sm:px-4 py-2 mb-4 -mx-4">
                   <Button
                     onClick={handlePreviousDoc}
                     disabled={flatIndex === 0}
                     variant="ghost"
                     size="sm"
-                    className="gap-1 h-8 rounded-full"
+                    className="gap-1 h-8 rounded-full flex-shrink-0"
                   >
                     <ChevronLeft className="w-4 h-4" />
                     <span className="hidden sm:inline">이전</span>
                   </Button>
-                  <div className="flex items-center gap-2 px-3">
-                    <span className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                  <div className="flex items-center gap-1.5 sm:gap-2 min-w-0 px-1 sm:px-3">
+                    <span className="text-sm flex-shrink-0">
                       {DOCUMENTS[flatIndex]?.icon}
                     </span>
-                    <span className="text-xs text-slate-500 dark:text-slate-400">
-                      {flatIndex + 1} / {DOCUMENTS.length}
+                    <span className="text-xs text-slate-500 dark:text-slate-400 flex-shrink-0">
+                      {flatIndex + 1}/{DOCUMENTS.length}
                     </span>
-                    <span className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                    <span className="text-sm font-medium text-slate-700 dark:text-slate-300 truncate">
                       {DOCUMENTS[flatIndex]?.title}
                     </span>
                   </div>
@@ -1578,7 +1578,7 @@ export function PrdViewer() {
                     disabled={flatIndex === DOCUMENTS.length - 1 || (sequentialMode && isDocCompleted(activeDoc) === false && !!currentContent)}
                     variant="ghost"
                     size="sm"
-                    className="gap-1 h-8 rounded-full"
+                    className="gap-1 h-8 rounded-full flex-shrink-0"
                   >
                     <span className="hidden sm:inline">다음</span>
                     <ChevronRight className="w-4 h-4" />

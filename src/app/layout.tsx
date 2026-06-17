@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import GenerationGuard from "@/components/GenerationGuard";
@@ -22,6 +22,12 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "MeetingAutoDocs - 회의 녹음 및 자동 기획서 생성",
   description: "회의 녹음을 텍스트로 변환하고 AI가 요약과 기획서를 자동 생성합니다.",
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 5,
 };
 
 export default function RootLayout({
