@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requireUser } from '@/lib/apiAuth';
 import type { MeetingMetadata } from '@/types';
 import OpenAI from 'openai';
 
@@ -209,6 +210,9 @@ function getDefaultMetadata(): MeetingMetadata {
 
 export async function POST(request: NextRequest) {
   try {
+    const auth = await requireUser(request);
+    if (auth.response) return auth.response;
+
     const { transcript } = await request.json();
 
     if (!transcript) {

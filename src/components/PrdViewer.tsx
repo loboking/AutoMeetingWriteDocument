@@ -29,6 +29,7 @@ import {
 import { useBeforeUnload } from '@/hooks/useBeforeUnload';
 import { useMeetingStore } from '@/store/meetingStore';
 import { supabase } from '@/lib/supabase';
+import { authedFetch } from '@/lib/authFetch';
 import { MermaidDiagram } from '@/components/MermaidDiagram';
 import { ScreenDiagram, StoryboardViewer } from '@/components/ScreenDiagram';
 import { TestPlanViewer } from '@/components/TestPlanViewer';
@@ -308,7 +309,7 @@ export function PrdViewer() {
       for (const dep of (DEPENDENCIES[docType] || [])) {
         if (documents[dep]) contextDocs[dep] = documents[dep]!;
       }
-      const response = await fetch('/api/generate-doc', {
+      const response = await authedFetch('/api/generate-doc', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

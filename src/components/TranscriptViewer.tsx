@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Textarea } from '@/components/ui/textarea';
 import { useMeetingStore } from '@/store/meetingStore';
+import { authedFetch } from '@/lib/authFetch';
 
 // 최대 권장 텍스트 길이 (토큰 제한 고려)
 const MAX_RECOMMENDED_LENGTH = 15000;
@@ -38,7 +39,7 @@ export function TranscriptViewer() {
       formData.append('audioFile', audioFile);
       formData.append('language', 'ko');
 
-      const res = await fetch('/api/transcribe', {
+      const res = await authedFetch('/api/transcribe', {
         method: 'POST',
         body: formData,
       });
@@ -89,7 +90,7 @@ export function TranscriptViewer() {
       if (currentMeeting?.transcriptSegments && currentMeeting.transcriptSegments.length > 0) {
         try {
           setSummarizeProgress('회의 내용 맥락 보정 중...');
-          const refineRes = await fetch('/api/refine-transcript', {
+          const refineRes = await authedFetch('/api/refine-transcript', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ transcript: editedTranscript }),
@@ -105,7 +106,7 @@ export function TranscriptViewer() {
 
       setSummarizeProgress('AI 모델에 요청 전송 중...');
 
-      const response = await fetch('/api/summarize', {
+      const response = await authedFetch('/api/summarize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

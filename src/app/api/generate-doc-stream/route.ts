@@ -1,4 +1,5 @@
 import { NextRequest } from 'next/server';
+import { requireUser } from '@/lib/apiAuth';
 import { getPRDPrompt } from '@/lib/prdTemplate';
 import { getApiSpecPrompt } from '@/lib/apiSpecTemplate';
 import { getDeploymentPrompt } from '@/lib/deploymentTemplate';
@@ -194,26 +195,12 @@ async function generateDocument(
   }
 }
 
-// GET 요청에 대한 SSE 스트림 (작은 데이터용)
-export async function GET(request: NextRequest) {
-  const { searchParams } = new URL(request.url);
-  const summaryParam = searchParams.get('summary');
-  const transcript = searchParams.get('transcript') || '';
-  const title = searchParams.get('title') || '회의';
-  const date = searchParams.get('date') || new Date().toLocaleDateString('ko-KR');
-
-  if (!summaryParam) {
-    return new Response('summary 파라미터가 필요합니다.', { status: 400 });
-  }
-
-  const summary: MeetingSummary = JSON.parse(summaryParam);
-  const meetingInfo = { title, date };
-
-  return generateDocumentStream(summary, transcript, meetingInfo);
-}
-
 // POST 요청에 대한 SSE 스트림 (큰 데이터용)
+// (구 GET/SSE 핸들러는 무인증 + 쿼리토큰 노출 위험으로 삭제. EventSource 클라 참조 0건.)
 export async function POST(request: NextRequest) {
+  const auth = await requireUser(request);
+  if (auth.response) return auth.response;
+
   const body = await request.json();
   const summary = body.summary as MeetingSummary;
   const transcript = body.transcript || '';

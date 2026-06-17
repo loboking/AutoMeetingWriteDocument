@@ -9,6 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { useProgressSimulation } from '@/hooks/useProgressSimulation';
 import { handleApiError } from '@/lib/apiUtils';
 import { useMeetingStore } from '@/store/meetingStore';
+import { authedFetch } from '@/lib/authFetch';
 
 type FileType = 'audio' | 'document';
 
@@ -61,7 +62,7 @@ export function FileUploader({ onTranscriptComplete }: FileUploaderProps) {
     formData.append('audioFile', file);
     formData.append('language', 'ko');
 
-    const response = await fetch('/api/transcribe', {
+    const response = await authedFetch('/api/transcribe', {
       method: 'POST',
       body: formData,
     });
@@ -91,7 +92,7 @@ export function FileUploader({ onTranscriptComplete }: FileUploaderProps) {
     const formData = new FormData();
     formData.append('document', file);
 
-    const response = await fetch('/api/extract-text', {
+    const response = await authedFetch('/api/extract-text', {
       method: 'POST',
       body: formData,
     });

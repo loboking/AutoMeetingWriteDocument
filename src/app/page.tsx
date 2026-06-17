@@ -34,6 +34,7 @@ import SummaryViewer from '@/components/SummaryViewer';
 import PrdViewer from '@/components/PrdViewer';
 import { ProjectList } from '@/components/ProjectList';
 import { DateFormat } from '@/components/DateFormat';
+import { authedFetch } from '@/lib/authFetch';
 
 export default function Home() {
   const currentMeeting = useMeetingStore(s => s.currentMeeting);
@@ -109,7 +110,7 @@ export default function Home() {
       if (kind === 'audio') {
         // 음성 → STT (transcribe). 텍스트 추출 API로 보내지 않는다.
         formData.append('audioFile', file);
-        const response = await fetch('/api/transcribe', { method: 'POST', body: formData });
+        const response = await authedFetch('/api/transcribe', { method: 'POST', body: formData });
         const data = await response.json().catch(() => ({}));
         if (response.ok) {
           stopSimulation();
@@ -132,7 +133,7 @@ export default function Home() {
       } else {
         // 텍스트 → 추출
         formData.append('document', file);
-        const response = await fetch('/api/extract-text', { method: 'POST', body: formData });
+        const response = await authedFetch('/api/extract-text', { method: 'POST', body: formData });
         stopSimulation();
         if (!response.ok) {
           const err = await response.json().catch(() => ({ error: '파일 처리 실패' }));

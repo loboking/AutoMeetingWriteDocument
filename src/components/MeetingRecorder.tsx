@@ -13,6 +13,7 @@ import { useProgressSimulation } from '@/hooks/useProgressSimulation';
 import { handleApiError } from '@/lib/apiUtils';
 import { formatTime } from '@/lib/timeUtils';
 import { useMeetingStore } from '@/store/meetingStore';
+import { authedFetch } from '@/lib/authFetch';
 import { useBrowserSTT } from '@/hooks/useBrowserSTT';
 import { isNoSttProviderResponse } from '@/lib/stt/browserSTT';
 import { FileUploader } from './FileUploader';
@@ -68,7 +69,7 @@ function VoiceRecorder() {
       formData.append('audioFile', blob, 'recording.webm');
       formData.append('language', 'ko');
 
-      const response = await fetch('/api/transcribe', {
+      const response = await authedFetch('/api/transcribe', {
         method: 'POST',
         body: formData,
       });

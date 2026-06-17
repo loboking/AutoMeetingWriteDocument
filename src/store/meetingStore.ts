@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { Meeting, MeetingStep, MeetingSummary, DocType, DocStatus } from '@/types';
 import { DOCUMENTS, DEPENDENCIES, docTypeToField, getAllDependents } from '@/lib/documentUtils';
+import { authedFetch } from '@/lib/authFetch';
 
 // UUID 생성 유틸 (브라우저 호환성)
 function generateId(): string {
@@ -160,7 +161,7 @@ async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
       const controller = new AbortController();
       genAbort.controller = controller;
       try {
-        const res = await fetch('/api/generate-doc', {
+        const res = await authedFetch('/api/generate-doc', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ docType, summary, transcript, meetingInfo, contextDocs, review: false }),

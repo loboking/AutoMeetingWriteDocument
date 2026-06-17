@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requireUser } from '@/lib/apiAuth';
 import type { MeetingSummary } from '@/types';
 import OpenAI from 'openai';
 
@@ -187,6 +188,9 @@ export async function POST(request: NextRequest) {
   const startTime = Date.now();
 
   try {
+    const auth = await requireUser(request);
+    if (auth.response) return auth.response;
+
     const { text, context } = await request.json();
 
     console.log('[API] /api/summarize 호출됨', {

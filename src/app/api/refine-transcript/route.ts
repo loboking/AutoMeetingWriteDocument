@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requireUser } from '@/lib/apiAuth';
 import OpenAI from 'openai';
 
 export const runtime = 'nodejs';
@@ -99,6 +100,9 @@ ${transcript}
 
 export async function POST(request: NextRequest) {
   try {
+    const auth = await requireUser(request);
+    if (auth.response) return auth.response;
+
     const { transcript } = await request.json();
 
     if (!transcript || typeof transcript !== 'string' || !transcript.trim()) {

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requireUser } from '@/lib/apiAuth';
 import { getPRDPrompt } from '@/lib/prdTemplate';
 import { generatePRDByChunks } from '@/lib/prd/prdChunkGenerator';
 import { inferMetadata } from '@/lib/prd/inferMetadata';
@@ -890,6 +891,9 @@ flowchart TD
 
 export async function POST(request: NextRequest) {
   try {
+    const auth = await requireUser(request);
+    if (auth.response) return auth.response;
+
     const body = await request.json();
     const { docType, summary, transcript, meetingInfo, mode, review = true, contextDocs = {} } = body;
 

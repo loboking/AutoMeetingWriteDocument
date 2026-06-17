@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
+import { usePathname } from 'next/navigation';
 import type { Session } from '@supabase/supabase-js';
 import { supabase } from '@/lib/supabase';
 import { useMeetingStore } from '@/store/meetingStore';
@@ -12,7 +13,11 @@ import { Loader2, LogOut } from 'lucide-react';
 
 const SYNC_DEBOUNCE_MS = 2500;
 
+// 비로그인도 접근 가능한 공개 경로 (약관/개인정보)
+const PUBLIC_PATHS = ['/terms', '/privacy'];
+
 export default function AuthGate({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname();
   const [mounted, setMounted] = useState(false);
   const [session, setSession] = useState<Session | null>(null);
   const [loadingSession, setLoadingSession] = useState(true);
@@ -115,6 +120,11 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
   };
 
   // hydration mismatch 방지 + 세션 로딩 중 스플래시
+  // 약관/개인정보는 비로그인도 접근 가능 (가입 전 동의 링크용)
+  if (mounted && PUBLIC_PATHS.some((p) => pathname?.startsWith(p))) {
+    return <>{children}</>;
+  }
+
   if (!mounted || loadingSession) {
     return (
       <div className="flex-1 flex items-center justify-center min-h-screen">
@@ -151,6 +161,7 @@ function AuthForm() {
   const [mode, setMode] = useState<'signin' | 'signup'>('signin');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [agreed, setAgreed] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -159,6 +170,10 @@ function AuthForm() {
     e.preventDefault();
     setError('');
     setNotice('');
+    if (mode === 'signup' && !agreed) {
+      setError('이용약관과 개인정보처리방침에 동의해야 가입할 수 있습니다.');
+      return;
+    }
     setLoading(true);
     try {
       if (mode === 'signup') {
@@ -211,6 +226,22 @@ function AuthForm() {
               minLength={6}
               required
             />
+            {mode === 'signup' && (
+              <label className="flex items-start gap-2 text-xs text-slate-600 dark:text-slate-400">
+                <input
+                  type="checkbox"
+                  checked={agreed}
+                  onChange={(e) => setAgreed(e.target.checked)}
+                  className="mt-0.5 flex-shrink-0"
+                />
+                <span>
+                  <a href="/terms" target="_blank" className="text-blue-600 dark:text-blue-400 underline">이용약관</a>
+                  {' '}및{' '}
+                  <a href="/privacy" target="_blank" className="text-blue-600 dark:text-blue-400 underline">개인정보처리방침</a>
+                  에 동의합니다. (회의 녹취록이 외부 AI 서비스로 전송됨에 동의)
+                </span>
+              </label>
+            )}
             {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
             {notice && <p className="text-sm text-amber-600 dark:text-amber-400">{notice}</p>}
             <Button type="submit" className="w-full" disabled={loading}>

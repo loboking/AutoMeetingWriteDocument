@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requireUser } from '@/lib/apiAuth';
 import { getServerProvider } from '@/lib/stt/factory';
 import { NO_STT_PROVIDER } from '@/lib/stt/types';
 
@@ -9,6 +10,9 @@ const MAX_AUDIO_BYTES = 50 * 1024 * 1024;
 
 export async function POST(request: NextRequest) {
   try {
+    const auth = await requireUser(request);
+    if (auth.response) return auth.response;
+
     // formData 파싱 실패(빈 body 등)도 400으로 처리 — 500 방지
     let formData: FormData;
     try {

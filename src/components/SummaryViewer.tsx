@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { useBeforeUnload } from '@/hooks/useBeforeUnload';
 import { useMeetingStore } from '@/store/meetingStore';
+import { authedFetch } from '@/lib/authFetch';
 
 export function SummaryViewer() {
   const currentMeeting = useMeetingStore(s => s.currentMeeting);
@@ -34,7 +35,7 @@ export function SummaryViewer() {
 
       setRegenerateProgress('AI 모델에 요청 전송 중...');
 
-      const response = await fetch('/api/summarize', {
+      const response = await authedFetch('/api/summarize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -77,7 +78,7 @@ export function SummaryViewer() {
     updateMeetingStep('done');
 
     try {
-      const response = await fetch('/api/generate-doc', {
+      const response = await authedFetch('/api/generate-doc', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

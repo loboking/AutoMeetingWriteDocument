@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requireUser } from '@/lib/apiAuth';
 
 export const runtime = 'nodejs';
 
@@ -53,6 +54,9 @@ PDF에서 텍스트를 추출하려면:
 
 export async function POST(request: NextRequest) {
   try {
+    const auth = await requireUser(request);
+    if (auth.response) return auth.response;
+
     const formData = await request.formData();
     const document = formData.get('document') as File;
 
