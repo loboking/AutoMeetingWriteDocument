@@ -3,6 +3,7 @@ import { persist } from 'zustand/middleware';
 import type { Meeting, MeetingStep, MeetingSummary, DocType, DocStatus } from '@/types';
 import { DOCUMENTS, DEPENDENCIES, docTypeToField, getAllDependents } from '@/lib/documentUtils';
 import { authedFetch } from '@/lib/authFetch';
+import { mapWithConcurrency } from '@/lib/concurrency';
 
 // UUID 생성 유틸 (브라우저 호환성)
 function generateId(): string {
@@ -39,32 +40,35 @@ export interface ActiveGenerationJob {
 
 // 직렬화 불가한 캔슬 제어는 store state가 아닌 모듈 스코프에 보관.
 // HMR(dev) 시 모듈 재평가로 끊기지 않도록 globalThis에 캐시.
-type GenAbort = { controller: AbortController | null; cancelled: boolean };
+// controllers는 Set: 병렬 생성 시 여러 in-flight fetch를 모두 취소하기 위함.
+type GenAbort = { controllers: Set<AbortController>; cancelled: boolean };
 const __g = globalThis as unknown as { __genAbort?: GenAbort };
-const genAbort: GenAbort = __g.__genAbort ?? (__g.__genAbort = { controller: null, cancelled: false });
+const genAbort: GenAbort = __g.__genAbort ?? (__g.__genAbort = { controllers: new Set(), cancelled: false });
 
-// DEPENDENCIES 위상정렬 (Kahn): 의존 문서가 먼저 오도록 14개 순서 결정
-function topoSortDocs(): DocType[] {
+// DEPENDENCIES 위상정렬을 "레벨"(같은 레벨은 상호 의존 없어 병렬 가능)로 반환.
+// 각 Kahn 라운드 = 한 레벨. 예: L0 prd/user-story/feature-list/flowchart ...
+function topoSortLevels(): DocType[][] {
   const allKeys = DOCUMENTS.map((d) => d.key);
-  const result: DocType[] = [];
+  const levels: DocType[][] = [];
   const remaining = new Set(allKeys);
   while (remaining.size > 0) {
-    let progressed = false;
-    for (const k of allKeys) {
-      if (!remaining.has(k)) continue;
-      const depsLeft = (DEPENDENCIES[k] || []).filter((d) => remaining.has(d));
-      if (depsLeft.length === 0) {
-        result.push(k);
-        remaining.delete(k);
-        progressed = true;
-      }
-    }
-    if (!progressed) {
-      remaining.forEach((k) => result.push(k));
+    const level = allKeys.filter(
+      (k) => remaining.has(k) && (DEPENDENCIES[k] || []).every((d) => !remaining.has(d))
+    );
+    if (level.length === 0) {
+      // 순환/이상 — 남은 것 한 레벨로 몰아 종료(무한루프 방지)
+      levels.push([...remaining]);
       break;
     }
+    level.forEach((k) => remaining.delete(k));
+    levels.push(level);
   }
-  return result;
+  return levels;
+}
+
+// 평탄 순서 (활성잡 order/진행UI 호환용). 레벨을 펼침.
+function topoSortDocs(): DocType[] {
+  return topoSortLevels().flat();
 }
 
 // 생성 루프 (start/resume 공용). activeJob을 기준으로 남은 문서를 순차 생성하고,
@@ -109,7 +113,7 @@ async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
   }
 
   genAbort.cancelled = false;
-  genAbort.controller = null;
+  genAbort.controllers.clear();
 
   const order = job.order;
   const doneSet = new Set<DocType>(job.completedDocs);
@@ -139,100 +143,124 @@ async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
   const transcript = meeting.transcript || '';
   const meetingInfo = { title: meeting.title, date: new Date(meeting.createdAt).toLocaleDateString('ko-KR') };
 
-  let completed = doneSet.size;
   let failed = 0;
 
-  try {
-    for (let i = 0; i < order.length; i++) {
-      if (genAbort.cancelled) break;
-      const docType = order[i];
-      if (doneSet.has(docType)) continue; // 이미 완료된 문서 스킵 (재개)
+  // 단일 문서 생성 + 저장 + 체크포인트. 성공 true / 실패 false.
+  // 같은 레벨은 상호 의존 없으므로 contextDocs는 레벨 시작 시점 generated 스냅샷만 참조.
+  const processDoc = async (docType: DocType): Promise<boolean> => {
+    if (genAbort.cancelled || doneSet.has(docType)) return doneSet.has(docType);
 
-      const meta = DOCUMENTS.find((d) => d.key === docType);
-      set((st) =>
-        st.generationProgress
-          ? { generationProgress: { ...st.generationProgress, currentLevel: completed + 1, currentDoc: meta?.title || docType } }
-          : {}
-      );
+    const meta = DOCUMENTS.find((d) => d.key === docType);
+    // 진행중 문서 표시(병렬이라 마지막 set이 보이지만 '생성 중'은 동일)
+    set((st) =>
+      st.generationProgress
+        ? { generationProgress: { ...st.generationProgress, currentDoc: meta?.title || docType } }
+        : {}
+    );
 
-      const contextDocs: Record<string, string> = {};
-      for (const dep of DEPENDENCIES[docType] || []) {
-        if (generated[dep]) contextDocs[dep] = generated[dep];
+    const contextDocs: Record<string, string> = {};
+    for (const dep of DEPENDENCIES[docType] || []) {
+      if (generated[dep]) contextDocs[dep] = generated[dep];
+    }
+
+    const attemptOnce = async (): Promise<string> => {
+      const controller = new AbortController();
+      genAbort.controllers.add(controller);
+      try {
+        const res = await authedFetch('/api/generate-doc', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ docType, summary, transcript, meetingInfo, contextDocs, review: false }),
+          signal: controller.signal,
+        });
+        if (!res.ok) {
+          const err = new Error((await res.text()) || `${docType} 생성 실패`) as Error & { status?: number };
+          err.status = res.status;
+          throw err;
+        }
+        const { content } = await res.json();
+        if (!content) throw new Error(`${docType} 빈 응답`);
+        return content;
+      } finally {
+        genAbort.controllers.delete(controller);
       }
+    };
 
-      // 단일 문서 생성 시도 (1회). 성공 시 content 반환, 실패 시 throw.
-      const attemptOnce = async (): Promise<string> => {
-        const controller = new AbortController();
-        genAbort.controller = controller;
-        try {
-          const res = await authedFetch('/api/generate-doc', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ docType, summary, transcript, meetingInfo, contextDocs, review: false }),
-            signal: controller.signal,
-          });
-          if (!res.ok) throw new Error((await res.text()) || `${docType} 생성 실패`);
-          const { content } = await res.json();
-          if (!content) throw new Error(`${docType} 빈 응답`);
-          return content;
-        } finally {
-          genAbort.controller = null;
-        }
-      };
-
-      // 일시적 실패(타임아웃/빈응답/429)는 1회 재시도로 완주율 향상.
-      // AbortError(사용자 취소)는 재시도 안 함.
-      let content: string | null = null;
-      let lastErr: unknown = null;
-      for (let attempt = 0; attempt < 2; attempt++) {
-        if (genAbort.cancelled) break;
-        try {
-          content = await attemptOnce();
-          break;
-        } catch (e) {
-          lastErr = e;
-          if ((e as Error)?.name === 'AbortError' || genAbort.cancelled) { content = null; break; }
-          if (attempt === 0) {
-            console.warn(`${docType} 생성 실패 → 2초 후 1회 재시도:`, e);
-            await new Promise((r) => setTimeout(r, 2000));
-          }
+    // 일시 실패(타임아웃/빈응답/429) 재시도. 429는 지수 backoff로 더 길게.
+    let content: string | null = null;
+    let lastErr: unknown = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (genAbort.cancelled) break;
+      try {
+        content = await attemptOnce();
+        break;
+      } catch (e) {
+        lastErr = e;
+        if ((e as Error)?.name === 'AbortError' || genAbort.cancelled) { content = null; break; }
+        if (attempt === 0) {
+          const is429 = (e as { status?: number })?.status === 429;
+          const delay = is429 ? 5000 : 2000;
+          console.warn(`${docType} 생성 실패 → ${delay / 1000}초 후 재시도${is429 ? '(429)' : ''}:`, e);
+          await new Promise((r) => setTimeout(r, delay));
         }
       }
+    }
 
-      if (genAbort.cancelled) break;
-
-      if (content) {
-        generated[docType] = content;
-        const field = docTypeToField(docType);
-        if (get().currentMeeting?.id === meetingId) {
-          get().updateCurrentMeeting({ [field]: content });
-        } else {
-          const meetings = get().meetings;
-          const idx = meetings.findIndex((m) => m.id === meetingId);
-          if (idx >= 0) {
-            const updated = [...meetings];
-            updated[idx] = { ...updated[idx], [field]: content };
-            set({ meetings: updated });
-          }
-        }
-        completed++;
-        doneSet.add(docType);
-        // ★ 체크포인트: activeJob 갱신(persist 저장) + 진행률
-        set((st) => ({
-          activeJob: st.activeJob ? { ...st.activeJob, completedDocs: [...doneSet], updatedAt: Date.now() } : null,
-          generationProgress: st.generationProgress
-            ? { ...st.generationProgress, completedDocs: [...doneSet] }
-            : null,
-        }));
+    if (content) {
+      generated[docType] = content;
+      const field = docTypeToField(docType);
+      // 저장은 함수형 set으로 — 병렬 worker 간 last-write 경쟁 방지
+      if (get().currentMeeting?.id === meetingId) {
+        get().updateCurrentMeeting({ [field]: content });
       } else {
-        // 재시도 후에도 실패 → failedDocs에 기록(UI 노출), 다음 문서 계속
-        failed++;
-        console.error(`${docType} 생성 최종 실패 (계속 진행):`, lastErr);
-        set((st) => ({
-          generationProgress: st.generationProgress
-            ? { ...st.generationProgress, failedDocs: [...st.generationProgress.failedDocs, docType] }
-            : null,
-        }));
+        set((st) => {
+          const idx = st.meetings.findIndex((m) => m.id === meetingId);
+          if (idx < 0) return {};
+          const updated = [...st.meetings];
+          updated[idx] = { ...updated[idx], [field]: content };
+          return { meetings: updated };
+        });
+      }
+      doneSet.add(docType);
+      // ★ 체크포인트: 문서 완료마다 갱신(재개 정합). 함수형 set.
+      set((st) => ({
+        activeJob: st.activeJob ? { ...st.activeJob, completedDocs: [...doneSet], updatedAt: Date.now() } : null,
+        generationProgress: st.generationProgress
+          ? { ...st.generationProgress, completedDocs: [...doneSet] }
+          : null,
+      }));
+      return true;
+    } else {
+      failed++;
+      console.error(`${docType} 생성 최종 실패 (계속 진행):`, lastErr);
+      set((st) => ({
+        generationProgress: st.generationProgress
+          ? { ...st.generationProgress, failedDocs: [...st.generationProgress.failedDocs, docType] }
+          : null,
+      }));
+      return false;
+    }
+  };
+
+  const LEVEL_CONCURRENCY = 3;
+
+  try {
+    // 레벨 순차, 레벨 내 병렬(동시3). 같은 레벨은 상호 의존 없어 안전.
+    const levels = topoSortLevels();
+    for (const level of levels) {
+      if (genAbort.cancelled) break;
+      const pending = level.filter((dt) => !doneSet.has(dt));
+      if (pending.length === 0) continue;
+
+      // PRD는 내부적으로 CONCURRENCY=3 청킹이라 z.ai 슬롯을 점유 → 단독 선행(429 방어).
+      if (pending.includes('prd')) {
+        await processDoc('prd');
+        const rest = pending.filter((dt) => dt !== 'prd');
+        if (rest.length > 0 && !genAbort.cancelled) {
+          await mapWithConcurrency(rest, LEVEL_CONCURRENCY, (dt) => processDoc(dt));
+        }
+      } else {
+        await mapWithConcurrency(pending, LEVEL_CONCURRENCY, (dt) => processDoc(dt));
       }
     }
 
@@ -652,7 +680,9 @@ export const useMeetingStore = create<MeetingStore>()(
       cancelGeneration: () => {
         if (!get().isGenerating) return;
         genAbort.cancelled = true;
-        genAbort.controller?.abort();
+        // 병렬 in-flight 전부 취소
+        genAbort.controllers.forEach((c) => c.abort());
+        genAbort.controllers.clear();
         set((st) => ({
           generationProgress: st.generationProgress ? { ...st.generationProgress, status: 'cancelled', currentDoc: '' } : null,
           activeJob: st.activeJob ? { ...st.activeJob, status: 'cancelled', updatedAt: Date.now() } : null,

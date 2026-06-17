@@ -28,6 +28,21 @@ export const maxDuration = 300;
 // Z.ai GLM 모델 설정 (코딩 플랜 구독 권장)
 const ZAI_MODEL = process.env.ZAI_MODEL || 'glm-5-turbo';
 
+// 문서별 출력 토큰 차등: 긴 문서(표/엔드포인트 많음)는 16384 유지, 짧은 목록류는 축소 → 생성 시간 절감.
+// 출력이 상한에 닿는 문서에만 시간효과 있음. heavy는 절대 줄이지 않음(잘림 방지).
+const MAX_TOKENS_BY_TYPE: Partial<Record<DocType, number>> = {
+  // heavy (유지)
+  'api-spec': 16384, database: 16384, wbs: 16384, 'test-plan': 16384, deployment: 16384, prd: 16384,
+  // mid
+  wireframe: 12288, 'user-story': 12288, flowchart: 12288,
+  // list (축소)
+  'feature-list': 8192, 'screen-list': 8192, ia: 8192, storyboard: 8192, 'test-case': 8192,
+};
+function maxTokensFor(docType: DocType, isGlm: boolean): number {
+  const base = MAX_TOKENS_BY_TYPE[docType] ?? 16384;
+  return isGlm ? base : Math.min(base, 8192); // 비-GLM(gpt-4o)은 보수적
+}
+
 // 한국어 출력 강제 시스템 프롬프트 (GLM-5는 한/영/중 혼합 출력 경향 있음)
 const KOREAN_OUTPUT_SYSTEM_PROMPT =
   '당신은 한국 기업의 시니어 PM/기획자입니다. 모든 출력은 반드시 한국어(한글)로 작성합니다. ' +
@@ -220,9 +235,9 @@ async function generateDocument(
 
   try {
     const openai = createOpenAIClient();
-    // 16k가 속도·안정성·상세도의 검증된 최적점 (32k는 turbo로도 timeout 위험)
+    // 문서별 출력토큰 차등(목록류는 축소 → 생성 시간 절감, 긴 문서는 16384 유지)
     const response = await openai.chat.completions.create(
-      buildCreateParams(MODEL, KOREAN_OUTPUT_SYSTEM_PROMPT, prompt, 16384)
+      buildCreateParams(MODEL, KOREAN_OUTPUT_SYSTEM_PROMPT, prompt, maxTokensFor(docType, MODEL.includes('glm')))
     );
 
     // GLM-5 실제 답변은 content에 있음 (reasoning_content는 영어 사고과정이므로 fallback만)
@@ -374,6 +389,43 @@ async function generateDocumentWithContext(
   }
 }
 
+// api-spec에 주입할 DB설계 컨텍스트 슬림화.
+// erDiagram(mermaid)과 테이블/컬럼 구조는 보존하고, 장문 서술·코멘트·인덱스 DDL 등만 압축.
+// 목적: api-spec 입력 토큰을 줄여 응답시간 단축(maxDuration 300s 방어). 손실 최소.
+function slimDatabaseForApiSpec(dbContent: string): string {
+  const lines = dbContent.split('\n');
+  const kept: string[] = [];
+  let inErd = false;
+  let inFence = false;
+  let fenceLang = '';
+  for (const line of lines) {
+    const fence = line.match(/^```(\w*)/);
+    if (fence) {
+      if (!inFence) { inFence = true; fenceLang = fence[1] || ''; inErd = /mermaid|erdiagram/i.test(fenceLang) || /erDiagram/i.test(line); }
+      else { inFence = false; inErd = false; }
+      kept.push(line);
+      continue;
+    }
+    // 코드펜스 안: erDiagram은 전부 보존, 그 외(긴 DDL)는 CREATE TABLE/컬럼 라인만
+    if (inFence) {
+      if (inErd) { kept.push(line); continue; }
+      const t = line.trim();
+      if (/^(create table|create type|alter table|primary key|foreign key|unique|references|\w+\s+(varchar|int|integer|bigint|text|boolean|timestamp|date|uuid|serial|numeric|decimal|jsonb|float))/i.test(t) || /[(),]/.test(t)) {
+        kept.push(line);
+      }
+      continue;
+    }
+    // 일반 텍스트: 표(|)·헤더(#)·목록(-,*,숫자)만 보존, 장문 서술 문단은 제거
+    const t = line.trim();
+    if (t === '' || t.startsWith('#') || t.startsWith('|') || /^[-*]/.test(t) || /^\d+\./.test(t)) {
+      kept.push(line);
+    }
+  }
+  const slimmed = kept.join('\n');
+  // 슬림이 오히려 부실하면(과축소) 원본 유지
+  return slimmed.length > 500 ? slimmed : dbContent;
+}
+
 function getPromptForDocType(
   docType: DocType,
   summary: MeetingSummary,
@@ -387,8 +439,13 @@ function getPromptForDocType(
     contextSection = '\n## 이전에 생성된 문서 (참고용)\n\n';
     for (const [key, content] of Object.entries(contextDocs)) {
       const title = DOCUMENT_TITLES[key as DocType] || key;
-      // 전체 컨텍스트 전달 (GLM-4의 128K 토큰 활용)
-      contextSection += `### ${title}\n\n${content}\n\n---\n\n`;
+      // api-spec 생성 시 database 본문이 크면(긴 DDL) 슬림화 → 입력 토큰↓ 응답시간↓
+      // (api-spec이 maxDuration 300s에 근접하던 주원인). erDiagram·테이블/컬럼 시그니처는 보존.
+      const injected =
+        docType === 'api-spec' && key === 'database' && content.length > 6000
+          ? slimDatabaseForApiSpec(content)
+          : content;
+      contextSection += `### ${title}\n\n${injected}\n\n---\n\n`;
     }
   }
 
