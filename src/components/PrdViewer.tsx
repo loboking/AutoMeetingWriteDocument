@@ -1351,7 +1351,7 @@ export function PrdViewer() {
         </div>
 
         {/* 문서 컨텐츠 영역 */}
-        <div className="p-6" ref={contentRef}>
+        <div className="px-2 sm:px-6 py-4 sm:py-6" ref={contentRef}>
         {/* 저장 후 영향받은 하위 문서 안내 배너 */}
         {impactedDocs.length > 0 && (
           <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 dark:border-amber-700 dark:bg-amber-900/30 p-3">
@@ -1591,7 +1591,7 @@ export function PrdViewer() {
 
                 {isEditing ? (
                 <Card>
-                  <CardContent className="pt-6">
+                  <CardContent className="px-2 sm:px-6 pt-4 sm:pt-6">
                     <Textarea
                       value={editedContent || docContent}
                       onChange={(e) => setEditedContent(e.target.value)}
@@ -1621,11 +1621,11 @@ export function PrdViewer() {
                       </Button>
                     </CardTitle>
                   </CardHeader>
-                  <CardContent className="p-6">
+                  <CardContent className="px-2 sm:px-6 py-4 sm:py-6">
                     {activeDoc === 'ia' && <ScreenDiagram content={docContent} type="ia" />}
                     {activeDoc === 'flowchart' && (
                       !docContent.trim() ? (
-                        <div className="text-center p-8 text-slate-500 dark:text-slate-400">
+                        <div className="text-center p-4 sm:p-8 text-slate-500 dark:text-slate-400">
                           <FileText className="w-12 h-12 mx-auto mb-4 opacity-50" />
                           <p className="mb-2">아직 플로우차트 문서가 생성되지 않았습니다.</p>
                           <p className="text-sm">먼저 문서를 생성해주세요.</p>
@@ -1639,7 +1639,7 @@ export function PrdViewer() {
                     {activeDoc === 'test-plan' && <TestPlanViewer content={docContent} />}
                     {activeDoc === 'wbs' && <WBSViewer content={docContent} />}
                     {['prd', 'feature-list', 'screen-list', 'user-story', 'api-spec', 'deployment'].includes(activeDoc) && (
-                      <div className="text-center p-8 text-slate-500 dark:text-slate-400">
+                      <div className="text-center p-4 sm:p-8 text-slate-500 dark:text-slate-400">
                         <p className="mb-4">{doc?.title} 문서는 시각화를 지원하지 않습니다.</p>
                         <Button onClick={() => setViewMode('preview')} variant="outline">
                           <Eye className="w-4 h-4 mr-2" />
@@ -1701,8 +1701,8 @@ export function PrdViewer() {
                 </div>
               ) : viewMode === 'preview' ? (
                 <Card>
-                  <CardContent className="p-8">
-                    <div className="document-preview max-w-4xl mx-auto bg-white dark:bg-slate-900 rounded-lg shadow-inner p-8" style={{ fontFamily: "'NanumGothic', Arial, sans-serif" }}>
+                  <CardContent className="px-2 sm:px-6 py-4 sm:py-6">
+                    <div className="document-preview max-w-4xl mx-auto bg-white dark:bg-slate-900 rounded-lg shadow-inner p-4 sm:p-8" style={{ fontFamily: "'NanumGothic', Arial, sans-serif" }}>
                       <ReactMarkdown
                         remarkPlugins={[remarkGfm]}
                         components={{
@@ -1774,7 +1774,7 @@ export function PrdViewer() {
                 </Card>
               ) : (
                 <Card>
-                  <CardContent className="p-6">
+                  <CardContent className="px-2 sm:px-6 py-4 sm:py-6">
                     <pre className="whitespace-pre-wrap font-sans text-sm leading-relaxed text-slate-700 dark:text-slate-300">
                       {docContent}
                     </pre>
@@ -1784,7 +1784,7 @@ export function PrdViewer() {
             </>
             ) : (
               <Card>
-                <CardContent className="text-center py-16">
+                <CardContent className="text-center px-3 sm:px-6 py-12 sm:py-16">
                   <div className="text-6xl mb-4">{doc.icon}</div>
                   <h3 className="text-lg font-medium mb-2">{doc.title} 문서</h3>
                   <p className="text-slate-500 mb-6">{doc.description}</p>
