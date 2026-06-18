@@ -12,6 +12,9 @@ const nextConfig: NextConfig = {
   images: {
     unoptimized: true,
   },
+  // 문서 추출 라이브러리를 서버 번들에서 외부화(require). Turbopack 빌드에서
+  // jszip(mammoth)/fs(xlsx) 등의 번들 변형으로 인한 런타임 깨짐을 방지하는 하드닝.
+  serverExternalPackages: ['unpdf', 'mammoth', 'xlsx'],
 };
 
 // Sentry: 소스맵 업로드/트레이싱/Replay 없이 에러 캡처만 (베타 최소).

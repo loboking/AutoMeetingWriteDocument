@@ -30,6 +30,29 @@ describe('routeInputFile', () => {
     expect(routeInputFile({ name: 'B.TXT', type: '' })).toBe('text');
   });
 
+  it('.docx/.xlsx를 text로 판정한다 (확장자/MIME 모두)', () => {
+    expect(routeInputFile({ name: 'spec.docx', type: '' })).toBe('text');
+    expect(routeInputFile({ name: 'data.xlsx', type: '' })).toBe('text');
+    expect(routeInputFile({
+      name: 'noext',
+      type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    })).toBe('text');
+    expect(routeInputFile({
+      name: 'noext',
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    })).toBe('text');
+  });
+
+  it('.pptx/.doc/.xls는 unsupported를 반환한다 (서버 미지원)', () => {
+    expect(routeInputFile({ name: 'deck.pptx', type: '' })).toBe('unsupported');
+    expect(routeInputFile({ name: 'old.doc', type: '' })).toBe('unsupported');
+    expect(routeInputFile({ name: 'old.xls', type: '' })).toBe('unsupported');
+    expect(routeInputFile({
+      name: 'deck',
+      type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    })).toBe('unsupported');
+  });
+
   it('미지원 형식(.exe/.zip)은 unsupported를 반환한다', () => {
     expect(routeInputFile({ name: 'x.exe', type: '' })).toBe('unsupported');
     expect(routeInputFile({ name: 'a.zip', type: 'application/zip' })).toBe('unsupported');

@@ -80,7 +80,7 @@ export default function Home() {
     // 입력 종류 판정 (음성 vs 텍스트) — 음성 파일을 텍스트 추출로 보내던 버그 방지
     const kind = routeInputFile({ name: file.name, type: file.type });
     if (kind === 'unsupported') {
-      setUploadError('지원하지 않는 파일 형식입니다. (음성: mp3/wav/webm/m4a, 텍스트: txt/md/pdf)');
+      setUploadError('지원하지 않는 파일 형식입니다. (음성: mp3/wav/webm/m4a, 문서: txt/md/pdf/docx/xlsx) — pptx/doc/xls는 미지원');
       return;
     }
 
