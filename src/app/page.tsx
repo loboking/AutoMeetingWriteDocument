@@ -27,7 +27,7 @@ import { MeetingStep } from '@/types';
 import { routeInputFile } from '@/lib/inputRouter';
 import { validateAudio } from '@/lib/stt/audioValidation';
 import { useBrowserSTT } from '@/hooks/useBrowserSTT';
-import { isNoSttProviderResponse } from '@/lib/stt/browserSTT';
+import { transcribeAudio } from '@/lib/transcribeAudio';
 import MeetingRecorder from '@/components/MeetingRecorder';
 import TranscriptViewer from '@/components/TranscriptViewer';
 import SummaryViewer from '@/components/SummaryViewer';
@@ -103,35 +103,25 @@ export default function Home() {
     const title = meetingTitle.trim() || file.name.replace(/\.[^/.]+$/, '');
 
     try {
-      const formData = new FormData();
       let text: string;
       let transcriptSegments: import('@/types').TranscriptSegment[] | undefined;
+      let audioObjectUrl: string | undefined;
+      let audioDuration: number | undefined;
 
       if (kind === 'audio') {
-        // 음성 → STT (transcribe). 텍스트 추출 API로 보내지 않는다.
-        formData.append('audioFile', file);
-        const response = await authedFetch('/api/transcribe', { method: 'POST', body: formData });
-        const data = await response.json().catch(() => ({}));
-        if (response.ok) {
-          stopSimulation();
-          text = data.text || '';
-          transcriptSegments = data.segments;
-        } else if (isNoSttProviderResponse(data)) {
-          // 서버에 STT 키 없음 → 브라우저 무료 STT(transformers.js)로 폴백
-          setUploadError('');
-          stopSimulation();
-          const result = await browserSTT.transcribeBlob(file, 'ko');
-          if (!result || !result.text.trim()) {
-            throw new Error(browserSTT.error || '브라우저 음성 변환에 실패했습니다.');
-          }
-          text = result.text;
-          transcriptSegments = result.segments;
-        } else {
-          stopSimulation();
-          throw new Error(data.message || data.error || '음성 변환에 실패했습니다.');
-        }
+        // 저장소 업로드 → 서명URL → 서버 Whisper(키 없으면 브라우저 STT 폴백). 임시 사본은 헬퍼가 정리.
+        const result = await transcribeAudio(file, 'ko', {
+          browserTranscribe: (b, lang) => browserSTT.transcribeBlob(b, lang),
+          browserError: browserSTT.error,
+        });
+        stopSimulation();
+        text = result.text;
+        transcriptSegments = result.segments;
+        audioDuration = result.duration;
+        audioObjectUrl = URL.createObjectURL(file); // 로컬 재생용(현재 세션). 서버 사본과 별개.
       } else {
         // 텍스트 → 추출
+        const formData = new FormData();
         formData.append('document', file);
         const response = await authedFetch('/api/extract-text', { method: 'POST', body: formData });
         stopSimulation();
@@ -146,7 +136,12 @@ export default function Home() {
 
       createMeeting(title);
       setMeetingTitle('');
-      updateCurrentMeeting({ transcript: text, ...(transcriptSegments ? { transcriptSegments } : {}) });
+      updateCurrentMeeting({
+        transcript: text,
+        ...(transcriptSegments ? { transcriptSegments } : {}),
+        ...(audioDuration ? { duration: audioDuration } : {}),
+        ...(audioObjectUrl ? { audioUrl: audioObjectUrl } : {}),
+      });
       updateMeetingStep('transcribing');
     } catch (error) {
       console.error('File upload error:', error);

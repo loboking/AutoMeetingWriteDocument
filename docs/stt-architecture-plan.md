@@ -51,13 +51,24 @@
 - [ ] 모델 선택: `whisper-1` 유지(또는 `gpt-4o-mini-transcribe` 비용 절반 검토)
 - 효과: 5~8분 이내 회의는 즉시 서버 변환(백그라운드 안전). **단 긴 회의는 아직 413.**
 
-### Phase 1 — Supabase Storage 직접 업로드 (짧은 회의 백그라운드 완성)
-- [ ] Supabase 버킷 `recordings` 생성(private) + RLS INSERT/SELECT/DELETE 정책(본인 폴더 `{user_id}/...`)
-- [ ] `src/lib/recordingsStorage.ts`: `uploadRecording(blob)→path`, `getSignedUrl(path)`, `deleteRecording(path)`
-- [ ] `transcribe/route.ts`: body가 `{ storagePath }`면 서명URL로 받아 Whisper, 기존 multipart 경로도 하위호환 유지
-- [ ] `FileUploader`/`VoiceRecorder`: ≤24MB면 Storage 업로드 → path 전달 경로 사용
-- [ ] 변환 성공/실패 후 원본 삭제(1GB 쿼터 보호)
-- 수동작업: Supabase 대시보드에서 버킷+정책 SQL 실행(코드 불가)
+### Phase 1 — 저장소 추상화 + Supabase Storage 직접 업로드 ✅ (구현 완료 2026-06-18)
+- [x] 저장소 추상화: `src/lib/storage/{types,supabaseStorage,index}.ts`
+      RecordingStorage 인터페이스(upload/getReadableUrl/delete) + 팩토리 getRecordingStorage()
+      → STT provider 패턴과 동일. **컴포넌트/라우트는 팩토리만 의존(직접 import 금지).**
+- [x] 공용 헬퍼 `src/lib/transcribeAudio.ts`: 업로드→서명URL(300s)→/api/transcribe(JSON)
+      →(503이면 브라우저 STT 폴백)→finally에서 delete(ref)로 임시 사본 정리(고아 방지).
+      저장소 업로드 실패 시 ≤4MB는 multipart 직접 POST 폴백(안전망).
+- [x] `transcribe/route.ts`: JSON `{ signedUrl }` 경로 추가(SSRF 가드=Supabase 호스트만,
+      50MB 가드 유지) + 기존 multipart 하위호환.
+- [x] FileUploader/VoiceRecorder/page.tsx 3곳 모두 transcribeAudio 헬퍼 경유로 통일.
+      audioUrl(로컬 재생)·transcriptSegments·duration 보존.
+- 수동작업(배포 전 필수): `supabase/recordings-storage.sql`을 대시보드 SQL Editor에 실행
+  (recordings 버킷 private 50MB + storage.objects RLS 본인폴더 INSERT/SELECT/DELETE).
+
+#### ── 추후 Google Drive 확장 지점 ──
+- `getRecordingStorage()`(storage/index.ts)에서 분기: Drive 연결 시 GoogleDriveRecordingStorage 반환.
+- 컴포넌트/라우트/transcribeAudio는 **변경 불필요**(RecordingStorage 인터페이스만 의존).
+- Drive 구현 시 필요: Google OAuth(Supabase provider + drive scope) + upload/getReadableUrl/delete 구현.
 
 ### Phase 2 — 청크 분할 (긴 회의 = 수 시간 대응)
 - [ ] 녹음: `useRecorder`에 `chunkMinutes` 옵션 → 타이머로 stop/start 재시작, 조각 배열 관리
