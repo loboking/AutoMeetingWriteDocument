@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { FileText, Download, Copy, Check, Loader2, Plus, Edit, Save, Eye, File, Code, BookOpen, Presentation, Printer, ChevronLeft, ChevronRight, Terminal, CheckCircle2, Circle, ToggleLeft, ToggleRight, Lock, Unlock, AlertTriangle, Share2, X, RefreshCw } from 'lucide-react';
+import { FileText, Download, Copy, Check, Loader2, Plus, Edit, Save, Eye, File, Code, BookOpen, Presentation, Printer, ChevronLeft, ChevronRight, Terminal, CheckCircle2, Circle, ToggleLeft, ToggleRight, Lock, Unlock, AlertTriangle, Share2, X, RefreshCw, Maximize } from 'lucide-react';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { saveAs } from 'file-saver';
 import * as XLSX from 'xlsx';
@@ -33,6 +33,8 @@ import { supabase } from '@/lib/supabase';
 import { authedFetch } from '@/lib/authFetch';
 import { MermaidDiagram } from '@/components/MermaidDiagram';
 import { ScreenDiagram, StoryboardViewer } from '@/components/ScreenDiagram';
+import { MediaLightbox, type LightboxState } from '@/components/MediaLightbox';
+import { downloadMermaidPng, downloadMermaidSvg, downloadElementPng, downloadImageOriginal } from '@/lib/diagramExport';
 import { TestPlanViewer } from '@/components/TestPlanViewer';
 import { WBSViewer } from '@/components/WBSViewer';
 import { InAppTerminal } from '@/components/InAppTerminal';
@@ -63,6 +65,26 @@ const PDF_EXPORT_CSS = `
   .diagram { text-align: center; margin: 16px 0; }
   .diagram img { max-width: 100%; height: auto; }
 `;
+
+// 시각화를 감싸 우상단 확대 버튼 오버레이를 제공. onZoom에 래퍼 DOM을 넘김.
+// group/zoom 네임드 variant 사용(뷰어 내부의 group hover와 충돌 방지).
+function ZoomBox({ title, children, onZoom }: { title: string; children: React.ReactNode; onZoom: (el: HTMLElement) => void }) {
+  const ref = useRef<HTMLDivElement>(null);
+  return (
+    <div ref={ref} className="relative group/zoom">
+      {children}
+      <button
+        type="button"
+        onClick={() => ref.current && onZoom(ref.current)}
+        className="absolute top-2 right-2 z-10 p-1.5 rounded-md bg-white/90 dark:bg-slate-800/90 shadow border border-slate-200 dark:border-slate-700 opacity-0 group-hover/zoom:opacity-100 focus:opacity-100 transition-opacity"
+        aria-label={`${title} 확대`}
+        title={`${title} 크게 보기`}
+      >
+        <Maximize className="w-4 h-4 text-slate-600 dark:text-slate-300" />
+      </button>
+    </div>
+  );
+}
 
 export function PrdViewer() {
   const { currentMeeting, updateCurrentMeeting, toggleCompleteDoc, isDocCompleted, getNextIncompleteDoc, setAutoAdvance } = useMeetingStore();
@@ -111,6 +133,8 @@ export function PrdViewer() {
   const [diagramBroken, setDiagramBroken] = useState(false);
   // 전체 내보내기(ZIP) 진행 중 — 중복 클릭 방지 + 로딩 표시
   const [exporting, setExporting] = useState(false);
+  // 다이어그램/이미지 확대 라이트박스 (단일 상태)
+  const [lightbox, setLightbox] = useState<LightboxState | null>(null);
   const [showGenerateConfirm, setShowGenerateConfirm] = useState(false);
   const [generateConfirmData, setGenerateConfirmData] = useState<{ count: number; isRegenerate: boolean; docsToRegenerate: DocType[] } | null>(null);
   const [isEditing, setIsEditing] = useState(false);
@@ -474,6 +498,66 @@ export function PrdViewer() {
     } finally {
       setExporting(false);
     }
+  };
+
+  // ── 다이어그램/이미지 확대 + 다운로드 라이트박스 오프너 ──
+  const lightboxTs = () => new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+
+  // mermaid: 코드로 재렌더 표시 + PNG/SVG 다운로드
+  const openMermaidLightbox = (title: string, code: string) => {
+    if (!code?.trim()) return;
+    setLightbox({
+      title,
+      body: <div className="max-w-full overflow-auto"><MermaidDiagram chart={code} id="lightbox" /></div>,
+      actions: [
+        {
+          label: 'PNG',
+          onClick: async () => {
+            if (!(await downloadMermaidPng(code, `${sanitizeFilename(title)}-${lightboxTs()}.png`)))
+              alert('PNG 변환에 실패했습니다. SVG로 시도해 주세요.');
+          },
+        },
+        {
+          label: 'SVG',
+          onClick: async () => {
+            if (!(await downloadMermaidSvg(code, `${sanitizeFilename(title)}-${lightboxTs()}.svg`)))
+              alert('SVG 내보내기에 실패했습니다.');
+          },
+        },
+      ],
+    });
+  };
+
+  // HTML 뷰어(IA/와이어프레임/스토리보드/WBS/테스트계획): clone 확대 표시 + PNG 다운로드
+  const openHtmlLightbox = (title: string, srcEl: HTMLElement) => {
+    const clone = srcEl.cloneNode(true) as HTMLElement;
+    setLightbox({
+      title,
+      body: (
+        <div
+          className="max-w-[88vw]"
+          ref={(n) => { if (n && !n.firstChild) n.appendChild(clone); }}
+        />
+      ),
+      actions: [
+        {
+          label: 'PNG',
+          onClick: async () => {
+            if (!(await downloadElementPng(srcEl, `${sanitizeFilename(title)}-${lightboxTs()}.png`)))
+              alert('이미지 변환에 실패했습니다.');
+          },
+        },
+      ],
+    });
+  };
+
+  // 본문 일반 이미지: 확대 + 원본 다운로드
+  const openImageLightbox = (src: string, alt: string) => {
+    setLightbox({
+      title: alt || '이미지',
+      body: <img src={src} alt={alt} className="max-w-[88vw] max-h-[80vh] object-contain" />,
+      actions: [{ label: '다운로드', onClick: async () => { await downloadImageOriginal(src, alt || 'image'); } }],
+    });
   };
 
   const handleShare = async () => {
@@ -1228,6 +1312,8 @@ export function PrdViewer() {
 
   return (
     <div className="relative">
+      {/* 다이어그램/이미지 확대+다운로드 라이트박스 */}
+      <MediaLightbox state={lightbox} onClose={() => setLightbox(null)} />
       {/* 햄버거 버튼 - 항상 표시 */}
       <button
         onClick={() => {
@@ -1947,7 +2033,11 @@ export function PrdViewer() {
                     </CardTitle>
                   </CardHeader>
                   <CardContent className="px-2 sm:px-6 py-4 sm:py-6">
-                    {activeDoc === 'ia' && <ScreenDiagram content={docContent} type="ia" />}
+                    {activeDoc === 'ia' && (
+                      <ZoomBox title="정보 구조도(IA)" onZoom={(el) => openHtmlLightbox('정보 구조도(IA)', el)}>
+                        <ScreenDiagram content={docContent} type="ia" />
+                      </ZoomBox>
+                    )}
                     {activeDoc === 'flowchart' && (
                       !docContent.trim() ? (
                         <div className="text-center p-4 sm:p-8 text-slate-500 dark:text-slate-400">
@@ -1956,17 +2046,35 @@ export function PrdViewer() {
                           <p className="text-sm">먼저 문서를 생성해주세요.</p>
                         </div>
                       ) : (
-                        <MermaidDiagram
-                          chart={extractMermaidCode(docContent)}
-                          onRenderError={() => setDiagramBroken(true)}
-                          onRenderSuccess={() => setDiagramBroken(false)}
-                        />
+                        <ZoomBox title="플로우차트" onZoom={() => openMermaidLightbox('플로우차트', extractMermaidCode(docContent))}>
+                          <MermaidDiagram
+                            chart={extractMermaidCode(docContent)}
+                            onRenderError={() => setDiagramBroken(true)}
+                            onRenderSuccess={() => setDiagramBroken(false)}
+                          />
+                        </ZoomBox>
                       )
                     )}
-                    {activeDoc === 'wireframe' && <ScreenDiagram content={docContent} type="wireframe" />}
-                    {activeDoc === 'storyboard' && <StoryboardViewer content={docContent} />}
-                    {activeDoc === 'test-plan' && <TestPlanViewer content={docContent} />}
-                    {activeDoc === 'wbs' && <WBSViewer content={docContent} />}
+                    {activeDoc === 'wireframe' && (
+                      <ZoomBox title="화면 구성도" onZoom={(el) => openHtmlLightbox('화면 구성도', el)}>
+                        <ScreenDiagram content={docContent} type="wireframe" />
+                      </ZoomBox>
+                    )}
+                    {activeDoc === 'storyboard' && (
+                      <ZoomBox title="스토리보드" onZoom={(el) => openHtmlLightbox('스토리보드', el)}>
+                        <StoryboardViewer content={docContent} />
+                      </ZoomBox>
+                    )}
+                    {activeDoc === 'test-plan' && (
+                      <ZoomBox title="테스트 계획" onZoom={(el) => openHtmlLightbox('테스트 계획', el)}>
+                        <TestPlanViewer content={docContent} />
+                      </ZoomBox>
+                    )}
+                    {activeDoc === 'wbs' && (
+                      <ZoomBox title="WBS" onZoom={(el) => openHtmlLightbox('WBS', el)}>
+                        <WBSViewer content={docContent} />
+                      </ZoomBox>
+                    )}
                     {['prd', 'feature-list', 'screen-list', 'user-story', 'api-spec', 'deployment'].includes(activeDoc) && (
                       <div className="text-center p-4 sm:p-8 text-slate-500 dark:text-slate-400">
                         <p className="mb-4">{doc?.title} 문서는 시각화를 지원하지 않습니다.</p>
@@ -2060,7 +2168,11 @@ export function PrdViewer() {
                               let codeContent = String(children).replace(/\n$/, '');
                               // HTML 엔티티를 원래 기호로 변환
                               codeContent = codeContent.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').replace(/--&gt;/g, '-->');
-                              return <MermaidDiagram chart={codeContent} key={node?.position?.start?.line?.toString()} onRenderError={() => setDiagramBroken(true)} />;
+                              return (
+                                <ZoomBox key={node?.position?.start?.line?.toString()} title="다이어그램" onZoom={() => openMermaidLightbox('다이어그램', codeContent)}>
+                                  <MermaidDiagram chart={codeContent} onRenderError={() => setDiagramBroken(true)} />
+                                </ZoomBox>
+                              );
                             }
                             const isInline = !className;
                             return isInline ? (
@@ -2094,6 +2206,18 @@ export function PrdViewer() {
                           a: ({ href, children }) => (
                             <a href={href} className="text-blue-600 dark:text-blue-400 hover:text-blue-800 underline" target="_blank" rel="noopener noreferrer">{children}</a>
                           ),
+                          img: ({ src, alt }) => {
+                            if (!src || typeof src !== 'string') return null;
+                            return (
+                              <img
+                                src={src}
+                                alt={alt ?? ''}
+                                loading="lazy"
+                                className="max-w-full rounded-lg border border-slate-200 dark:border-slate-700 cursor-zoom-in my-4"
+                                onClick={() => openImageLightbox(src, alt ?? '이미지')}
+                              />
+                            );
+                          },
                         }}
                       >
                         {sanitizeHtml(docContent)}
