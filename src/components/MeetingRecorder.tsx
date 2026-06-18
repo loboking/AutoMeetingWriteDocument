@@ -10,12 +10,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useRecorder } from '@/hooks/useRecorder';
 import { useBeforeUnload } from '@/hooks/useBeforeUnload';
 import { useProgressSimulation } from '@/hooks/useProgressSimulation';
-import { handleApiError } from '@/lib/apiUtils';
 import { formatTime } from '@/lib/timeUtils';
 import { useMeetingStore } from '@/store/meetingStore';
-import { authedFetch } from '@/lib/authFetch';
 import { useBrowserSTT } from '@/hooks/useBrowserSTT';
-import { isNoSttProviderResponse } from '@/lib/stt/browserSTT';
+import { transcribeAudio } from '@/lib/transcribeAudio';
 import { FileUploader } from './FileUploader';
 
 function VoiceRecorder() {
@@ -65,53 +63,25 @@ function VoiceRecorder() {
     updateMeetingStep('transcribing');
 
     try {
-      const formData = new FormData();
-      formData.append('audioFile', blob, 'recording.webm');
-      formData.append('language', 'ko');
-
-      const response = await authedFetch('/api/transcribe', {
-        method: 'POST',
-        body: formData,
+      // 저장소 업로드 → 서명URL → 서버 Whisper(키 없으면 브라우저 STT 폴백). 임시 사본은 헬퍼가 정리.
+      const result = await transcribeAudio(blob, 'ko', {
+        browserTranscribe: (b, lang) => browserSTT.transcribeBlob(b, lang),
+        browserError: browserSTT.error,
       });
-
-      const data = await response.json().catch(() => ({}));
-      let text: string;
-      let segments: import('@/types').TranscriptSegment[] | undefined;
-      let audioDuration: number | undefined;
-
-      if (response.ok) {
-        text = data.text || '';
-        segments = data.segments;
-        audioDuration = data.duration;
-      } else if (isNoSttProviderResponse(data)) {
-        // 서버 STT 키 없음 → 브라우저 무료 STT(transformers.js)로 폴백
-        const result = await browserSTT.transcribeBlob(blob, 'ko');
-        if (!result || !result.text.trim()) {
-          throw new Error(browserSTT.error || '브라우저 음성 변환에 실패했습니다.');
-        }
-        text = result.text;
-        segments = result.segments;
-        audioDuration = result.duration;
-      } else {
-        await handleApiError(response, '변환 실패');
-        return;
-      }
 
       stopSimulation();
 
-      if (!text || !text.trim()) throw new Error('변환된 텍스트가 비어 있습니다.');
-
       updateCurrentMeeting({
-        transcript: text,
-        ...(segments ? { transcriptSegments: segments } : {}),
-        duration: audioDuration || duration,
+        transcript: result.text,
+        ...(result.segments ? { transcriptSegments: result.segments } : {}),
+        duration: result.duration || duration,
         audioUrl: audioUrl || undefined,
       });
 
       updateMeetingStep('transcribing');
     } catch (error) {
       console.error('Transcribe error:', error);
-      alert('음성 변환에 실패했습니다.');
+      alert(error instanceof Error ? error.message : '음성 변환에 실패했습니다.');
       updateMeetingStep('recording');
     } finally {
       stopSimulation();
@@ -237,15 +207,17 @@ function VoiceRecorder() {
               <div className="space-y-3" role="status" aria-live="polite">
                 <div className="flex items-center justify-between">
                   <span className="text-sm font-medium text-slate-600 dark:text-slate-400">
-                    텍스트 변환 중...
+                    {browserSTT.isTranscribing ? '브라우저 음성 변환 중...' : '텍스트 변환 중...'}
                   </span>
                   <span className="text-sm font-bold text-blue-600 dark:text-blue-400">
-                    {uploadProgress}%
+                    {Math.max(uploadProgress, browserSTT.progress)}%
                   </span>
                 </div>
-                <Progress value={uploadProgress} className="h-3" aria-label={`변환 진행률 ${uploadProgress}퍼센트`} />
+                <Progress value={Math.max(uploadProgress, browserSTT.progress)} className="h-3" aria-label={`변환 진행률 ${Math.max(uploadProgress, browserSTT.progress)}퍼센트`} />
                 <p className="text-xs text-center text-slate-500">
-                  AI가 음성을 텍스트로 변환하고 있습니다. 잠시만 기다려주세요...
+                  {browserSTT.isTranscribing
+                    ? '브라우저에서 무료 모델로 음성을 변환 중입니다. 최초 1회 모델 다운로드로 시간이 걸릴 수 있어요...'
+                    : 'AI가 음성을 텍스트로 변환하고 있습니다. 잠시만 기다려주세요...'}
                 </p>
               </div>
             ) : (

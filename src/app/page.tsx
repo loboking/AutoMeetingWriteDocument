@@ -27,7 +27,7 @@ import { MeetingStep } from '@/types';
 import { routeInputFile } from '@/lib/inputRouter';
 import { validateAudio } from '@/lib/stt/audioValidation';
 import { useBrowserSTT } from '@/hooks/useBrowserSTT';
-import { isNoSttProviderResponse } from '@/lib/stt/browserSTT';
+import { transcribeAudio } from '@/lib/transcribeAudio';
 import MeetingRecorder from '@/components/MeetingRecorder';
 import TranscriptViewer from '@/components/TranscriptViewer';
 import SummaryViewer from '@/components/SummaryViewer';
@@ -103,35 +103,25 @@ export default function Home() {
     const title = meetingTitle.trim() || file.name.replace(/\.[^/.]+$/, '');
 
     try {
-      const formData = new FormData();
       let text: string;
       let transcriptSegments: import('@/types').TranscriptSegment[] | undefined;
+      let audioObjectUrl: string | undefined;
+      let audioDuration: number | undefined;
 
       if (kind === 'audio') {
-        // 음성 → STT (transcribe). 텍스트 추출 API로 보내지 않는다.
-        formData.append('audioFile', file);
-        const response = await authedFetch('/api/transcribe', { method: 'POST', body: formData });
-        const data = await response.json().catch(() => ({}));
-        if (response.ok) {
-          stopSimulation();
-          text = data.text || '';
-          transcriptSegments = data.segments;
-        } else if (isNoSttProviderResponse(data)) {
-          // 서버에 STT 키 없음 → 브라우저 무료 STT(transformers.js)로 폴백
-          setUploadError('');
-          const result = await browserSTT.transcribeBlob(file, 'ko');
-          stopSimulation();
-          if (!result || !result.text.trim()) {
-            throw new Error(browserSTT.error || '브라우저 음성 변환에 실패했습니다.');
-          }
-          text = result.text;
-          transcriptSegments = result.segments;
-        } else {
-          stopSimulation();
-          throw new Error(data.message || data.error || '음성 변환에 실패했습니다.');
-        }
+        // 저장소 업로드 → 서명URL → 서버 Whisper(키 없으면 브라우저 STT 폴백). 임시 사본은 헬퍼가 정리.
+        const result = await transcribeAudio(file, 'ko', {
+          browserTranscribe: (b, lang) => browserSTT.transcribeBlob(b, lang),
+          browserError: browserSTT.error,
+        });
+        stopSimulation();
+        text = result.text;
+        transcriptSegments = result.segments;
+        audioDuration = result.duration;
+        audioObjectUrl = URL.createObjectURL(file); // 로컬 재생용(현재 세션). 서버 사본과 별개.
       } else {
         // 텍스트 → 추출
+        const formData = new FormData();
         formData.append('document', file);
         const response = await authedFetch('/api/extract-text', { method: 'POST', body: formData });
         stopSimulation();
@@ -146,7 +136,12 @@ export default function Home() {
 
       createMeeting(title);
       setMeetingTitle('');
-      updateCurrentMeeting({ transcript: text, ...(transcriptSegments ? { transcriptSegments } : {}) });
+      updateCurrentMeeting({
+        transcript: text,
+        ...(transcriptSegments ? { transcriptSegments } : {}),
+        ...(audioDuration ? { duration: audioDuration } : {}),
+        ...(audioObjectUrl ? { audioUrl: audioObjectUrl } : {}),
+      });
       updateMeetingStep('transcribing');
     } catch (error) {
       console.error('File upload error:', error);
@@ -369,10 +364,17 @@ export default function Home() {
                   {uploading && (
                     <div className="space-y-2">
                       <div className="flex items-center justify-between text-sm">
-                        <span className="text-slate-600 dark:text-slate-400">파일 처리 중...</span>
-                        <span className="font-bold text-blue-600 dark:text-blue-400">{uploadProgress}%</span>
+                        <span className="text-slate-600 dark:text-slate-400">
+                          {browserSTT.isTranscribing ? '브라우저 음성 변환 중...' : '파일 처리 중...'}
+                        </span>
+                        <span className="font-bold text-blue-600 dark:text-blue-400">{Math.max(uploadProgress, browserSTT.progress)}%</span>
                       </div>
-                      <Progress value={uploadProgress} className="h-2" />
+                      <Progress value={Math.max(uploadProgress, browserSTT.progress)} className="h-2" />
+                      {browserSTT.isTranscribing && (
+                        <p className="text-xs text-center text-slate-500">
+                          브라우저에서 무료 모델로 변환 중입니다. 최초 1회 모델 다운로드로 시간이 걸릴 수 있어요...
+                        </p>
+                      )}
                     </div>
                   )}
 
