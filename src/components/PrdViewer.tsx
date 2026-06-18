@@ -38,6 +38,32 @@ import { WBSViewer } from '@/components/WBSViewer';
 import { InAppTerminal } from '@/components/InAppTerminal';
 import { CommandPanel } from '@/components/CommandPanel';
 
+// 전체 내보내기 ZIP에 담을 수 있는 포맷(개별 다운로드와 동일).
+type ExportFormat = 'md' | 'txt' | 'pdf' | 'docx' | 'xlsx' | 'pptx';
+
+// PDF 내보내기(html2pdf)용 스타일. 인쇄(handlePrint)와 동일 톤의 컬러 헤더/표 디자인.
+const PDF_EXPORT_CSS = `
+  body, div { font-family: 'NanumGothic', 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif; line-height: 1.7; color: #333; }
+  h1 { font-size: 24px; color: #1e3a8a; border-bottom: 3px solid #2563eb; padding-bottom: 6px; margin: 18px 0 12px; }
+  h2 { font-size: 19px; color: #1e40af; border-left: 5px solid #2563eb; padding-left: 10px; margin: 16px 0 10px; }
+  h3 { font-size: 16px; color: #1f2937; margin: 14px 0 8px; }
+  h4, h5, h6 { font-size: 14px; color: #374151; margin: 12px 0 6px; }
+  ul, ol { margin: 8px 0; padding-left: 22px; }
+  li { margin: 3px 0; }
+  p { margin: 6px 0; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; }
+  th, td { border: 1px solid #d1d5db; padding: 6px 10px; text-align: left; font-size: 13px; }
+  th, tr:first-child td { background-color: #2563eb; color: #fff; font-weight: 600; }
+  tbody tr:nth-child(even) { background-color: #f9fafb; }
+  code { background: #f3f4f6; padding: 1px 5px; border-radius: 3px; font-size: 0.9em; }
+  pre { background: #1f2937; color: #f9fafb; padding: 12px; border-radius: 6px; overflow-x: auto; }
+  pre code { background: transparent; color: inherit; padding: 0; }
+  blockquote { border-left: 4px solid #6b7280; padding-left: 12px; color: #6b7280; margin: 12px 0; }
+  hr { border: none; border-top: 1px solid #e5e7eb; margin: 18px 0; }
+  .diagram { text-align: center; margin: 16px 0; }
+  .diagram img { max-width: 100%; height: auto; }
+`;
+
 export function PrdViewer() {
   const { currentMeeting, updateCurrentMeeting, toggleCompleteDoc, isDocCompleted, getNextIncompleteDoc, setAutoAdvance } = useMeetingStore();
   const {
@@ -83,6 +109,8 @@ export function PrdViewer() {
   const [isSingleGenerating, setIsSingleGenerating] = useState(false);
   // mermaid 다이어그램 렌더 실패 감지 (깨진 다이어그램 → 재생성 유도 배너)
   const [diagramBroken, setDiagramBroken] = useState(false);
+  // 전체 내보내기(ZIP) 진행 중 — 중복 클릭 방지 + 로딩 표시
+  const [exporting, setExporting] = useState(false);
   const [showGenerateConfirm, setShowGenerateConfirm] = useState(false);
   const [generateConfirmData, setGenerateConfirmData] = useState<{ count: number; isRegenerate: boolean; docsToRegenerate: DocType[] } | null>(null);
   const [isEditing, setIsEditing] = useState(false);
@@ -396,39 +424,55 @@ export function PrdViewer() {
   };
 
 
-  // 생성된 전체 문서를 하나로 합쳐 내보낸다. 포맷: md(통합 마크다운) | docx(통합 Word).
-  const handleDownloadAll = async (format: 'md' | 'docx' = 'md') => {
-    if (!currentMeeting) return;
+  // 파일명에서 경로 불가 문자 제거(개별 파일이 doc.title을 파일시스템에 노출).
+  const sanitizeFilename = (s: string) =>
+    s.replace(/\s+/g, '-').replace(/[/\\:*?"<>|]/g, '_').slice(0, 80);
 
-    const generatedDocs = DOCUMENTS.filter(doc => documents[doc.key]);
-
-    if (generatedDocs.length === 0) {
-      return; // 문서 없으면 조용히 종료
+  // 선택 포맷의 Blob 생성(ZIP 묶기 공용). 포맷별 build 헬퍼 재사용.
+  const buildBlobFor = async (format: ExportFormat, content: string): Promise<Blob> => {
+    switch (format) {
+      case 'md': return new Blob([content], { type: 'text/markdown' });
+      case 'txt': return new Blob([content], { type: 'text/plain' });
+      case 'docx': return buildDocxBlob(content);
+      case 'xlsx': return buildXlsxBlob(content);
+      case 'pptx': return buildPptxBlob(content);
+      case 'pdf': return buildPdfBlob(content);
     }
+  };
 
-    const safeTitle = currentMeeting.title.replace(/\s+/g, '-');
-    const timestamp = new Date().toISOString().slice(0, 10);
+  // 생성된 전체 문서를 "각 문서별 개별 파일"로 만들어 ZIP으로 묶어 내보낸다.
+  // 포맷: md/txt/pdf/docx/xlsx/pptx (개별 다운로드가 지원하는 전체 포맷).
+  const handleDownloadAll = async (format: ExportFormat) => {
+    if (!currentMeeting) return;
+    const generatedDocs = DOCUMENTS.filter((doc) => documents[doc.key]);
+    if (generatedDocs.length === 0) return;
 
-    let combinedContent = `# ${currentMeeting.title} - 전체 기획 문서\n\n`;
-    combinedContent += `> 생성일: ${new Date(currentMeeting.createdAt).toLocaleDateString('ko-KR')}\n`;
-    combinedContent += `> 내보내기일: ${new Date().toLocaleDateString('ko-KR')}\n\n`;
-    combinedContent += `---\n\n`;
+    setExporting(true);
+    try {
+      const JSZip = (await import('jszip')).default;
+      const zip = new JSZip();
+      const safeTitle = sanitizeFilename(currentMeeting.title);
+      const timestamp = new Date().toISOString().slice(0, 10);
 
-    generatedDocs.forEach((doc) => {
-      const docContent = documents[doc.key];
-      if (docContent) {
-        combinedContent += `\n\n## ${doc.title}\n\n`;
-        combinedContent += docContent;
-        combinedContent += '\n\n---\n\n';
+      // 순차 처리: docx/pptx/pdf는 비동기 + mermaid 렌더 포함 → 동시 실행 시 충돌/부하.
+      for (const doc of generatedDocs) {
+        const content = documents[doc.key];
+        if (!content) continue;
+        try {
+          const blob = await buildBlobFor(format, content);
+          zip.file(`${sanitizeFilename(doc.title)}.${format}`, blob);
+        } catch (e) {
+          console.error(`${doc.title} ${format} 변환 실패(건너뜀):`, e);
+        }
       }
-    });
 
-    const filename = `${safeTitle}-전체문서-${timestamp}`;
-    if (format === 'docx') {
-      await downloadDocx(combinedContent, `${filename}.docx`); // 기존 마크다운→Word 변환 재사용
-    } else {
-      const blob = new Blob([combinedContent], { type: 'text/markdown' });
-      saveAs(blob, `${filename}.md`);
+      const zipBlob = await zip.generateAsync({ type: 'blob' });
+      saveAs(zipBlob, `${safeTitle}-전체문서-${format}-${timestamp}.zip`);
+    } catch (e) {
+      console.error('전체 내보내기 실패:', e);
+      alert('전체 내보내기에 실패했습니다. 다시 시도해주세요.');
+    } finally {
+      setExporting(false);
     }
   };
 
@@ -841,7 +885,8 @@ export function PrdViewer() {
     saveAs(blob, filename);
   };
 
-  const downloadDocx = async (content: string, filename: string) => {
+  // Blob 생성(ZIP 묶기 + 개별 다운로드 공용). saveAs는 호출부에서.
+  const buildDocxBlob = async (content: string): Promise<Blob> => {
     // 마크다운을 파싱하여 Word 문서 생성
     const lines = content.split('\n');
     const paragraphs: Paragraph[] = [];
@@ -929,11 +974,12 @@ export function PrdViewer() {
       }]
     });
 
-    const blob = await Packer.toBlob(doc);
-    saveAs(blob, filename);
+    return Packer.toBlob(doc);
   };
+  const downloadDocx = async (content: string, filename: string) =>
+    saveAs(await buildDocxBlob(content), filename);
 
-  const downloadXlsx = (content: string, filename: string) => {
+  const buildXlsxBlob = (content: string): Blob => {
     // 마크다운을 파싱하여 테이블과 텍스트로 변환
     const lines = content.split('\n');
     const worksheetData: (string | { v: string; s: { font: { bold: boolean } } })[][] = [];
@@ -981,10 +1027,13 @@ export function PrdViewer() {
 
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, 'Document');
-    XLSX.writeFile(workbook, filename);
+    const buf = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' }); // ArrayBuffer
+    return new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
   };
+  const downloadXlsx = (content: string, filename: string) =>
+    saveAs(buildXlsxBlob(content), filename);
 
-  const downloadPptx = async (content: string, filename: string) => {
+  const buildPptxBlob = async (content: string): Promise<Blob> => {
     // ★ 내보내기 전 mermaid 블록을 PNG로 사전 래스터화 (화면 SVG는 재사용 불가)
     const diagrams = await prerenderMermaid(content);
 
@@ -1145,7 +1194,32 @@ export function PrdViewer() {
     }
     flushTable();
 
-    await pptx.writeFile({ fileName: filename });
+    return (await pptx.write({ outputType: 'blob' })) as Blob;
+  };
+  const downloadPptx = async (content: string, filename: string) =>
+    saveAs(await buildPptxBlob(content), filename);
+
+  // PDF Blob 생성 (ZIP용). html2pdf로 HTML을 래스터화 → 시스템 한글 폰트 렌더.
+  // 단일 PDF 다운로드는 handlePrint(인쇄 다이얼로그)를 그대로 사용.
+  const buildPdfBlob = async (content: string): Promise<Blob> => {
+    const html2pdf = (await import('html2pdf.js')).default;
+    const diagrams = await prerenderMermaid(content); // mermaid 사전 래스터화
+    const el = document.createElement('div');
+    el.innerHTML = `<style>${PDF_EXPORT_CSS}</style>` + contentToHtml(content, diagrams);
+    el.style.cssText = 'position:fixed;left:-99999px;top:0;width:794px;'; // A4 px폭, 화면 밖
+    document.body.appendChild(el);
+    try {
+      return await html2pdf()
+        .set({
+          margin: 10,
+          html2canvas: { useCORS: true, scale: 2, backgroundColor: '#ffffff' },
+          jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+        })
+        .from(el)
+        .outputPdf('blob');
+    } finally {
+      document.body.removeChild(el); // 누수 방지
+    }
   };
 
   // 생성된 문서 수 계산
@@ -1529,23 +1603,40 @@ export function PrdViewer() {
               )}
             </Button>
 
-            {/* 모두 내보내기 (포맷 선택) */}
+            {/* 모두 내보내기 (각 문서 개별파일 → ZIP, 포맷 선택) */}
             <DropdownMenu>
               <DropdownMenuTrigger
-                disabled={Object.keys(documents).filter(k => documents[k as DocType]).length === 0}
+                disabled={exporting || Object.keys(documents).filter(k => documents[k as DocType]).length === 0}
                 className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 border border-input bg-background shadow-sm hover:bg-accent hover:text-accent-foreground h-8 px-3 flex-shrink-0"
               >
-                <Download className="w-4 h-4 sm:mr-2" />
-                <span className="hidden sm:inline">모두 내보내기</span>
+                {exporting ? (
+                  <Loader2 className="w-4 h-4 sm:mr-2 animate-spin" />
+                ) : (
+                  <Download className="w-4 h-4 sm:mr-2" />
+                )}
+                <span className="hidden sm:inline">{exporting ? '내보내는 중...' : '모두 내보내기'}</span>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
-                <DropdownMenuItem onClick={() => handleDownloadAll('md')}>
-                  <File className="w-4 h-4 mr-2" />
-                  전체 통합 Markdown (.md)
+                <div className="px-2 py-1.5 text-xs text-slate-500 dark:text-slate-400">
+                  각 문서를 개별 파일로 묶어 ZIP 다운로드
+                </div>
+                <DropdownMenuItem onClick={() => handleDownloadAll('pdf')}>
+                  <File className="w-4 h-4 mr-2" /> PDF (.pdf) ZIP
                 </DropdownMenuItem>
                 <DropdownMenuItem onClick={() => handleDownloadAll('docx')}>
-                  <File className="w-4 h-4 mr-2" />
-                  전체 통합 Word (.docx)
+                  <File className="w-4 h-4 mr-2" /> Word (.docx) ZIP
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => handleDownloadAll('pptx')}>
+                  <Presentation className="w-4 h-4 mr-2" /> PowerPoint (.pptx) ZIP
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => handleDownloadAll('xlsx')}>
+                  <File className="w-4 h-4 mr-2" /> Excel (.xlsx) ZIP
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => handleDownloadAll('md')}>
+                  <File className="w-4 h-4 mr-2" /> Markdown (.md) ZIP
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => handleDownloadAll('txt')}>
+                  <File className="w-4 h-4 mr-2" /> 텍스트 (.txt) ZIP
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
