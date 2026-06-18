@@ -1343,7 +1343,7 @@ export function PrdViewer() {
       <div className="flex-1 min-w-0">
         {/* 상단 헤더 바 */}
         <div className="sticky top-0 z-30 bg-white/95 dark:bg-slate-900/95 backdrop-blur-sm border-b border-slate-200 dark:border-slate-700 shadow-sm">
-          <div className="flex items-center justify-between gap-3 sm:gap-6 px-4 sm:px-6 py-3 pl-16 sm:pl-6">
+          <div className="flex flex-wrap items-center justify-between gap-y-2 gap-3 sm:gap-6 px-4 sm:px-6 py-3 pl-16 sm:pl-6">
             {/* 왼쪽: 문서 생성 현황 (모바일 숨김 — 햄버거 버튼 공간 + 플로팅 네비에 진행표시 있음) */}
             <div className="hidden md:flex items-center gap-4">
               <div className="flex items-center gap-2">
@@ -1448,6 +1448,8 @@ export function PrdViewer() {
               )}
             </div>
 
+            {/* 우측 액션 그룹 (모바일: 폭 초과 시 통째로 줄바꿈 → 버튼 잘림/밀림 방지) */}
+            <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0 ml-auto">
             {/* 전체 생성 버튼 (생성 중에는 취소 버튼으로 전환) */}
             {isGenerating ? (
               <Button
@@ -1547,6 +1549,7 @@ export function PrdViewer() {
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
+            </div>
           </div>
         </div>
 
