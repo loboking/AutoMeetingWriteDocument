@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { FileText, Download, Copy, Check, Loader2, Plus, Edit, Save, Eye, File, Code, BookOpen, Presentation, Printer, ChevronLeft, ChevronRight, Terminal, CheckCircle2, Circle, ToggleLeft, ToggleRight, Lock, Unlock, AlertTriangle, Share2, X } from 'lucide-react';
+import { FileText, Download, Copy, Check, Loader2, Plus, Edit, Save, Eye, File, Code, BookOpen, Presentation, Printer, ChevronLeft, ChevronRight, Terminal, CheckCircle2, Circle, ToggleLeft, ToggleRight, Lock, Unlock, AlertTriangle, Share2, X, RefreshCw } from 'lucide-react';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { saveAs } from 'file-saver';
 import * as XLSX from 'xlsx';
@@ -9,6 +9,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { sanitizeHtml } from '@/lib/sanitize';
 import { extractMermaidCode, docTypeToField, canGenerateDoc, getDependencyNames, getAllDependents, getDirectParentTitles, DOCUMENTS, DEPENDENCIES, type DocType } from '@/lib/documentUtils';
+import { prerenderMermaid, lookupDiagram, type PrerenderResult } from '@/lib/mermaidExport';
 import PptxGenJS from 'pptxgenjs';
 import { Document as DocxDocument, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, Table, TableRow, TableCell, WidthType, BorderStyle } from 'docx';
 import { Button } from '@/components/ui/button';
@@ -80,6 +81,8 @@ export function PrdViewer() {
   const cancelGeneration = useMeetingStore(s => s.cancelGeneration);
   // 단일 문서 생성 전용 플래그 (전체 생성과 분리)
   const [isSingleGenerating, setIsSingleGenerating] = useState(false);
+  // mermaid 다이어그램 렌더 실패 감지 (깨진 다이어그램 → 재생성 유도 배너)
+  const [diagramBroken, setDiagramBroken] = useState(false);
   const [showGenerateConfirm, setShowGenerateConfirm] = useState(false);
   const [generateConfirmData, setGenerateConfirmData] = useState<{ count: number; isRegenerate: boolean; docsToRegenerate: DocType[] } | null>(null);
   const [isEditing, setIsEditing] = useState(false);
@@ -227,6 +230,8 @@ export function PrdViewer() {
     }
     // 문서가 변경되면 스크롤 상태 리셋
     setScrollAtBottom(false);
+    // 문서 변경 시 다이어그램 깨짐 표시 리셋(새 문서에서 다시 판정)
+    setDiagramBroken(false);
   }, [currentMeeting, activeDoc]);
 
   // autoAdvance 상태 동기화
@@ -543,8 +548,10 @@ export function PrdViewer() {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const handlePrint = () => {
+  const handlePrint = async () => {
     if (!currentContent) return;
+    // ★ mermaid 다이어그램 사전 래스터화 (인쇄 HTML에 <img>로 임베드)
+    const diagrams = await prerenderMermaid(currentContent);
     const printWindow = window.open('', '_blank');
     if (!printWindow) return;
 
@@ -574,28 +581,34 @@ export function PrdViewer() {
             font-weight: 600;
             line-height: 1.25;
           }
-          h1 { font-size: 28px; border-bottom: 2px solid #e5e7eb; padding-bottom: 8px; }
-          h2 { font-size: 24px; border-bottom: 1px solid #e5e7eb; padding-bottom: 6px; }
-          h3 { font-size: 20px; }
-          h4 { font-size: 18px; }
-          h5 { font-size: 16px; }
+          h1 { font-size: 28px; color: #1e3a8a; border-bottom: 3px solid #2563eb; padding-bottom: 8px; }
+          h2 { font-size: 22px; color: #1e40af; border-left: 5px solid #2563eb; padding-left: 12px; }
+          h3 { font-size: 19px; color: #1f2937; }
+          h4 { font-size: 17px; color: #374151; }
+          h5 { font-size: 15px; }
           h6 { font-size: 14px; }
-          ul, ol { margin: 16px 0; padding-left: 24px; }
+          ul, ol { margin: 12px 0; padding-left: 24px; }
           li { margin: 4px 0; }
           table {
             border-collapse: collapse;
             width: 100%;
             margin: 16px 0;
+            box-shadow: 0 1px 3px rgba(0,0,0,.08);
           }
           th, td {
             border: 1px solid #d1d5db;
             padding: 8px 12px;
             text-align: left;
+            font-size: 0.95em;
           }
-          th {
-            background-color: #f3f4f6;
+          th, tr:first-child td {
+            background-color: #2563eb;
+            color: #ffffff;
             font-weight: 600;
           }
+          tbody tr:nth-child(even) { background-color: #f9fafb; }
+          .diagram { text-align: center; margin: 20px 0; page-break-inside: avoid; }
+          .diagram img { max-width: 100%; height: auto; }
           code {
             background-color: #f3f4f6;
             padding: 2px 6px;
@@ -637,7 +650,7 @@ export function PrdViewer() {
         </style>
       </head>
       <body>
-        ${contentToHtml(currentContent)}
+        ${contentToHtml(currentContent, diagrams)}
       </body>
       </html>
     `;
@@ -645,57 +658,147 @@ export function PrdViewer() {
     printWindow.document.write(htmlContent);
     printWindow.document.close();
     printWindow.focus();
-    setTimeout(() => printWindow.print(), 250);
+    // 다이어그램 <img>(dataURL)가 모두 로드된 뒤 인쇄 (빈칸 방지)
+    const doPrint = () => printWindow.print();
+    const imgs = Array.from(printWindow.document.images);
+    if (imgs.length === 0) {
+      setTimeout(doPrint, 250);
+    } else {
+      Promise.all(
+        imgs.map((img) =>
+          img.complete
+            ? Promise.resolve()
+            : new Promise<void>((res) => {
+                img.onload = () => res();
+                img.onerror = () => res();
+              })
+        )
+      ).then(() => setTimeout(doPrint, 150));
+    }
   };
 
-  const contentToHtml = (content: string) => {
-    return content
-      .split('\n')
-      .map(line => {
-        const trimmed = line.trim();
-        if (!trimmed) return '';
+  // 마크다운 → HTML (인쇄/PDF용). fence·표·리스트를 상태머신으로 묶어 깨짐 방지.
+  // diagrams: 사전 래스터화된 mermaid PNG 맵. mermaid 블록은 <img>로, 실패 시 코드로 폴백.
+  const contentToHtml = (content: string, diagrams?: PrerenderResult) => {
+    const esc = (s: string) =>
+      s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    // 인라인 마크다운 최소 변환 (이미 esc된 문자열에 적용)
+    const inline = (s: string) =>
+      esc(s)
+        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+        .replace(/`([^`]+?)`/g, '<code>$1</code>');
 
-        // 헤더
-        const headerMatch = trimmed.match(/^(#{1,6})\s+(.+)$/);
-        if (headerMatch) {
-          const level = headerMatch[1].length;
-          const text = headerMatch[2];
-          return `<h${level}>${text}</h${level}>`;
-        }
+    const lines = content.split('\n');
+    const out: string[] = [];
+    let inFence = false;
+    let fenceLang = '';
+    let fenceBuf: string[] = [];
+    let inList = false;
+    let tableBuf: string[][] = [];
 
-        // 리스트
-        if (trimmed.match(/^[\-\*+]\s/) || trimmed.match(/^\d+\.\s/)) {
-          const text = trimmed.replace(/^[\-\*+\d\.]\s/, '');
-          return `<li>${text}</li>`;
-        }
+    const flushList = () => {
+      if (inList) {
+        out.push('</ul>');
+        inList = false;
+      }
+    };
+    const flushTable = () => {
+      if (tableBuf.length === 0) return;
+      const rows = tableBuf
+        .map((cells, ri) => {
+          const tag = ri === 0 ? 'th' : 'td';
+          return `<tr>${cells.map((c) => `<${tag}>${inline(c.trim())}</${tag}>`).join('')}</tr>`;
+        })
+        .join('');
+      out.push(`<table>${rows}</table>`);
+      tableBuf = [];
+    };
 
-        // 코드 블록
-        if (trimmed.startsWith('```')) return '';
-        if (trimmed.startsWith('    ')) {
-          return `<pre><code>${trimmed.substring(4)}</code></pre>`;
-        }
+    for (const line of lines) {
+      const trimmed = line.trim();
 
-        // 테이블
-        if (trimmed.includes('|') && !trimmed.match(/^#/)) {
-          const cells = trimmed.split('|').filter((_, i, arr) => i > 0 && i < arr.length - 1);
-          if (cells.length > 1) {
-            const isHeader = trimmed.includes('---');
-            const tag = isHeader ? 'th' : 'td';
-            return `<tr>${cells.map(c => `<${tag}>${c.trim()}</${tag}>`).join('')}</tr>`;
+      // 코드펜스 토글
+      if (trimmed.startsWith('```')) {
+        if (!inFence) {
+          inFence = true;
+          fenceLang = trimmed.slice(3).trim().toLowerCase();
+          fenceBuf = [];
+        } else {
+          flushList();
+          flushTable();
+          if (fenceLang === 'mermaid') {
+            const img = diagrams ? lookupDiagram(diagrams, fenceBuf.join('\n')) : null;
+            out.push(
+              img
+                ? `<div class="diagram"><img src="${img.dataUrl}" alt="diagram" /></div>`
+                : `<pre><code>${esc(fenceBuf.join('\n'))}</code></pre>`
+            );
+          } else {
+            out.push(`<pre><code>${esc(fenceBuf.join('\n'))}</code></pre>`);
           }
+          inFence = false;
+          fenceLang = '';
         }
+        continue;
+      }
+      if (inFence) {
+        fenceBuf.push(line);
+        continue;
+      }
 
-        // 수평선
-        if (trimmed === '---') return '<hr>';
-
-        // 인용문
-        if (trimmed.startsWith('>')) {
-          return `<blockquote>${trimmed.substring(1).trim()}</blockquote>`;
+      // 표 누적
+      if (trimmed.includes('|') && !trimmed.match(/^#/)) {
+        if (trimmed.replace(/[|\s:-]/g, '') === '') continue; // 구분행 제외
+        const cells = trimmed.split('|').filter((_, i, arr) => i > 0 && i < arr.length - 1);
+        if (cells.length > 0) {
+          flushList();
+          tableBuf.push(cells);
+          continue;
         }
+      } else if (tableBuf.length) {
+        flushTable();
+      }
 
-        return `<p>${trimmed}</p>`;
-      })
-      .join('\n');
+      if (!trimmed) {
+        flushList();
+        continue;
+      }
+
+      // 헤더
+      const headerMatch = trimmed.match(/^(#{1,6})\s+(.+)$/);
+      if (headerMatch) {
+        flushList();
+        const level = headerMatch[1].length;
+        out.push(`<h${level}>${inline(headerMatch[2])}</h${level}>`);
+        continue;
+      }
+
+      // 리스트 (ul 래핑)
+      if (trimmed.match(/^[\-\*+]\s/) || trimmed.match(/^\d+\.\s/)) {
+        if (!inList) {
+          out.push('<ul>');
+          inList = true;
+        }
+        out.push(`<li>${inline(trimmed.replace(/^[\-\*+\d.]+\s/, ''))}</li>`);
+        continue;
+      }
+      flushList();
+
+      // 수평선
+      if (trimmed === '---' || trimmed === '***') {
+        out.push('<hr>');
+        continue;
+      }
+      // 인용문
+      if (trimmed.startsWith('>')) {
+        out.push(`<blockquote>${inline(trimmed.substring(1).trim())}</blockquote>`);
+        continue;
+      }
+      out.push(`<p>${inline(trimmed)}</p>`);
+    }
+    flushList();
+    flushTable();
+    return out.join('\n');
   };
 
   const handleDownload = (format: 'md' | 'txt' | 'pdf' | 'docx' | 'xlsx' | 'pptx') => {
@@ -713,16 +816,17 @@ export function PrdViewer() {
         downloadTxt(currentContent, `${baseName}.txt`);
         break;
       case 'pdf':
-        handlePrint(); // PDF는 인쇄 다이얼로그 사용 (브라우저 네이티브 PDF 저장)
+        // PDF는 인쇄 다이얼로그 사용 (브라우저 네이티브 PDF 저장). mermaid 사전 렌더로 async.
+        void handlePrint().catch((e) => console.error('PDF 내보내기 실패:', e));
         break;
       case 'docx':
-        downloadDocx(currentContent, `${baseName}.docx`);
+        void downloadDocx(currentContent, `${baseName}.docx`).catch((e) => console.error('DOCX 실패:', e));
         break;
       case 'xlsx':
         downloadXlsx(currentContent, `${baseName}.xlsx`);
         break;
       case 'pptx':
-        downloadPptx(currentContent, `${baseName}.pptx`);
+        void downloadPptx(currentContent, `${baseName}.pptx`).catch((e) => console.error('PPTX 실패:', e));
         break;
     }
   };
@@ -880,87 +984,168 @@ export function PrdViewer() {
     XLSX.writeFile(workbook, filename);
   };
 
-  const downloadPptx = (content: string, filename: string) => {
+  const downloadPptx = async (content: string, filename: string) => {
+    // ★ 내보내기 전 mermaid 블록을 PNG로 사전 래스터화 (화면 SVG는 재사용 불가)
+    const diagrams = await prerenderMermaid(content);
+
     const pptx = new PptxGenJS();
+    pptx.defineLayout({ name: 'A4', width: 10, height: 7.5 });
+    pptx.layout = 'A4';
+
+    const BRAND = '2563EB';
+    const INK = '1F2937';
+    const SUB = '4B5563';
+
+    // 브랜드 마스터: 상단 컬러바 + 푸터 + 페이지번호
+    pptx.defineSlideMaster({
+      title: 'BRAND',
+      background: { color: 'FFFFFF' },
+      objects: [
+        { rect: { x: 0, y: 0, w: '100%', h: 0.16, fill: { color: BRAND } } },
+        { text: { text: 'MeetingAutoDocs', options: { x: 0.4, y: 7.05, w: 5, h: 0.3, fontSize: 9, color: '9CA3AF' } } },
+      ],
+      slideNumber: { x: 9.0, y: 7.05, w: 0.7, h: 0.3, fontSize: 9, color: '9CA3AF', align: 'right' },
+    });
+
     const lines = content.split('\n');
 
-    // 한글 폰트 설정
-    pptx.defineLayout({ name: 'A4', width: 10, height: 7.5 });
-
-    // 제목 슬라이드
+    // 제목 슬라이드 (브랜드 배경)
+    const firstLine = lines.find((l) => l.match(/^#{1,6}\s/))?.replace(/^#+\s*/, '') || lines[0] || '문서';
     const titleSlide = pptx.addSlide();
-    const firstLine = lines.find(l => l.match(/^#{1,6}\s/))?.replace(/^#+\s*/, '') || lines[0] || '문서';
+    titleSlide.background = { color: BRAND };
     titleSlide.addText(firstLine, {
-      x: 0.5, y: 2, w: 9, h: 1.5,
-      fontSize: 44, bold: true, align: 'center', color: '363636'
+      x: 0.5, y: 2.6, w: 9, h: 1.8, fontSize: 40, bold: true, align: 'center', color: 'FFFFFF',
     });
 
-    // 내용 슬라이드들
-    let currentSlide: PptxGenJS.Slide = pptx.addSlide();
-    let yPosition = 0.5;
-    let slideIndex = 0;
+    let currentSlide: PptxGenJS.Slide = pptx.addSlide({ masterName: 'BRAND' });
+    let yPosition = 0.6;
+    const newSlide = () => {
+      currentSlide = pptx.addSlide({ masterName: 'BRAND' });
+      yPosition = 0.6;
+    };
+    const ensureSpace = (need: number) => {
+      if (yPosition + need > 6.9) newSlide();
+    };
 
-    lines.forEach((line, index) => {
+    // fence/table 상태머신
+    let inFence = false;
+    let fenceLang = '';
+    let fenceBuf: string[] = [];
+    let tableBuf: string[][] = [];
+
+    const flushTable = () => {
+      if (tableBuf.length === 0) return;
+      ensureSpace(Math.min(0.4 * tableBuf.length + 0.3, 4));
+      const rows = tableBuf.map((cells, ri) =>
+        cells.map((c) => ({
+          text: c.trim(),
+          options:
+            ri === 0
+              ? { bold: true, color: 'FFFFFF', fill: { color: BRAND }, fontSize: 12 }
+              : { color: INK, fill: { color: ri % 2 ? 'F3F4F6' : 'FFFFFF' }, fontSize: 11 },
+        }))
+      );
+      currentSlide.addTable(rows as unknown as PptxGenJS.TableRow[], {
+        x: 0.5, y: yPosition, w: 9, border: { type: 'solid', pt: 0.5, color: 'E5E7EB' },
+        valign: 'middle',
+      });
+      yPosition += Math.min(0.42 * tableBuf.length + 0.3, 4);
+      tableBuf = [];
+    };
+
+    for (const line of lines) {
       const trimmed = line.trim();
 
-      if (!trimmed || trimmed.startsWith('```')) return;
+      // ── 코드펜스 토글 ──
+      if (trimmed.startsWith('```')) {
+        if (!inFence) {
+          inFence = true;
+          fenceLang = trimmed.slice(3).trim().toLowerCase();
+          fenceBuf = [];
+        } else {
+          flushTable();
+          if (fenceLang === 'mermaid') {
+            const img = lookupDiagram(diagrams, fenceBuf.join('\n'));
+            if (img) {
+              const dispW = Math.min(8.6, img.w / 96);
+              const dispH = Math.min(dispW * (img.h / img.w), 4.6);
+              ensureSpace(dispH + 0.3);
+              currentSlide.addImage({ data: img.dataUrl, x: (10 - dispW) / 2, y: yPosition, w: dispW, h: dispH });
+              yPosition += dispH + 0.3;
+            } else if (fenceBuf.length) {
+              // 폴백: 다이어그램 렌더 실패 → 코드 텍스트로
+              ensureSpace(1.2);
+              currentSlide.addText(fenceBuf.join('\n'), {
+                x: 0.8, y: yPosition, w: 8.4, h: 1, fontSize: 10, fontFace: 'Courier New', color: SUB,
+              });
+              yPosition += 1.2;
+            }
+          } else if (fenceBuf.length) {
+            ensureSpace(1.2);
+            currentSlide.addText(fenceBuf.join('\n'), {
+              x: 0.8, y: yPosition, w: 8.4, h: 1, fontSize: 10, fontFace: 'Courier New', color: SUB,
+            });
+            yPosition += 1.2;
+          }
+          inFence = false;
+          fenceLang = '';
+        }
+        continue;
+      }
+      if (inFence) {
+        fenceBuf.push(line);
+        continue;
+      }
 
-      // 헤더 처리 (# ## ###) - 새 슬라이드
+      if (!trimmed) continue;
+
+      // ── 표 누적 (연속 |행을 한 표로) ──
+      if (trimmed.includes('|') && !trimmed.match(/^#/)) {
+        if (trimmed.replace(/[|\s:-]/g, '') === '') continue; // 구분행 |---|---| 제외
+        const cells = trimmed.split('|').filter((_, i, arr) => i > 0 && i < arr.length - 1);
+        if (cells.length > 0) {
+          tableBuf.push(cells);
+          continue;
+        }
+      } else if (tableBuf.length) {
+        flushTable();
+      }
+
+      // ── 헤더: 새 슬라이드 + 컬러 언더라인 ──
       const headerMatch = trimmed.match(/^(#{1,3})\s+(.+)$/);
       if (headerMatch) {
-        currentSlide = pptx.addSlide();
-        slideIndex++;
-        yPosition = 1;
-
+        newSlide();
         const level = headerMatch[1].length;
-        const fontSize = 36 - (level * 6);
-
+        const fontSize = 32 - level * 5;
         currentSlide.addText(headerMatch[2], {
-          x: 0.5, y: yPosition, w: 9, h: 0.8,
-          fontSize: fontSize, bold: true, color: '363636'
+          x: 0.5, y: yPosition, w: 9, h: 0.7, fontSize, bold: true, color: INK,
         });
-        yPosition += 1.2;
-        return;
+        currentSlide.addShape(pptx.ShapeType.rect, {
+          x: 0.5, y: yPosition + 0.72, w: 3, h: 0.045, fill: { color: BRAND },
+        });
+        yPosition += 1.0;
+        continue;
       }
 
-      // 슬라이드가 꽉 차면 새 슬라이드
-      if (yPosition > 6) {
-        currentSlide = pptx.addSlide();
-        slideIndex++;
-        yPosition = 0.5;
-      }
+      ensureSpace(0.5);
 
-      // 리스트 처리
+      // 리스트
       if (trimmed.match(/^[\-\*\+]\s/) || trimmed.match(/^\d+\.\s/)) {
-        const text = trimmed.replace(/^[\-\*\+\d\.]\s/, '');
+        const text = trimmed.replace(/^[\-\*\+\d.]+\s/, '');
         currentSlide.addText(`• ${text}`, {
-          x: 0.8, y: yPosition, w: 8.4, h: 0.4,
-          fontSize: 16, color: '4a4a4a'
+          x: 0.8, y: yPosition, w: 8.4, h: 0.4, fontSize: 16, color: SUB,
         });
         yPosition += 0.5;
-      }
-      // 테이블 처리
-      else if (trimmed.includes('|') && !trimmed.match(/^#/)) {
-        const cells = trimmed.split('|').filter((_, i, arr) => i > 0 && i < arr.length - 1);
-        if (cells.length > 1 && !trimmed.includes('---')) {
-          currentSlide.addTable([cells.map(c => c.trim())] as unknown as any, {
-            x: 0.5, y: yPosition, w: 9,
-            border: { pt: 1, color: 'CCCCCC' }
-          });
-          yPosition += 1;
-        }
-      }
-      // 일반 텍스트
-      else {
+      } else {
         currentSlide.addText(trimmed, {
-          x: 0.8, y: yPosition, w: 8.4, h: 0.4,
-          fontSize: 14, color: '4a4a4a'
+          x: 0.7, y: yPosition, w: 8.6, h: 0.4, fontSize: 14, color: INK,
         });
-        yPosition += 0.4;
+        yPosition += 0.42;
       }
-    });
+    }
+    flushTable();
 
-    pptx.writeFile({ fileName: filename });
+    await pptx.writeFile({ fileName: filename });
   };
 
   // 생성된 문서 수 계산
@@ -1367,6 +1552,37 @@ export function PrdViewer() {
 
         {/* 문서 컨텐츠 영역 */}
         <div className="px-2 sm:px-6 py-4 sm:py-6" ref={contentRef}>
+        {/* 다이어그램 렌더 실패 → 재생성 유도 배너 */}
+        {diagramBroken && (
+          <div className="mb-4 rounded-lg border border-red-200 bg-red-50 dark:border-red-700 dark:bg-red-900/30 p-3">
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 mt-0.5 text-red-600 dark:text-red-400 flex-shrink-0" />
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-red-800 dark:text-red-300">
+                  다이어그램(아키텍처)이 깨졌어요.
+                </p>
+                <p className="text-xs text-red-700 dark:text-red-400 mt-0.5">
+                  AI가 만든 다이어그램 코드에 오류가 있어 그림으로 그려지지 않습니다. 이 문서를 다시 생성하면 새 다이어그램이 만들어집니다.
+                </p>
+                <Button
+                  onClick={() => handleGenerateDoc(activeDoc)}
+                  disabled={isSingleGenerating || isGenerating}
+                  size="sm"
+                  variant="outline"
+                  className="mt-2 h-8 border-red-300 dark:border-red-600 text-red-800 dark:text-red-300 hover:bg-red-100 dark:hover:bg-red-900/50"
+                >
+                  {isSingleGenerating ? (
+                    <Loader2 className="w-4 h-4 mr-1 animate-spin" />
+                  ) : (
+                    <RefreshCw className="w-4 h-4 mr-1" />
+                  )}
+                  이 문서 다시 생성
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* 저장 후 영향받은 하위 문서 안내 배너 */}
         {impactedDocs.length > 0 && (
           <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 dark:border-amber-700 dark:bg-amber-900/30 p-3">
@@ -1480,7 +1696,7 @@ export function PrdViewer() {
                           >
                             {docViewMode === 'raw' ? <BookOpen className="w-4 h-4" /> : docViewMode === 'preview' ? <Eye className="w-4 h-4" /> : docViewMode === 'visual' ? <Terminal className="w-4 h-4" /> : <Code className="w-4 h-4" />}
                           </Button>
-                          <Button onClick={handlePrint} variant="outline" size="sm" title="인쇄">
+                          <Button onClick={() => void handlePrint()} variant="outline" size="sm" title="인쇄">
                             <Printer className="w-4 h-4" />
                           </Button>
                           {!docIsEditing && (
@@ -1646,7 +1862,11 @@ export function PrdViewer() {
                           <p className="text-sm">먼저 문서를 생성해주세요.</p>
                         </div>
                       ) : (
-                        <MermaidDiagram chart={extractMermaidCode(docContent)} />
+                        <MermaidDiagram
+                          chart={extractMermaidCode(docContent)}
+                          onRenderError={() => setDiagramBroken(true)}
+                          onRenderSuccess={() => setDiagramBroken(false)}
+                        />
                       )
                     )}
                     {activeDoc === 'wireframe' && <ScreenDiagram content={docContent} type="wireframe" />}
@@ -1746,7 +1966,7 @@ export function PrdViewer() {
                               let codeContent = String(children).replace(/\n$/, '');
                               // HTML 엔티티를 원래 기호로 변환
                               codeContent = codeContent.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').replace(/--&gt;/g, '-->');
-                              return <MermaidDiagram chart={codeContent} key={node?.position?.start?.line?.toString()} />;
+                              return <MermaidDiagram chart={codeContent} key={node?.position?.start?.line?.toString()} onRenderError={() => setDiagramBroken(true)} />;
                             }
                             const isInline = !className;
                             return isInline ? (
