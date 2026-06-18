@@ -85,6 +85,7 @@ function VoiceRecorder() {
         audioDuration = data.duration;
       } else if (isNoSttProviderResponse(data)) {
         // 서버 STT 키 없음 → 브라우저 무료 STT(transformers.js)로 폴백
+        stopSimulation();
         const result = await browserSTT.transcribeBlob(blob, 'ko');
         if (!result || !result.text.trim()) {
           throw new Error(browserSTT.error || '브라우저 음성 변환에 실패했습니다.');
@@ -237,15 +238,17 @@ function VoiceRecorder() {
               <div className="space-y-3" role="status" aria-live="polite">
                 <div className="flex items-center justify-between">
                   <span className="text-sm font-medium text-slate-600 dark:text-slate-400">
-                    텍스트 변환 중...
+                    {browserSTT.isTranscribing ? '브라우저 음성 변환 중...' : '텍스트 변환 중...'}
                   </span>
                   <span className="text-sm font-bold text-blue-600 dark:text-blue-400">
-                    {uploadProgress}%
+                    {Math.max(uploadProgress, browserSTT.progress)}%
                   </span>
                 </div>
-                <Progress value={uploadProgress} className="h-3" aria-label={`변환 진행률 ${uploadProgress}퍼센트`} />
+                <Progress value={Math.max(uploadProgress, browserSTT.progress)} className="h-3" aria-label={`변환 진행률 ${Math.max(uploadProgress, browserSTT.progress)}퍼센트`} />
                 <p className="text-xs text-center text-slate-500">
-                  AI가 음성을 텍스트로 변환하고 있습니다. 잠시만 기다려주세요...
+                  {browserSTT.isTranscribing
+                    ? '브라우저에서 무료 모델로 음성을 변환 중입니다. 최초 1회 모델 다운로드로 시간이 걸릴 수 있어요...'
+                    : 'AI가 음성을 텍스트로 변환하고 있습니다. 잠시만 기다려주세요...'}
                 </p>
               </div>
             ) : (

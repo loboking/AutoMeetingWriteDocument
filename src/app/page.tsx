@@ -119,8 +119,8 @@ export default function Home() {
         } else if (isNoSttProviderResponse(data)) {
           // 서버에 STT 키 없음 → 브라우저 무료 STT(transformers.js)로 폴백
           setUploadError('');
-          const result = await browserSTT.transcribeBlob(file, 'ko');
           stopSimulation();
+          const result = await browserSTT.transcribeBlob(file, 'ko');
           if (!result || !result.text.trim()) {
             throw new Error(browserSTT.error || '브라우저 음성 변환에 실패했습니다.');
           }
@@ -369,10 +369,17 @@ export default function Home() {
                   {uploading && (
                     <div className="space-y-2">
                       <div className="flex items-center justify-between text-sm">
-                        <span className="text-slate-600 dark:text-slate-400">파일 처리 중...</span>
-                        <span className="font-bold text-blue-600 dark:text-blue-400">{uploadProgress}%</span>
+                        <span className="text-slate-600 dark:text-slate-400">
+                          {browserSTT.isTranscribing ? '브라우저 음성 변환 중...' : '파일 처리 중...'}
+                        </span>
+                        <span className="font-bold text-blue-600 dark:text-blue-400">{Math.max(uploadProgress, browserSTT.progress)}%</span>
                       </div>
-                      <Progress value={uploadProgress} className="h-2" />
+                      <Progress value={Math.max(uploadProgress, browserSTT.progress)} className="h-2" />
+                      {browserSTT.isTranscribing && (
+                        <p className="text-xs text-center text-slate-500">
+                          브라우저에서 무료 모델로 변환 중입니다. 최초 1회 모델 다운로드로 시간이 걸릴 수 있어요...
+                        </p>
+                      )}
                     </div>
                   )}
 

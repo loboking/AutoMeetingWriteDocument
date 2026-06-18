@@ -1,17 +1,16 @@
 'use client';
 
 import { useState, useRef } from 'react';
-import { Upload, FileAudio, FileText, AlertCircle, Check } from 'lucide-react';
+import { Upload, FileAudio, FileText, AlertCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
-import { Badge } from '@/components/ui/badge';
 import { useProgressSimulation } from '@/hooks/useProgressSimulation';
 import { handleApiError } from '@/lib/apiUtils';
 import { useMeetingStore } from '@/store/meetingStore';
 import { authedFetch } from '@/lib/authFetch';
-
-type FileType = 'audio' | 'document';
+import { useBrowserSTT } from '@/hooks/useBrowserSTT';
+import { isNoSttProviderResponse } from '@/lib/stt/browserSTT';
 
 interface FileUploaderProps {
   onTranscriptComplete?: (text: string) => void;
@@ -19,19 +18,19 @@ interface FileUploaderProps {
 
 export function FileUploader({ onTranscriptComplete }: FileUploaderProps) {
   const { updateCurrentMeeting, updateMeetingStep } = useMeetingStore();
+  const browserSTT = useBrowserSTT();
   const [uploading, setUploading] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // 진행률 시뮬레이션 훅 사용 (오디오용)
   const { progress, startSimulation, stopSimulation, resetSimulation } = useProgressSimulation(200, 10, 90);
 
   // 문서 처리용 별도 진행률 시뮬레이션
-  const { progress: docProgress, startSimulation: startDocSim, stopSimulation: stopDocSim, resetSimulation: resetDocSim } = useProgressSimulation(200, 15, 90);
+  const { startSimulation: startDocSim, stopSimulation: stopDocSim, resetSimulation: resetDocSim } = useProgressSimulation(200, 15, 90);
 
-  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
+  // 클릭 선택·드래그앤드롭 공용 처리 경로
+  const processFile = async (file: File) => {
     setUploading(true);
     resetSimulation();
 
@@ -45,14 +44,30 @@ export function FileUploader({ onTranscriptComplete }: FileUploaderProps) {
       }
     } catch (error) {
       console.error('File upload error:', error);
-      alert('파일 처리에 실패했습니다.');
+      alert(error instanceof Error ? error.message : '파일 처리에 실패했습니다.');
     } finally {
       setUploading(false);
       stopSimulation();
+      stopDocSim();
       if (fileInputRef.current) {
         fileInputRef.current.value = '';
       }
     }
+  };
+
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    await processFile(file);
+  };
+
+  const handleDrop = async (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    setIsDragging(false);
+    if (uploading) return;
+    const file = e.dataTransfer.files?.[0];
+    if (!file) return;
+    await processFile(file);
   };
 
   const handleAudioFile = async (file: File) => {
@@ -67,16 +82,38 @@ export function FileUploader({ onTranscriptComplete }: FileUploaderProps) {
       body: formData,
     });
 
-    stopSimulation();
+    const data = await response.json().catch(() => ({}));
+    let text: string;
+    let segments: import('@/types').TranscriptSegment[] | undefined;
+    let audioDuration: number | undefined;
 
-    if (!response.ok) {
+    if (response.ok) {
+      text = data.text || '';
+      segments = data.segments;
+      audioDuration = data.duration;
+    } else if (isNoSttProviderResponse(data)) {
+      // 서버 STT 키 없음 → 브라우저 무료 STT(transformers.js)로 폴백 (VoiceRecorder와 동일)
+      stopSimulation();
+      const result = await browserSTT.transcribeBlob(file, 'ko');
+      if (!result || !result.text.trim()) {
+        throw new Error(browserSTT.error || '브라우저 음성 변환에 실패했습니다.');
+      }
+      text = result.text;
+      segments = result.segments;
+      audioDuration = result.duration;
+    } else {
       await handleApiError(response, '변환 실패');
+      return;
     }
 
-    const { text } = await response.json();
+    stopSimulation();
+
+    if (!text.trim()) throw new Error('변환된 텍스트가 비어 있습니다.');
 
     updateCurrentMeeting({
       transcript: text,
+      ...(segments ? { transcriptSegments: segments } : {}),
+      ...(audioDuration ? { duration: audioDuration } : {}),
       audioUrl: URL.createObjectURL(file),
     });
 
@@ -99,9 +136,14 @@ export function FileUploader({ onTranscriptComplete }: FileUploaderProps) {
 
     stopDocSim();
 
-    if (!response.ok) throw new Error('텍스트 추출 실패');
+    if (!response.ok) {
+      await handleApiError(response, '텍스트 추출 실패');
+      return;
+    }
 
     const { text } = await response.json();
+
+    if (!text || !text.trim()) throw new Error('추출된 텍스트가 비어 있습니다.');
 
     updateCurrentMeeting({
       transcript: text,
@@ -138,7 +180,24 @@ export function FileUploader({ onTranscriptComplete }: FileUploaderProps) {
         </div>
 
         {/* 파일 업로드 영역 */}
-        <div className="border-2 border-dashed border-slate-300 dark:border-slate-700 rounded-lg p-8 text-center hover:border-blue-500 transition-colors">
+        <div
+          onDragOver={(e) => {
+            e.preventDefault();
+            if (!uploading) setIsDragging(true);
+          }}
+          onDragLeave={(e) => {
+            e.preventDefault();
+            // 컨테이너 내부 자식으로의 이동이면 무시 (깜빡임 방지)
+            if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+            setIsDragging(false);
+          }}
+          onDrop={handleDrop}
+          className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors ${
+            isDragging
+              ? 'border-blue-500 bg-blue-50 dark:bg-blue-950/20'
+              : 'border-slate-300 dark:border-slate-700 hover:border-blue-500'
+          }`}
+        >
           <input
             ref={fileInputRef}
             type="file"
@@ -174,18 +233,20 @@ export function FileUploader({ onTranscriptComplete }: FileUploaderProps) {
 
         {/* 진행률 */}
         {uploading && (
-          <div className="space-y-3">
+          <div className="space-y-3" role="status" aria-live="polite">
             <div className="flex items-center justify-between">
               <span className="text-sm font-medium text-slate-600 dark:text-slate-400">
-                파일 변환 중...
+                {browserSTT.isTranscribing ? '브라우저 음성 변환 중...' : '파일 변환 중...'}
               </span>
               <span className="text-sm font-bold text-blue-600 dark:text-blue-400">
-                {progress}%
+                {Math.max(progress, browserSTT.progress)}%
               </span>
             </div>
-            <Progress value={progress} className="h-3" />
+            <Progress value={Math.max(progress, browserSTT.progress)} className="h-3" />
             <p className="text-xs text-center text-slate-500">
-              AI가 파일을 분석하여 텍스트로 변환하고 있습니다...
+              {browserSTT.isTranscribing
+                ? '브라우저에서 무료 모델로 음성을 변환 중입니다. 최초 1회 모델 다운로드로 시간이 걸릴 수 있어요...'
+                : 'AI가 파일을 분석하여 텍스트로 변환하고 있습니다...'}
             </p>
           </div>
         )}

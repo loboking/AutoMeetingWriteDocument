@@ -4,6 +4,7 @@ import { getServerProvider } from '@/lib/stt/factory';
 import { NO_STT_PROVIDER } from '@/lib/stt/types';
 
 export const runtime = 'nodejs';
+export const maxDuration = 300; // 키 있을 때 서버 Whisper가 긴 오디오에 일찍 끊기지 않도록
 
 // 50MB 초과 업로드 거부
 const MAX_AUDIO_BYTES = 50 * 1024 * 1024;
