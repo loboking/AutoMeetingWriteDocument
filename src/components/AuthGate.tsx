@@ -34,15 +34,32 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     let active = true;
 
-    supabase.auth.getSession().then(({ data }) => {
-      if (!active) return;
-      setSession(data.session);
-      setLoadingSession(false);
-    });
+    // ★ 안전망: getSession이 느리거나 hang하면 무한 스피너에 갇힌다(타임아웃 부재).
+    //   8초 내 응답 없으면 일단 비로그인으로 간주해 화면을 보여준다(로그인 폼).
+    //   이후 getSession/onAuthStateChange가 도착하면 정상 반영됨.
+    const failsafe = setTimeout(() => {
+      if (active) setLoadingSession(false);
+    }, 8000);
+
+    supabase.auth.getSession()
+      .then(({ data }) => {
+        if (!active) return;
+        setSession(data.session);
+        setLoadingSession(false);
+        clearTimeout(failsafe);
+      })
+      .catch(() => {
+        // 네트워크/인증서버 오류 → 스피너에 갇히지 않게 화면 표시
+        if (active) {
+          setLoadingSession(false);
+          clearTimeout(failsafe);
+        }
+      });
 
     const { data: sub } = supabase.auth.onAuthStateChange((event, newSession) => {
       setSession(newSession);
       setLoadingSession(false);
+      clearTimeout(failsafe);
 
       if (event === 'SIGNED_IN' && newSession) {
         void onSignedIn(newSession);
@@ -53,6 +70,7 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
 
     return () => {
       active = false;
+      clearTimeout(failsafe);
       sub.subscription.unsubscribe();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
