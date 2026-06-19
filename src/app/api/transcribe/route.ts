@@ -6,8 +6,9 @@ import { NO_STT_PROVIDER } from '@/lib/stt/types';
 export const runtime = 'nodejs';
 export const maxDuration = 300; // 키 있을 때 서버 Whisper가 긴 오디오에 일찍 끊기지 않도록
 
-// 50MB 초과 업로드 거부
-const MAX_AUDIO_BYTES = 50 * 1024 * 1024;
+// OpenAI Whisper 파일당 한계가 25MB → 그 직전(24MB)에서 거부해 OpenAI 거부 전에 명확히 안내.
+// (25MB 초과 긴 회의는 Phase 2 청크 분할 대상)
+const MAX_AUDIO_BYTES = 24 * 1024 * 1024;
 
 // signedUrl은 신뢰 도메인(Supabase Storage)만 허용 — 임의 URL fetch(SSRF) 차단.
 function isAllowedSignedUrl(url: string): boolean {

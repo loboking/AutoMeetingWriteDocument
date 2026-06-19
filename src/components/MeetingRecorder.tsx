@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { Mic, Square, Pause, Play, Upload, Loader2, FileUp } from 'lucide-react';
+import { Mic, Square, Pause, Play, Upload, Loader2, FileUp, AlertCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
@@ -9,6 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useRecorder } from '@/hooks/useRecorder';
 import { useBeforeUnload } from '@/hooks/useBeforeUnload';
+import { useWakeLock } from '@/hooks/useWakeLock';
 import { useProgressSimulation } from '@/hooks/useProgressSimulation';
 import { formatTime } from '@/lib/timeUtils';
 import { useMeetingStore } from '@/store/meetingStore';
@@ -46,6 +47,10 @@ function VoiceRecorder() {
       ? '녹음 중입니다. 페이지를 나가시면 녹음이 중단됩니다.'
       : '음성 변환 중입니다. 페이지를 나가시면 변환이 취소됩니다.'
   );
+
+  // 녹음·변환 중 화면 자동 꺼짐 방지(모바일 백그라운드 동결 완화). 단, 화면 자동 꺼짐만 막고
+  // 사용자가 직접 잠그거나 다른 앱으로 전환하는 것은 브라우저 한계상 못 막는다(아래 경고 배너로 보완).
+  useWakeLock(isUploadingOrRecording);
 
   const handleStopRecording = async () => {
     stopRecording();
@@ -196,6 +201,18 @@ function VoiceRecorder() {
             </>
           )}
         </div>
+
+        {/* 녹음/변환 중 백그라운드 경고 (화면 끄거나 앱 전환 시 중단 위험 — WakeLock으로도 못 막는 케이스) */}
+        {(isRecording || isPaused || isUploading) && (
+          <div className="flex items-start gap-2 rounded-lg border border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/20 p-3 text-sm text-amber-800 dark:text-amber-300" role="status" aria-live="polite">
+            <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" aria-hidden="true" />
+            <span>
+              {isUploading
+                ? '변환이 끝날 때까지 화면을 켜 두세요. 화면을 끄거나 다른 앱으로 전환하면 변환이 중단될 수 있어요.'
+                : '녹음 중에는 화면을 끄거나 다른 앱으로 전환하지 마세요. 모바일에서는 녹음이 중단되거나 유실될 수 있어요.'}
+            </span>
+          </div>
+        )}
 
         {/* 녹음 완료 후 변환 진행 상태 */}
         {audioUrl && !isRecording && (
