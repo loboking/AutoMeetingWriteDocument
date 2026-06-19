@@ -25,6 +25,8 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
   // 런타임 동기화 구독/디바운스 정리용
   const unsubscribeRef = useRef<(() => void) | null>(null);
   const debounceTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  // onSignedIn 중복 실행 방지(같은 유저로 INITIAL_SESSION+SIGNED_IN 둘 다 올 수 있음)
+  const syncedUserRef = useRef<string | null>(null);
 
   useEffect(() => {
     setMounted(true);
@@ -61,9 +63,16 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
       setLoadingSession(false);
       clearTimeout(failsafe);
 
-      if (event === 'SIGNED_IN' && newSession) {
-        void onSignedIn(newSession);
+      // INITIAL_SESSION(저장된 세션으로 페이지 진입 — 다른 기기/새로고침), TOKEN_REFRESHED(만료 임박
+      // 복원)도 SIGNED_IN과 동일하게 서버 데이터를 fetch해야 한다. 안 그러면 새 기기는 빈 로컬만 보여
+      // "다른 기기 작업이 안 보임". 중복 호출(여러 이벤트가 같은 유저로 도착)은 syncedUserRef로 차단.
+      if ((event === 'SIGNED_IN' || event === 'INITIAL_SESSION' || event === 'TOKEN_REFRESHED') && newSession) {
+        if (syncedUserRef.current !== newSession.user.id) {
+          syncedUserRef.current = newSession.user.id;
+          void onSignedIn(newSession);
+        }
       } else if (event === 'SIGNED_OUT') {
+        syncedUserRef.current = null;
         onSignedOut();
       }
     });

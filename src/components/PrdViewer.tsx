@@ -1666,7 +1666,8 @@ export function PrdViewer() {
             {/* 공유 버튼 */}
             <Button
               onClick={handleShare}
-              disabled={sharing || Object.keys(documents).filter(k => documents[k as DocType]).length === 0}
+              disabled={sharing || generatedCount === 0}
+              title={generatedCount === 0 ? '생성된 문서가 없어 비활성화됨 — 먼저 문서를 생성하세요' : '문서 공유 링크 생성'}
               size="sm"
               variant="outline"
               className="h-8 flex-shrink-0"
@@ -1692,8 +1693,9 @@ export function PrdViewer() {
             {/* 모두 내보내기 (각 문서 개별파일 → ZIP, 포맷 선택) */}
             <DropdownMenu>
               <DropdownMenuTrigger
-                disabled={exporting || Object.keys(documents).filter(k => documents[k as DocType]).length === 0}
-                className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 border border-input bg-background shadow-sm hover:bg-accent hover:text-accent-foreground h-8 px-3 flex-shrink-0"
+                disabled={exporting || generatedCount === 0}
+                title={generatedCount === 0 ? '생성된 문서가 없어 비활성화됨 — 먼저 문서를 생성하세요' : '생성된 문서를 ZIP으로 내보내기'}
+                className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-60 border border-input bg-background shadow-sm hover:bg-accent hover:text-accent-foreground h-8 px-3 flex-shrink-0"
               >
                 {exporting ? (
                   <Loader2 className="w-4 h-4 sm:mr-2 animate-spin" />
