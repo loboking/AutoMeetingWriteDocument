@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { Mic, Square, Pause, Play, Upload, Loader2, FileUp, AlertCircle } from 'lucide-react';
+import { Mic, Square, Pause, Play, Upload, Loader2, FileUp, AlertCircle, FileText } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
@@ -16,6 +16,7 @@ import { useMeetingStore } from '@/store/meetingStore';
 import { useBrowserSTT } from '@/hooks/useBrowserSTT';
 import { transcribeAudio } from '@/lib/transcribeAudio';
 import { FileUploader } from './FileUploader';
+import { TextInput } from './TextInput';
 
 function VoiceRecorder() {
   const {
@@ -257,14 +258,18 @@ export function MeetingRecorder() {
 
   return (
     <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-      <TabsList className="grid w-full grid-cols-2 mb-6" role="tablist">
-        <TabsTrigger value="voice" className="gap-2" aria-label="음성 녹음 탭">
+      <TabsList className="grid w-full grid-cols-3 mb-6" role="tablist">
+        <TabsTrigger value="voice" className="gap-1.5 sm:gap-2" aria-label="음성 녹음 탭">
           <Mic className="w-4 h-4" aria-hidden="true" />
-          음성 녹음
+          <span className="truncate">음성 녹음</span>
         </TabsTrigger>
-        <TabsTrigger value="file" className="gap-2" aria-label="파일 업로드 탭">
+        <TabsTrigger value="file" className="gap-1.5 sm:gap-2" aria-label="파일 업로드 탭">
           <FileUp className="w-4 h-4" aria-hidden="true" />
-          파일 업로드
+          <span className="truncate">파일 업로드</span>
+        </TabsTrigger>
+        <TabsTrigger value="text" className="gap-1.5 sm:gap-2" aria-label="텍스트 입력 탭">
+          <FileText className="w-4 h-4" aria-hidden="true" />
+          <span className="truncate">텍스트 입력</span>
         </TabsTrigger>
       </TabsList>
 
@@ -274,6 +279,10 @@ export function MeetingRecorder() {
 
       <TabsContent value="file">
         <FileUploader />
+      </TabsContent>
+
+      <TabsContent value="text">
+        <TextInput />
       </TabsContent>
     </Tabs>
   );
