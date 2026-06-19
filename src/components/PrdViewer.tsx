@@ -2143,7 +2143,10 @@ export function PrdViewer() {
                   <CardContent className="px-2 sm:px-6 py-4 sm:py-6">
                     <div className="document-preview max-w-4xl mx-auto bg-white dark:bg-slate-900 rounded-lg shadow-inner p-4 sm:p-8" style={{ fontFamily: "'NanumGothic', Arial, sans-serif" }}>
                       <ReactMarkdown
-                        remarkPlugins={[remarkGfm]}
+                        // singleTilde:false → 물결 1개(~)는 일반 텍스트로 처리.
+                        // 한 단락/표셀에 '단어~단어' 범위표현이 2회 이상이면(예: '기간 1~2주, 인원 5~10명')
+                        // 그 사이가 취소선으로 오인되던 문제 방지. 의도된 ~~취소선~~(2개)은 그대로 유지.
+                        remarkPlugins={[[remarkGfm, { singleTilde: false }]]}
                         components={{
                           h1: ({ children }) => <h1 className="text-3xl font-bold border-b-4 border-slate-300 dark:border-slate-600 pb-4 mb-8 mt-0 first:mt-0 text-slate-900 dark:text-white">{children}</h1>,
                           h2: ({ children }) => <h2 className="text-2xl font-bold border-b-2 border-slate-300 dark:border-slate-600 pb-3 mb-6 mt-8 text-slate-900 dark:text-white">{children}</h2>,
