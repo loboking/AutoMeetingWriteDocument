@@ -76,9 +76,9 @@
 **어떻게**:
 - 영향배너(1769)에 primary 버튼: `onClick={()=>regenerateDocs(currentMeeting!.id, impactedDocs)}`. `impactedDocs`는 `performSaveEdit`(628-630)에서 이미 존재·outdated·frozen제외·위상정렬 완료 → 그대로 전달.
 - 진행 중 이 버튼·개별 칩 모두 disabled(기존 `isGenerating`). 완료 시 outdated 풀린 d를 `setImpactedDocs` filter(392 패턴)로 비워 칩이 줄어듦.
-- 진행 표시: `regeneratingDoc`(docStatuses==='regenerating') 또는 `(isSingleGenerating && activeDoc===d)`일 때만 해당 칩 `Plus`를 `Loader2 animate-spin`으로 교체(**전역 `isSingleGenerating` 단독 비교 금지=전 칩 동시 스핀**). '지금 갱신 중: {title} (3/5)' 진행텍스트 배너 내부 표시.
+- **진행 표시는 GenerationGuard 전면 딤 단일 경로(결정 D).** regenerateDocs는 `startGeneration`처럼 `generationProgress`를 채우므로 GenerationGuard가 '3/5 생성 중' 오버레이를 자동 표시. **배너 내부 진행텍스트/칩 스피너는 만들지 않음**(딤 위라 안 보임 → 사양 폐기). 단 개별 칩으로 단일 재생성(#5)할 때는 딤 없이 그 칩만 `Loader2` 스피너(`isSingleGenerating && activeDoc===d`, **전역 단독 비교 금지=전 칩 동시 스핀**).
 
-**완료 기준**: 버튼 1클릭으로 N개 위상순차 갱신·칩 하나씩 소멸. 진행 중 한 칩만 스피너. 완료 후 배너 자동 소멸.
+**완료 기준**: 일괄 버튼 1클릭으로 N개 위상순차 갱신, 진행 중 GenerationGuard 전면 딤 '3/5', 완료 후 칩 비워지고 배너 소멸. 개별 칩 재생성은 딤 없이 해당 칩만 스피너.
 **선행**: 2
 
 ### 5. 단일 `handleGenerateDoc` 잡 인지 가드 + 진입/실패 상태 스냅샷 복원 `[P0/M]`
@@ -92,14 +92,14 @@
 **완료 기준**: 전체생성 중 단일 칩 클릭은 alert 후 무동작. latest였던 문서 재생성 실패 시 latest 복원. 칩 클릭 직후 해당 칩만 스피너.
 **선행**: 2
 
-### 6. `onRehydrate`에서 죽은 'regenerating'→'outdated' 스윕 `[P1/S]`
+### 6. `onRehydrate`에서 죽은 'regenerating'→'outdated' 스윕 `[P0/S]` (B안 확정)
 **무엇**: 일괄갱신 중 탭 강제종료/크래시로 'regenerating'이 localStorage에 박제되는 좀비 정리.
 
-**어떻게**: **SC-2가 regenerating을 docStatuses에 persist한 경우에만**(안 쓰면 no-op 죽은 코드).
-- **권장(A안)**: 4·5번에서 진행표시를 React 로컬 `regeneratingDoc` state로 빼면 persist 좀비가 구조적으로 불가능 → 이 항목 불필요(0줄).
-- 불가피하게 docStatuses에 쓴다면(B안): `onRehydrateStorage`(740-755) activeJob keep 직후 `docStatuses` 전 순회해 `'regenerating'`이면 `'outdated'`로만 강등(나머지 불변).
+**어떻게**: **결정 D(전면 딤)로 #2가 일괄 갱신 시 `docStatuses`(persist)에 'regenerating'을 쓰는 게 확정 → B안 필수·P0 격상.** (A안=로컬 state는 전면 딤 단일경로와 양립 안 함 → 폐기.)
+- `onRehydrateStorage`(740-755) activeJob keep 판정 직후, `state.docStatuses` 전 meetingId×docType 순회해 `'regenerating'`이면 `'outdated'`로만 강등(`'latest'`/`'outdated'`/`'frozen'` 불변). `isGenerating` 좀비방지(742)와 동일 패턴.
+- frozen은 `getDocStatus` 우선반환(585)이라 추가 가드 불필요.
 
-**완료 기준**: regen 중 강제 새로고침 후 regenerating 영구 잔류 0. 정상 상태 무변경.
+**완료 기준**: regen 중 강제 새로고침 후 regenerating 영구 잔류 0. 정상 latest/outdated/frozen 무변경.
 **선행**: 2
 
 ### 7. `handleGenerateDoc`에 `getStaleParents` 가드 `[P1/S]`
@@ -183,14 +183,10 @@
 | A | 일괄 갱신 구현 방식 | **store 통합(1~4번)** — 19분급이라 resumable 필수, 로컬 루프는 끊기면 0건=P0 버그 일괄판 재현. mode 필드+`levelsFor`+상태전이 훅뿐, 새 잡/락 없어 좀비 0 |
 | B | frozen 상위 변경 시 | **인라인 노트 고지로 충분(9번)** — 별도 상태는 docStatuses 단일슬롯/frozen 우선반환 깸 |
 | C | frozen 부모 끊긴 사슬 | **frozen은 컨텍스트 시드로만 쓰고 갱신 대상 제외, 후손은 정상 갱신** — frozen=사용자 의도 존중. 7번 가드는 outdated 부모만 잡으므로 충돌 없음 |
+| D | 일괄갱신 진행 중 표시 | **전체생성과 동일(GenerationGuard 전면 딤)** — `generationProgress`를 그대로 공유, **regen 분기 불필요(구현 단순)**. 일괄도 19분급까지 가능하므로 전면 딤이 오히려 일관·안전 |
+| E | '현재 브라우저 기준' 고지(#10) | **채택** — major 영향배너 첫 표시 1회 한정. 본문 동기화되는데 배지만 다른 비대칭이 '데이터 유실' 오인되기 가장 쉬운 지점 |
 
-### 잔여 (구현 직전 확정)
-
-1. **일괄갱신 진행 중 GenerationGuard 전면 딤** vs 작은 진행바.
-   → **권장: 작은 진행바만**. 일괄은 보통 2~5개로 짧고 다른 문서 보며 대기 원할 수 있음. regen 모드일 땐 GenerationGuard 오버레이 스킵 분기 필요(generationProgress 공유 시 자동 전면 딤).
-
-2. **'현재 브라우저 기준' 고지(10번) 채택 여부** — 정확하나 다기기 불일치 불안 신규 유발 가능.
-   → **권장: major 영향배너 1회 한정으로 채택**. 본문은 동기화되는데 배지만 다른 비대칭이 '데이터 유실'로 오인되기 가장 쉬운 지점. 베타 다기기 비율 낮으면 보류 가능.
+> **결정 D 영향**: 기획 #4의 "작은 진행바만" 가정이 폐기됨. regenerateDocs는 `startGeneration`과 동일하게 `generationProgress`를 채우고, GenerationGuard 오버레이 스킵 분기를 **추가하지 않는다**. 영향배너 내부 진행텍스트/칩 스피너(#4)는 딤 위에 보이지 않으므로, 진행 표시는 GenerationGuard 단일 경로로 통일.
 
 ---
 
