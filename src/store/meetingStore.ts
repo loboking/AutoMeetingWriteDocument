@@ -39,6 +39,11 @@ export interface ActiveGenerationJob {
   status: 'running' | 'completed' | 'cancelled' | 'error';
   updatedAt: number; // heartbeat
   resumeAttempts?: number; // error 잡 자동 재개 횟수(무한 재개 방지용 상한 카운터)
+  // full: 전체 14종 생성(기본). regen: 일부 문서만 일괄 재생성(영향배너 '모두 갱신').
+  // undefined(구 persist 잡)는 'full'로 취급 → 하위호환.
+  // regen에서만 docStatuses 전이훅(regenerating→latest/outdated)이 동작하고,
+  // 재개 시 본문 존재가 아닌 completedDocs 체크포인트로 완료를 판정한다.
+  mode?: 'full' | 'regen';
 }
 
 // error로 끝난 잡을 복귀 시 몇 번까지 자동 재개할지. 초과하면 사용자 수동 재생성에 위임.
@@ -70,6 +75,15 @@ function topoSortLevels(): DocType[][] {
     levels.push(level);
   }
   return levels;
+}
+
+// targets 부분집합만의 위상 레벨. 전체 레벨에서 targets에 속한 것만 남기고 빈 레벨 제거.
+// 레벨 내 상대순서는 보존(같은 레벨은 상호 의존 없어 병렬 안전). 일괄 재생성(regen)용.
+function levelsFor(targets: DocType[]): DocType[][] {
+  const set = new Set(targets);
+  return topoSortLevels()
+    .map((level) => level.filter((dt) => set.has(dt)))
+    .filter((level) => level.length > 0);
 }
 
 // 평탄 순서 (활성잡 order/진행UI 호환용). 레벨을 펼침.
@@ -150,6 +164,9 @@ async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
   const meetingInfo = { title: meeting.title, date: new Date(meeting.createdAt).toLocaleDateString('ko-KR') };
 
   let failed = 0;
+  // regen(일괄 재생성)에서만 docStatuses 상태배지를 전이시킨다(regenerating→latest/outdated).
+  // full(전체 생성)은 docStatuses를 일절 건드리지 않음(불변식 유지).
+  const isRegen = job.mode === 'regen';
 
   // 단일 문서 생성 + 저장 + 체크포인트. 성공 true / 실패 false.
   // 같은 레벨은 상호 의존 없으므로 contextDocs는 레벨 시작 시점 generated 스냅샷만 참조.
@@ -163,6 +180,11 @@ async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
         ? { generationProgress: { ...st.generationProgress, currentDoc: meta?.title || docType } }
         : {}
     );
+
+    // regen: 이 문서를 '갱신 중'으로 표시(frozen은 제외 — getDocStatus가 frozen 우선반환).
+    if (isRegen && !get().isDocFrozen(meetingId, docType)) {
+      get().setDocStatus(meetingId, docType, 'regenerating');
+    }
 
     const contextDocs: Record<string, string> = {};
     for (const dep of DEPENDENCIES[docType] || []) {
@@ -241,6 +263,13 @@ async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
         });
       }
       doneSet.add(docType);
+      // regen: 갱신 성공 → latest + 버전++. (frozen 제외.)
+      // markDependentsOutdated는 호출하지 않음 — 배치 내 하위가 이미 order에 포함돼 있어
+      // 위상순서대로 차례차례 latest가 되므로, 재전파하면 방금 푼 배지를 도로 outdated로 만든다.
+      if (isRegen && !get().isDocFrozen(meetingId, docType)) {
+        get().setDocStatus(meetingId, docType, 'latest');
+        get().incrementDocVersion(meetingId, docType);
+      }
       // ★ 체크포인트: 문서 완료마다 갱신(재개 정합). 함수형 set.
       set((st) => ({
         activeJob: st.activeJob ? { ...st.activeJob, completedDocs: [...doneSet], updatedAt: Date.now() } : null,
@@ -252,6 +281,10 @@ async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
     } else {
       failed++;
       console.error(`${docType} 생성 최종 실패 (계속 진행):`, lastErr);
+      // regen: 최종 실패 → regenerating 좀비를 outdated로 복원(갱신 미완 = 여전히 오래됨).
+      if (isRegen && !get().isDocFrozen(meetingId, docType)) {
+        get().setDocStatus(meetingId, docType, 'outdated');
+      }
       set((st) => ({
         generationProgress: st.generationProgress
           ? { ...st.generationProgress, failedDocs: [...st.generationProgress.failedDocs, docType] }
@@ -265,7 +298,8 @@ async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
 
   try {
     // 레벨 순차, 레벨 내 병렬(동시3). 같은 레벨은 상호 의존 없어 안전.
-    const levels = topoSortLevels();
+    // regen(일괄 재생성)은 job.order(targets)에 속한 문서만의 부분 레벨로 생성.
+    const levels = job.mode === 'regen' ? levelsFor(job.order) : topoSortLevels();
     for (const level of levels) {
       if (genAbort.cancelled) break;
       const pending = level.filter((dt) => !doneSet.has(dt));
@@ -378,6 +412,9 @@ interface MeetingStore {
   startGeneration: () => Promise<void>;
   cancelGeneration: () => void;
   resumeGeneration: () => Promise<void>; // 미완성 잡 재개 (새로고침/재방문)
+  // 일부 문서만 의존 순서대로 일괄 재생성 (영향배너 '순서대로 모두 갱신').
+  // 전체생성과 같은 잡/락/재개 인프라(activeJob, GENERATION_LOCK, genAbort) 재사용.
+  regenerateDocs: (meetingId: string, targets: DocType[]) => Promise<void>;
 }
 
 export const useMeetingStore = create<MeetingStore>()(
@@ -671,7 +708,43 @@ export const useMeetingStore = create<MeetingStore>()(
         });
 
         set({
-          activeJob: { meetingId: meeting.id, order, completedDocs: preCompleted, status: 'running', updatedAt: Date.now() },
+          activeJob: { meetingId: meeting.id, order, completedDocs: preCompleted, status: 'running', mode: 'full', updatedAt: Date.now() },
+        });
+        await runGenerationWithLock(set, get);
+      },
+
+      // 일부 문서만 의존 순서대로 일괄 재생성.
+      // targets는 호출처(영향배너)에서 이미 존재·outdated·frozen제외·위상정렬된 집합.
+      // 여기서도 방어적으로 frozen/미존재를 한 번 더 걸러 안전한 부분집합만 잡으로 만든다.
+      regenerateDocs: async (meetingId, targets) => {
+        // 단일 진입: 전체생성/다른 일괄갱신이 진행 중이면 무시(중복·동시 덮어쓰기 방지).
+        if (get().isGenerating || get().activeJob?.status === 'running') return;
+        const meeting = get().meetings.find((m) => m.id === meetingId);
+        if (!meeting?.summary) return;
+
+        const { isDocFrozen } = get();
+        // 본문이 있고 frozen 아닌 targets만. 위상 평탄순서로 정렬(레벨 분해는 루프가 levelsFor로 수행).
+        const valid = topoSortDocs().filter(
+          (dt) =>
+            targets.includes(dt) &&
+            !isDocFrozen(meetingId, dt) &&
+            (() => {
+              const v = meeting[docTypeToField(dt) as keyof Meeting];
+              return typeof v === 'string' && v;
+            })()
+        );
+        if (valid.length === 0) return;
+
+        set({
+          activeJob: {
+            meetingId,
+            order: valid,
+            completedDocs: [],
+            status: 'running',
+            mode: 'regen',
+            resumeAttempts: 0,
+            updatedAt: Date.now(),
+          },
         });
         await runGenerationWithLock(set, get);
       },
@@ -694,11 +767,18 @@ export const useMeetingStore = create<MeetingStore>()(
           set({ activeJob: null }); // 회의 없음/요약 없음 → 잡 폐기
           return;
         }
-        // 실제 meetings에 저장된 문서를 기준으로 completedDocs 보정(저장 누락 방지)
-        const completed = job.order.filter((dt) => {
-          const v = meeting[docTypeToField(dt) as keyof Meeting];
-          return typeof v === 'string' && v;
-        });
+        // completedDocs 재보정.
+        // - full/legacy: 실제 meetings에 저장된 본문 존재로 완료 판정(저장 누락 방지).
+        // - regen(일괄 재생성): 본문 존재로 판정 금지 — 갱신 대상은 이미 본문을 보유하므로
+        //   첫 틱에 전부 완료로 오판→잡 폐기→0건 갱신 버그가 난다. 문서 완료마다 갱신되는
+        //   activeJob.completedDocs 체크포인트만 단일 진실원으로 신뢰한다.
+        const completed =
+          job.mode === 'regen'
+            ? job.completedDocs.filter((dt) => job.order.includes(dt))
+            : job.order.filter((dt) => {
+                const v = meeting[docTypeToField(dt) as keyof Meeting];
+                return typeof v === 'string' && v;
+              });
         if (completed.length >= job.order.length) {
           set({ activeJob: null }); // 이미 다 됨
           return;
@@ -750,6 +830,17 @@ export const useMeetingStore = create<MeetingStore>()(
               job.status === 'running' ||
               (job.status === 'error' && (job.resumeAttempts ?? 0) < MAX_RESUME_ATTEMPTS);
             if (!keep) state.activeJob = null;
+          }
+          // 죽은 'regenerating' 좀비 정리: 일괄갱신 중 탭 강제종료/크래시로 docStatuses에
+          // 'regenerating'이 박제될 수 있다. 새로고침 시 'outdated'로만 강등(아직 안 끝난 갱신
+          // = 여전히 오래됨). latest/outdated/frozen은 불변. 재개 잡이 다시 regenerating으로 올림.
+          if (state.docStatuses) {
+            for (const meetingId of Object.keys(state.docStatuses)) {
+              const docs = state.docStatuses[meetingId];
+              for (const docType of Object.keys(docs) as DocType[]) {
+                if (docs[docType] === 'regenerating') docs[docType] = 'outdated';
+              }
+            }
           }
         }
       },

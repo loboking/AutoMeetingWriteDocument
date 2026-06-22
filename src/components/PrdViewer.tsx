@@ -1,14 +1,14 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { FileText, Download, Copy, Check, Loader2, Plus, Edit, Save, Eye, File, Code, BookOpen, Presentation, Printer, ChevronLeft, ChevronRight, Terminal, CheckCircle2, Circle, ToggleLeft, ToggleRight, Lock, Unlock, AlertTriangle, Share2, X, RefreshCw, Maximize } from 'lucide-react';
+import { FileText, Download, Copy, Check, Loader2, Plus, Edit, Save, Eye, File, Code, BookOpen, Presentation, Printer, ChevronLeft, ChevronRight, Terminal, CheckCircle2, Circle, ToggleLeft, ToggleRight, Lock, Unlock, AlertTriangle, Share2, X, RefreshCw, Maximize, Info } from 'lucide-react';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { saveAs } from 'file-saver';
 import * as XLSX from 'xlsx';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { sanitizeHtml } from '@/lib/sanitize';
-import { extractMermaidCode, docTypeToField, canGenerateDoc, getDependencyNames, getAllDependents, getDirectParentTitles, DOCUMENTS, DEPENDENCIES, type DocType } from '@/lib/documentUtils';
+import { extractMermaidCode, docTypeToField, canGenerateDoc, getDependencyNames, getAllDependents, getDirectParentTitles, getStaleParents, DOCUMENTS, DEPENDENCIES, type DocType } from '@/lib/documentUtils';
 import { prerenderMermaid, lookupDiagram, type PrerenderResult } from '@/lib/mermaidExport';
 import PptxGenJS from 'pptxgenjs';
 import { Document as DocxDocument, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, Table, TableRow, TableCell, WidthType, BorderStyle } from 'docx';
@@ -127,6 +127,7 @@ export function PrdViewer() {
   const generationProgress = useMeetingStore(s => s.generationProgress);
   const startGeneration = useMeetingStore(s => s.startGeneration);
   const cancelGeneration = useMeetingStore(s => s.cancelGeneration);
+  const regenerateDocs = useMeetingStore(s => s.regenerateDocs);
   // 단일 문서 생성 전용 플래그 (전체 생성과 분리)
   const [isSingleGenerating, setIsSingleGenerating] = useState(false);
   // mermaid 다이어그램 렌더 실패 감지 (깨진 다이어그램 → 재생성 유도 배너)
@@ -145,6 +146,10 @@ export function PrdViewer() {
   const [impactedDocs, setImpactedDocs] = useState<DocType[]>([]);
   // 자식 수정 저장 시 상위(부모) 모순 경고 모달
   const [parentWarning, setParentWarning] = useState<{ docType: DocType; parents: string[] } | null>(null);
+  // 단일 재생성 시 stale 부모(outdated) 컨텍스트 덮어쓰기 경고 (#7)
+  const [staleGuard, setStaleGuard] = useState<{ docType: DocType; parents: DocType[] } | null>(null);
+  // '현재 브라우저 기준' 고지 1회 노출 여부 (#10). 영향배너 첫 표시 때만, localStorage 플래그로 재표시 차단.
+  const [showScopeHint, setShowScopeHint] = useState(false);
 
   const [editedContent, setEditedContent] = useState('');
   const [copied, setCopied] = useState(false);
@@ -293,6 +298,27 @@ export function PrdViewer() {
     }
   }, [currentMeeting?.autoAdvance]);
 
+  // 일괄/개별 갱신으로 더 이상 outdated가 아닌 문서를 영향배너 칩에서 비움.
+  // docStatuses(persist)를 구독해 regen 잡이 문서별 latest로 풀 때마다 칩이 줄어든다.
+  const docStatusesForMeeting = useMeetingStore(
+    s => (currentMeeting?.id ? s.docStatuses[currentMeeting.id] : undefined)
+  );
+  useEffect(() => {
+    if (!currentMeeting?.id || impactedDocs.length === 0) return;
+    const still = impactedDocs.filter(d => getDocStatus(currentMeeting.id, d) === 'outdated');
+    if (still.length !== impactedDocs.length) setImpactedDocs(still);
+    // getDocStatus/impactedDocs는 매 렌더 안정적 참조가 아니므로 docStatuses 변화로만 트리거.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [docStatusesForMeeting, currentMeeting?.id]);
+
+  // '현재 브라우저 기준' 고지(#10): 영향배너가 처음 뜰 때 1회만. 이미 본 적 있으면 표시 안 함.
+  useEffect(() => {
+    if (impactedDocs.length > 0 && typeof window !== 'undefined'
+        && !localStorage.getItem('madStatusScopeHintSeen')) {
+      setShowScopeHint(true);
+    }
+  }, [impactedDocs.length]);
+
   // 현재 문서 컨텐츠
   const currentContent = documents[activeDoc] || '';
   const hasContent = !!currentContent;
@@ -336,10 +362,20 @@ export function PrdViewer() {
   }, [activeDoc, documents, scrollAtBottom, autoAdvance, isDocCompleted, toggleCompleteDoc, getNextIncompleteDoc]);
 
 
-  const handleGenerateDoc = async (docType: DocType) => {
+  const handleGenerateDoc = async (docType: DocType, forceProceed = false) => {
     if (!currentMeeting?.summary) {
       alert('먼저 요약을 생성해주세요.');
       return;
+    }
+
+    // 잡 인지 가드: 전체생성/일괄갱신이 진행 중이면 단일 재생성 차단(동시 덮어쓰기 방지).
+    // disabled는 같은 탭에서만 유효 → 타탭/복귀재개 타이밍을 store 실시간 상태로 한 번 더 방어.
+    {
+      const st = useMeetingStore.getState();
+      if (st.isGenerating || st.activeJob?.status === 'running') {
+        alert('전체 생성 또는 일괄 갱신이 진행 중입니다. 끝난 뒤에 다시 시도해주세요.');
+        return;
+      }
     }
 
     // frozen 체크
@@ -358,6 +394,19 @@ export function PrdViewer() {
       alert(`먼저 다음 문서를 생성해주세요:\n\n${missingNames}`);
       return;
     }
+
+    // stale 부모 가드: 직계 부모가 outdated인데 자식을 먼저 재생성하면, 낡은 부모 본문이
+    // 컨텍스트로 굳어버린다(silent overwrite). 경고 후 사용자가 결정(자동변경 0).
+    if (!forceProceed && currentMeeting?.id) {
+      const stale = getStaleParents(docType, documents, d => getDocStatus(currentMeeting.id, d));
+      if (stale.length > 0) {
+        setStaleGuard({ docType, parents: stale });
+        return; // fetch race 차단 — 다이얼로그에서 '그래도 진행' 시 forceProceed=true로 재호출
+      }
+    }
+
+    // 실패 시 정확 복원을 위해 진입 시점 상태를 스냅샷(outdated 하드코딩 금지).
+    const prevStatus = currentMeeting?.id ? getDocStatus(currentMeeting.id, docType) : null;
 
     setIsSingleGenerating(true);
     try {
@@ -392,7 +441,10 @@ export function PrdViewer() {
       setImpactedDocs(prev => prev.filter(d => d !== docType));
     } catch (error) {
       console.error('Doc generation error:', error);
-      // 에러는 UI에서 자연스럽게 처리 (버튼 상태 등)
+      // 실패 → 진입 전 상태로 정확 복원. latest였던 문서가 실패로 거짓 outdated 강등되는 회귀 차단.
+      if (currentMeeting?.id && prevStatus) {
+        setDocStatus(currentMeeting.id, docType, prevStatus);
+      }
     } finally {
       setIsSingleGenerating(false);
     }
@@ -1775,8 +1827,19 @@ export function PrdViewer() {
                   이 변경으로 {impactedDocs.length}개 하위 문서가 영향을 받았습니다.
                 </p>
                 <p className="text-xs text-amber-700 dark:text-amber-400 mt-0.5">
-                  아래 순서대로 다시 만들 수 있어요. 자동으로 바뀌지 않으니 원할 때 갱신하세요.
+                  자동으로 바뀌지 않아요. 한 번에 순서대로 다시 만들거나, 아래에서 원하는 문서만 고르세요.
                 </p>
+                {/* 일괄: 순서대로 모두 갱신. 진행 표시는 GenerationGuard 전면 딤이 담당. */}
+                <button
+                  onClick={() => currentMeeting?.id && regenerateDocs(currentMeeting.id, impactedDocs)}
+                  disabled={isSingleGenerating || isGenerating}
+                  className="flex items-center gap-1.5 px-3 py-1.5 mt-2 rounded-md text-xs font-semibold bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-50 dark:bg-amber-500 dark:hover:bg-amber-600"
+                  title="영향받은 문서를 의존 순서대로 한 번에 다시 만들기"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  순서대로 모두 갱신 ({impactedDocs.length})
+                </button>
+                {/* 개별: 특정 문서만 골라 갱신 */}
                 <div className="flex flex-wrap gap-1.5 mt-2">
                   {impactedDocs.map(d => {
                     const t = DOCUMENTS.find(x => x.key === d)?.title || d;
@@ -1786,7 +1849,7 @@ export function PrdViewer() {
                         onClick={() => { setActiveDoc(d); handleGenerateDoc(d); }}
                         disabled={isSingleGenerating || isGenerating}
                         className="flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium bg-white dark:bg-slate-800 border border-amber-300 dark:border-amber-600 text-amber-800 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/50 disabled:opacity-50"
-                        title={`${t} 지금 갱신`}
+                        title={`${t}만 지금 갱신`}
                       >
                         <Plus className="w-3 h-3" />
                         {t}
@@ -1794,10 +1857,65 @@ export function PrdViewer() {
                     );
                   })}
                 </div>
+                {/* '현재 브라우저 기준' 1회 고지 (#10) */}
+                {showScopeHint && (
+                  <div className="flex items-start gap-1.5 mt-3 pt-2 border-t border-amber-200 dark:border-amber-700/50">
+                    <p className="flex-1 text-[11px] text-amber-600 dark:text-amber-400/80">
+                      표시(업데이트 필요·고정됨)는 지금 보는 브라우저 기준이에요. 문서 내용 자체는 로그인하면 기기 간 동기화됩니다.
+                    </p>
+                    <button
+                      onClick={() => {
+                        if (typeof window !== 'undefined') localStorage.setItem('madStatusScopeHintSeen', '1');
+                        setShowScopeHint(false);
+                      }}
+                      className="text-[11px] font-medium text-amber-700 dark:text-amber-300 hover:underline flex-shrink-0"
+                    >
+                      확인
+                    </button>
+                  </div>
+                )}
               </div>
               <button
                 onClick={() => setImpactedDocs([])}
                 className="text-amber-500 hover:text-amber-700 dark:hover:text-amber-300 flex-shrink-0"
+                title="닫기"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        )}
+        {/* 자식 수정 → 상위(부모) 모순 가능성 안내 (비-blocking 인라인, 영향배너와 독립 dismiss) (#8) */}
+        {parentWarning && (
+          <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800/50 p-3">
+            <div className="flex items-start gap-2">
+              <Info className="w-4 h-4 mt-0.5 text-blue-500 dark:text-blue-400 flex-shrink-0" />
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-slate-700 dark:text-slate-200">
+                  상위 문서와 어긋날 수 있어요
+                </p>
+                <p className="text-xs text-slate-600 dark:text-slate-400 mt-0.5">
+                  방금 수정한 내용이 아래 상위 문서와 맞지 않을 수 있어요. 자동으로 바꾸지 않으니 직접 확인해 주세요.
+                </p>
+                <div className="flex flex-wrap gap-1.5 mt-2">
+                  {parentWarning.parents.map(p => {
+                    const key = DOCUMENTS.find(d => d.title === p)?.key;
+                    return (
+                      <button
+                        key={p}
+                        onClick={() => { if (key) setActiveDoc(key); }}
+                        className="px-2 py-1 rounded-md text-xs font-medium bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-600"
+                        title={`${p} 열기`}
+                      >
+                        {p}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              <button
+                onClick={() => setParentWarning(null)}
+                className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 flex-shrink-0"
                 title="닫기"
               >
                 <X className="w-4 h-4" />
@@ -1817,6 +1935,45 @@ export function PrdViewer() {
 
             return (
               <div key={doc.key} className="space-y-4">
+                {/* outdated 상단 배너 (#12): 진입 시 자동 모달 없이 조용히 안내 + 직계 부모명.
+                    클릭 전엔 아무것도 재생성/변경하지 않음. */}
+                {docHasContent && currentMeeting?.id && getDocStatus(currentMeeting.id, doc.key) === 'outdated' && (
+                  <div className="rounded-lg border border-amber-200 bg-amber-50 dark:border-amber-700 dark:bg-amber-900/30 p-3">
+                    <div className="flex items-start gap-2">
+                      <AlertTriangle className="w-4 h-4 mt-0.5 text-amber-600 dark:text-amber-400 flex-shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-amber-800 dark:text-amber-300">
+                          이 문서는 업데이트가 필요해요
+                        </p>
+                        <p className="text-xs text-amber-700 dark:text-amber-400 mt-0.5">
+                          {getDirectParentTitles(doc.key).length > 0
+                            ? `상위 문서(${getDirectParentTitles(doc.key).join('·')})에서 파생된 문서예요. 상위가 바뀌어 내용이 오래됐을 수 있어요.`
+                            : '상위 문서가 바뀌어 내용이 오래됐을 수 있어요.'}
+                        </p>
+                      </div>
+                      <Button
+                        size="sm"
+                        onClick={() => handleGenerateDoc(doc.key)}
+                        disabled={isSingleGenerating || isGenerating}
+                        className="flex-shrink-0 bg-amber-600 hover:bg-amber-700 text-white dark:bg-amber-500 dark:hover:bg-amber-600"
+                      >
+                        <RefreshCw className="w-3.5 h-3.5 mr-1" />
+                        지금 갱신
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
+                {/* frozen 전파 제외 노트 (#9): frozen 문서에만 침묵 사실 1줄 고지 */}
+                {docHasContent && currentMeeting?.id && isDocFrozen(currentMeeting.id, doc.key) && (
+                  <div className="rounded-lg border border-blue-200 bg-blue-50 dark:border-blue-700 dark:bg-blue-900/30 p-2.5">
+                    <p className="text-xs text-blue-700 dark:text-blue-300 flex items-center gap-1.5">
+                      <Lock className="w-3.5 h-3.5 flex-shrink-0" />
+                      이 문서는 AI 자동수정에서 제외돼요. 상위가 바뀌어도 &lsquo;업데이트 필요&rsquo; 표시가 자동으로 뜨지 않습니다.
+                    </p>
+                  </div>
+                )}
+
                 {/* 문서 완료 상태 표시 */}
                 {docHasContent && (
                   <div className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium ${
@@ -2331,6 +2488,9 @@ export function PrdViewer() {
               <span className="block">
                 <strong>사소 수정</strong>: 오타·표현 등 가벼운 수정이에요. 하위 문서는 그대로 둬요.
               </span>
+              <span className="block mt-2 text-slate-500 dark:text-slate-400">
+                잘 모르겠으면 주요 변경을 고르세요. 하위 문서는 자동으로 바뀌지 않고 &lsquo;업데이트 필요&rsquo; 표시만 떠요.
+              </span>
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -2345,21 +2505,38 @@ export function PrdViewer() {
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* 자식 문서 수정 → 상위(부모) 모순 가능성 경고 */}
-      <AlertDialog open={!!parentWarning} onOpenChange={(open) => { if (!open) setParentWarning(null); }}>
+      {/* 단일 재생성 시 상위(부모) 문서가 '업데이트 필요'(stale)일 때 경고 (#7) */}
+      <AlertDialog open={!!staleGuard} onOpenChange={(open) => { if (!open) setStaleGuard(null); }}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>상위 문서와 어긋날 수 있어요</AlertDialogTitle>
+            <AlertDialogTitle>상위 문서가 아직 오래된 상태예요</AlertDialogTitle>
             <AlertDialogDescription>
-              방금 수정한 내용이 아래 상위 문서와 맞지 않을 수 있습니다. 시스템이 상위 문서를 자동으로 바꾸지는 않으니, 직접 확인해 주세요.
+              이 문서가 참고하는 상위 문서에 &lsquo;업데이트 필요&rsquo;가 떠 있어요. 지금 이 문서를 만들면 오래된 상위 내용이 그대로 반영될 수 있습니다. 상위 문서를 먼저 갱신하는 걸 권장해요.
               <span className="mt-3 block font-medium text-slate-700 dark:text-slate-200">
-                {parentWarning?.parents.join(', ')}
+                {staleGuard?.parents.map(p => DOCUMENTS.find(d => d.key === p)?.title || p).join(', ')}
               </span>
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogAction onClick={() => setParentWarning(null)}>
-              확인했어요
+            <AlertDialogCancel>취소</AlertDialogCancel>
+            <Button
+              variant="outline"
+              onClick={() => {
+                const first = staleGuard?.parents[0];
+                setStaleGuard(null);
+                if (first) setActiveDoc(first); // 상위 문서로 이동만(자동 갱신 안 함)
+              }}
+            >
+              상위 먼저 보기
+            </Button>
+            <AlertDialogAction
+              onClick={() => {
+                const dt = staleGuard?.docType;
+                setStaleGuard(null);
+                if (dt) handleGenerateDoc(dt, true); // 그래도 진행
+              }}
+            >
+              그래도 진행
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
