@@ -11,6 +11,7 @@ import { useMeetingStore } from '@/store/meetingStore';
 import { authedFetch } from '@/lib/authFetch';
 import { useBrowserSTT } from '@/hooks/useBrowserSTT';
 import { transcribeAudio } from '@/lib/transcribeAudio';
+import { routeInputFile } from '@/lib/inputRouter';
 
 interface FileUploaderProps {
   onTranscriptComplete?: (text: string) => void;
@@ -31,13 +32,19 @@ export function FileUploader({ onTranscriptComplete }: FileUploaderProps) {
 
   // 클릭 선택·드래그앤드롭 공용 처리 경로
   const processFile = async (file: File) => {
+    // 입력 분류는 단일 출처(routeInputFile): MIME 우선 → 확장자 폴백 → unsupported.
+    // (m4a 등 MIME이 비어 있는 음성을 문서로 오분류하던 문제 방지.)
+    const kind = routeInputFile({ name: file.name, type: file.type });
+    if (kind === 'unsupported') {
+      alert('지원하지 않는 파일 형식입니다.\n음성(MP3·WAV·M4A·WebM·OGG·FLAC·AAC) 또는 문서(TXT·MD·PDF·DOCX·XLSX)를 올려주세요.\n(PPTX·구버전 DOC/XLS는 지원하지 않습니다.)');
+      return;
+    }
+
     setUploading(true);
     resetSimulation();
 
-    const fileType = file.type.startsWith('audio/') ? 'audio' : 'document';
-
     try {
-      if (fileType === 'audio') {
+      if (kind === 'audio') {
         await handleAudioFile(file);
       } else {
         await handleDocumentFile(file);
@@ -141,12 +148,12 @@ export function FileUploader({ onTranscriptComplete }: FileUploaderProps) {
           <div className="p-4 rounded-lg border border-slate-200 dark:border-slate-800">
             <FileAudio className="w-8 h-8 text-blue-500 mb-2" />
             <h3 className="font-medium mb-1">음성 파일</h3>
-            <p className="text-sm text-slate-500">MP3, WAV, M4A, WebM</p>
+            <p className="text-sm text-slate-500">MP3, WAV, M4A, WebM, OGG, FLAC, AAC</p>
           </div>
           <div className="p-4 rounded-lg border border-slate-200 dark:border-slate-800">
             <FileText className="w-8 h-8 text-green-500 mb-2" />
             <h3 className="font-medium mb-1">문서 파일</h3>
-            <p className="text-sm text-slate-500">TXT, PDF (준비 중)</p>
+            <p className="text-sm text-slate-500">TXT, MD, PDF, DOCX, XLSX</p>
           </div>
         </div>
 
@@ -172,7 +179,7 @@ export function FileUploader({ onTranscriptComplete }: FileUploaderProps) {
           <input
             ref={fileInputRef}
             type="file"
-            accept="audio/*,.txt,application/pdf"
+            accept="audio/*,.mp3,.wav,.webm,.m4a,.ogg,.oga,.flac,.aac,.mp4,.txt,.md,.markdown,.pdf,.docx,.xlsx,text/*,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             onChange={handleFileSelect}
             disabled={uploading}
             className="hidden"

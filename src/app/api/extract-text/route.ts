@@ -94,7 +94,7 @@ export async function POST(request: NextRequest) {
         type === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
       ) {
         text = extractFromXlsx(buffer);
-      } else if (type === 'text/plain' || name.endsWith('.txt') || name.endsWith('.md')) {
+      } else if (type.startsWith('text/') || name.endsWith('.txt') || name.endsWith('.md') || name.endsWith('.markdown')) {
         text = await extractFromTxt(buffer);
       } else {
         return NextResponse.json({ error: '지원하지 않는 파일 형식입니다.' }, { status: 415 });
