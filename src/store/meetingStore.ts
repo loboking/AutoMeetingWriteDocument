@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { Meeting, MeetingStep, MeetingSummary, DocType, DocStatus } from '@/types';
-import { DOCUMENTS, DEPENDENCIES, docTypeToField, getAllDependents } from '@/lib/documentUtils';
+import { DOCUMENTS, DEPENDENCIES, docTypeToField, getAllDependents, topoSortLevels, levelsFor, topoSortDocs } from '@/lib/documentUtils';
 import { authedFetch } from '@/lib/authFetch';
 import { mapWithConcurrency } from '@/lib/concurrency';
 
@@ -56,40 +56,8 @@ type GenAbort = { controllers: Set<AbortController>; cancelled: boolean };
 const __g = globalThis as unknown as { __genAbort?: GenAbort };
 const genAbort: GenAbort = __g.__genAbort ?? (__g.__genAbort = { controllers: new Set(), cancelled: false });
 
-// DEPENDENCIES 위상정렬을 "레벨"(같은 레벨은 상호 의존 없어 병렬 가능)로 반환.
-// 각 Kahn 라운드 = 한 레벨. 예: L0 prd/user-story/feature-list/flowchart ...
-function topoSortLevels(): DocType[][] {
-  const allKeys = DOCUMENTS.map((d) => d.key);
-  const levels: DocType[][] = [];
-  const remaining = new Set(allKeys);
-  while (remaining.size > 0) {
-    const level = allKeys.filter(
-      (k) => remaining.has(k) && (DEPENDENCIES[k] || []).every((d) => !remaining.has(d))
-    );
-    if (level.length === 0) {
-      // 순환/이상 — 남은 것 한 레벨로 몰아 종료(무한루프 방지)
-      levels.push([...remaining]);
-      break;
-    }
-    level.forEach((k) => remaining.delete(k));
-    levels.push(level);
-  }
-  return levels;
-}
-
-// targets 부분집합만의 위상 레벨. 전체 레벨에서 targets에 속한 것만 남기고 빈 레벨 제거.
-// 레벨 내 상대순서는 보존(같은 레벨은 상호 의존 없어 병렬 안전). 일괄 재생성(regen)용.
-function levelsFor(targets: DocType[]): DocType[][] {
-  const set = new Set(targets);
-  return topoSortLevels()
-    .map((level) => level.filter((dt) => set.has(dt)))
-    .filter((level) => level.length > 0);
-}
-
-// 평탄 순서 (활성잡 order/진행UI 호환용). 레벨을 펼침.
-function topoSortDocs(): DocType[] {
-  return topoSortLevels().flat();
-}
+// 위상정렬 헬퍼(topoSortLevels/levelsFor/topoSortDocs)는 순수 함수라 단위 테스트를 위해
+// documentUtils로 이동했다. 여기서는 import해서 그대로 사용(런타임 동작 변화 없음).
 
 // 생성 루프 (start/resume 공용). activeJob을 기준으로 남은 문서를 순차 생성하고,
 // 각 문서 완료 시 activeJob.completedDocs를 갱신(persist 체크포인트) → 새로고침 재개 가능.

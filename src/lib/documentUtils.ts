@@ -323,3 +323,39 @@ export function getAllDependents(docType: DocType, visited: Set<DocType> = new S
 
   return Array.from(new Set(allDependents));
 }
+
+// DEPENDENCIES 위상정렬을 "레벨"(같은 레벨은 상호 의존 없어 병렬 가능)로 반환.
+// 각 Kahn 라운드 = 한 레벨. 예: L0 prd/user-story/feature-list/flowchart ...
+// (순수 함수 — 생성 루프의 레벨 병렬과 일괄 재생성에서 공용. store가 import해 사용.)
+export function topoSortLevels(): DocType[][] {
+  const allKeys = DOCUMENTS.map((d) => d.key);
+  const levels: DocType[][] = [];
+  const remaining = new Set(allKeys);
+  while (remaining.size > 0) {
+    const level = allKeys.filter(
+      (k) => remaining.has(k) && (DEPENDENCIES[k] || []).every((d) => !remaining.has(d))
+    );
+    if (level.length === 0) {
+      // 순환/이상 — 남은 것 한 레벨로 몰아 종료(무한루프 방지)
+      levels.push([...remaining]);
+      break;
+    }
+    level.forEach((k) => remaining.delete(k));
+    levels.push(level);
+  }
+  return levels;
+}
+
+// targets 부분집합만의 위상 레벨. 전체 레벨에서 targets에 속한 것만 남기고 빈 레벨 제거.
+// 레벨 내 상대순서는 보존(같은 레벨은 상호 의존 없어 병렬 안전). 일괄 재생성(regen)용.
+export function levelsFor(targets: DocType[]): DocType[][] {
+  const set = new Set(targets);
+  return topoSortLevels()
+    .map((level) => level.filter((dt) => set.has(dt)))
+    .filter((level) => level.length > 0);
+}
+
+// 평탄 순서 (활성잡 order/진행UI 호환용). 레벨을 펼침.
+export function topoSortDocs(): DocType[] {
+  return topoSortLevels().flat();
+}
