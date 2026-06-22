@@ -334,7 +334,7 @@ export default function Home() {
                   <input
                     ref={fileInputRef}
                     type="file"
-                    accept=".txt,.md,.pdf,audio/*"
+                    accept="audio/*,.mp3,.wav,.webm,.m4a,.ogg,.oga,.flac,.aac,.mp4,.txt,.md,.markdown,.pdf,.docx,.xlsx,text/*,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                     onChange={(e) => {
                       const file = e.target.files?.[0];
                       if (file) handleFileUpload(file);
@@ -358,7 +358,7 @@ export default function Home() {
                     </Button>
                   </label>
                   <p className="text-xs text-center text-slate-500 dark:text-slate-400">
-                    지원: TXT, PDF, 음성파일
+                    지원: 음성(MP3·WAV·M4A·WebM·OGG·FLAC·AAC), 문서(TXT·MD·PDF·DOCX·XLSX)
                   </p>
 
                   {uploading && (
