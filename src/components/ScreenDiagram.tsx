@@ -17,7 +17,6 @@ interface ScreenDiagramProps {
 
 // 마크다운에서 화면 정보 파싱
 function parseScreenInfo(content: string, type: string): { nodes: ScreenNode[], title: string } {
-  const lines = content.split('\n');
   const nodes: ScreenNode[] = [];
   const titleMatch = content.match(/^#\s+(.+)$/m);
   const title = titleMatch ? titleMatch[1] : (type === 'ia' ? '정보구조도' : type === 'wireframe' ? '화면 구성도' : '스토리보드');

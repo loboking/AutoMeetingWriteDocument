@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import mermaid from 'mermaid';
 
 interface MermaidDiagramProps {
@@ -15,7 +15,6 @@ let mermaidInitialized = false;
 
 export function MermaidDiagram({ chart, id = 'mermaid', onRenderError, onRenderSuccess }: MermaidDiagramProps) {
   const ref = useRef<HTMLDivElement>(null);
-  const [error, setError] = useState<string | null>(null);
   // 콜백을 ref로 안정화 → render effect의 deps에 넣지 않아도 최신 함수 사용(무한 렌더 방지).
   // ref 수정은 render 중이 아니라 effect에서(React 규칙 준수).
   const onErrorRef = useRef(onRenderError);
@@ -106,7 +105,6 @@ export function MermaidDiagram({ chart, id = 'mermaid', onRenderError, onRenderS
       .catch((err: Error | { message?: string; str?: string }) => {
         console.error('Mermaid render error:', err);
         const errorMsg = err?.message || (err as { str?: string })?.str || '렌더링 오류';
-        setError(errorMsg);
         onErrorRef.current?.(errorMsg);
 
         if (ref.current) {

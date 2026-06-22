@@ -11,7 +11,7 @@ import { useMeetingStore } from '@/store/meetingStore';
 import { authedFetch } from '@/lib/authFetch';
 import { useBrowserSTT } from '@/hooks/useBrowserSTT';
 import { transcribeAudio } from '@/lib/transcribeAudio';
-import { routeInputFile } from '@/lib/inputRouter';
+import { routeInputFile, FILE_ACCEPT_TYPES } from '@/lib/inputRouter';
 
 interface FileUploaderProps {
   onTranscriptComplete?: (text: string) => void;
@@ -179,7 +179,7 @@ export function FileUploader({ onTranscriptComplete }: FileUploaderProps) {
           <input
             ref={fileInputRef}
             type="file"
-            accept="audio/*,.mp3,.wav,.webm,.m4a,.ogg,.oga,.flac,.aac,.mp4,.txt,.md,.markdown,.pdf,.docx,.xlsx,text/*,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            accept={FILE_ACCEPT_TYPES}
             onChange={handleFileSelect}
             disabled={uploading}
             className="hidden"

@@ -124,7 +124,7 @@ ${context ? `## 추가 맥락\n${context}` : ''}
     if (jsonMatch) {
       try {
         return JSON.parse(jsonMatch[0]);
-      } catch (e) {
+      } catch {
         console.error('JSON 파싱 실패, 정제된 내용:', jsonMatch[0].substring(0, 200));
         // 파싱 실패 시 마크다운 코드 블록 제거 시도
         const withoutCodeBlock = jsonMatch[0].replace(/```json\n?|\n?```/g, '').trim();
@@ -137,7 +137,7 @@ ${context ? `## 추가 맥락\n${context}` : ''}
     if (codeBlockMatch) {
       try {
         return JSON.parse(codeBlockMatch[1]);
-      } catch (e) {
+      } catch {
         console.error('코드블록 JSON 파싱 실패');
       }
     }

@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { Meeting, MeetingStep, MeetingSummary, DocType, DocStatus } from '@/types';
+import type { Meeting, MeetingStep, DocType, DocStatus } from '@/types';
 import { DOCUMENTS, DEPENDENCIES, docTypeToField, getAllDependents, topoSortLevels, levelsFor, topoSortDocs } from '@/lib/documentUtils';
 import { authedFetch } from '@/lib/authFetch';
 import { mapWithConcurrency } from '@/lib/concurrency';

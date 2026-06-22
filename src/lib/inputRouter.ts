@@ -3,6 +3,11 @@
 
 export type InputKind = 'audio' | 'text' | 'unsupported';
 
+// <input accept> 힌트(파일 선택창 필터용). 실제 분류는 routeInputFile이 담당하므로
+// 이 문자열은 UX 편의일 뿐 보안/정합성 기준이 아니다. 업로드 입력창 전체가 공유.
+export const FILE_ACCEPT_TYPES =
+  'audio/*,.mp3,.wav,.webm,.m4a,.ogg,.oga,.flac,.aac,.mp4,.txt,.md,.markdown,.pdf,.docx,.xlsx,text/*,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+
 const AUDIO_EXT = new Set(['mp3', 'wav', 'webm', 'm4a', 'ogg', 'oga', 'flac', 'aac', 'mp4']);
 // 서버 extract-text가 실제 추출하는 문서 확장자. pptx/doc/xls는 미포함 → unsupported.
 const TEXT_EXT = new Set(['txt', 'md', 'markdown', 'pdf', 'docx', 'xlsx']);

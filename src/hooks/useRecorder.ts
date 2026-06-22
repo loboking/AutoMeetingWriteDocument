@@ -24,7 +24,7 @@ export function useRecorder(): UseRecorderReturn {
   const audioChunksRef = useRef<Blob[]>([]);
   const streamRef = useRef<MediaStream | null>(null);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
-  const { createObjectUrl, revokeObjectUrl, getObjectUrl } = useObjectUrl();
+  const { createObjectUrl, revokeObjectUrl } = useObjectUrl();
 
   // 타이머 시작
   const startTimer = useCallback(() => {

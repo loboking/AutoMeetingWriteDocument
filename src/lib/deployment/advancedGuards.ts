@@ -1,4 +1,4 @@
-import { getSystemDateInfo } from '../dateUtils';
+import { getSystemDateInfo, correctPastYears } from '../dateUtils';
 
 /**
  * 타임라인 생성 모델 가드레일
@@ -31,7 +31,6 @@ export function postProcessGeneratedDocument(content: string): string {
   let processed = content;
 
   // 과거 연도 보정
-  const { correctPastYears } = require('../dateUtils');
   processed = correctPastYears(processed);
 
   return processed;

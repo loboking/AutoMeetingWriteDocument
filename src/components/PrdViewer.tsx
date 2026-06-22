@@ -8,15 +8,14 @@ import * as XLSX from 'xlsx';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { sanitizeHtml } from '@/lib/sanitize';
-import { extractMermaidCode, docTypeToField, canGenerateDoc, getDependencyNames, getAllDependents, getDirectParentTitles, getStaleParents, DOCUMENTS, DEPENDENCIES, type DocType } from '@/lib/documentUtils';
+import { extractMermaidCode, docTypeToField, canGenerateDoc, getAllDependents, getDirectParentTitles, getStaleParents, DOCUMENTS, DEPENDENCIES, type DocType } from '@/lib/documentUtils';
 import { prerenderMermaid, lookupDiagram, type PrerenderResult } from '@/lib/mermaidExport';
 import PptxGenJS from 'pptxgenjs';
-import { Document as DocxDocument, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, Table, TableRow, TableCell, WidthType, BorderStyle } from 'docx';
+import { Document as DocxDocument, Packer, Paragraph, TextRun, HeadingLevel } from 'docx';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
-import { Badge } from '@/components/ui/badge';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -96,8 +95,7 @@ export function PrdViewer() {
     canRegenerateDoc,
     setDocStatus,
     incrementDocVersion,
-    markDependentsOutdated,
-    getDocVersion
+    markDependentsOutdated
   } = useMeetingStore();
 
   // 항상 PRD로 시작 - 초기화 함수 사용
@@ -192,7 +190,7 @@ export function PrdViewer() {
         localStorage.removeItem('scrollPosition');
         localStorage.removeItem('tabs-scroll-position');
         sessionStorage.clear();
-      } catch (e) {}
+      } catch {}
 
       // treeRef 스크롤만 맨 위로 초기화
       // 주의: overflow='visible'이나 scrollIntoView()는 사이드바 콘텐츠를
@@ -321,7 +319,6 @@ export function PrdViewer() {
 
   // 현재 문서 컨텐츠
   const currentContent = documents[activeDoc] || '';
-  const hasContent = !!currentContent;
   const doc = DOCUMENTS.find(d => d.key === activeDoc);
   const flatIndex = DOCUMENTS.findIndex(d => d.key === activeDoc);
 
@@ -1123,7 +1120,6 @@ export function PrdViewer() {
     lines.forEach(line => {
       // 헤더 처리 (# ## ###)
       if (line.startsWith('#')) {
-        const level = line.match(/^#+/)?.[0].length || 1;
         const text = line.replace(/^#+\s*/, '');
         worksheetData.push([{ v: text, s: { font: { bold: true } } }]);
         worksheetData.push([]); // 빈 줄
@@ -2343,7 +2339,7 @@ export function PrdViewer() {
                               <code className={className}>{children}</code>
                             );
                           },
-                          pre: ({ children, node }) => {
+                          pre: ({ children }) => {
                             // mermaid인 경우 이미 처리했으므로 건너뜀
                             const childArray = Array.isArray(children) ? children : [children];
                             const codeChild = childArray.find((c): c is { type: string; props: { className?: string } } =>

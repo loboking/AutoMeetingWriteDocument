@@ -4,11 +4,6 @@ import "./globals.css";
 import GenerationGuard from "@/components/GenerationGuard";
 import AuthGate from "@/components/AuthGate";
 
-// 나눔고딕 폰트
-const nanumGothic = {
-  variable: "--font-nanum-gothic",
-};
-
 const geistSans = Geist({
   variable: "--font-geist-sans",
   subsets: ["latin"],

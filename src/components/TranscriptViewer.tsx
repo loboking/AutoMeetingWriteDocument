@@ -18,7 +18,6 @@ export function TranscriptViewer() {
   const [isRegenerating, setIsRegenerating] = useState(false);
   const [editedTranscript, setEditedTranscript] = useState(currentMeeting?.transcript || '');
   const [summarizeProgress, setSummarizeProgress] = useState('');
-  const [isTooLong, setIsTooLong] = useState(false);
 
   // 변환 재생성 (오디오 파일 필요)
   const handleRegenerateTranscript = async () => {
@@ -70,7 +69,6 @@ export function TranscriptViewer() {
         `계속 진행하시겠습니까?`
       );
       if (!confirmed) return;
-      setIsTooLong(true);
     }
 
     setIsSummarizing(true);

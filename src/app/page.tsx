@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { Mic, Square, Play, Pause, Upload, FileText, Download, FileUp, FolderOpen, X, Plus } from 'lucide-react';
+import { Mic, Play, Upload, FileText, Download, FileUp, FolderOpen, X, Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -19,12 +19,11 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { useRecorder } from '@/hooks/useRecorder';
 import { useBeforeUnload } from '@/hooks/useBeforeUnload';
 import { useProgressSimulation } from '@/hooks/useProgressSimulation';
 import { useMeetingStore } from '@/store/meetingStore';
 import { MeetingStep } from '@/types';
-import { routeInputFile } from '@/lib/inputRouter';
+import { routeInputFile, FILE_ACCEPT_TYPES } from '@/lib/inputRouter';
 import { validateAudio } from '@/lib/stt/audioValidation';
 import { useBrowserSTT } from '@/hooks/useBrowserSTT';
 import { transcribeAudio } from '@/lib/transcribeAudio';
@@ -260,7 +259,6 @@ export default function Home() {
               const Icon = step.icon;
               const isActive = step.id === currentStep;
               const isPast = getCurrentStepIndex() > index;
-              const isClickable = currentMeeting && step.id !== 'idle';
 
               return (
                 <div key={step.id} className="flex flex-col items-center flex-1 min-w-0">
@@ -334,7 +332,7 @@ export default function Home() {
                   <input
                     ref={fileInputRef}
                     type="file"
-                    accept="audio/*,.mp3,.wav,.webm,.m4a,.ogg,.oga,.flac,.aac,.mp4,.txt,.md,.markdown,.pdf,.docx,.xlsx,text/*,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    accept={FILE_ACCEPT_TYPES}
                     onChange={(e) => {
                       const file = e.target.files?.[0];
                       if (file) handleFileUpload(file);

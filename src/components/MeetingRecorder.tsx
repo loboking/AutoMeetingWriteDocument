@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { Mic, Square, Pause, Play, Upload, Loader2, FileUp, AlertCircle, FileText } from 'lucide-react';
+import { Mic, Square, Pause, Play, FileUp, AlertCircle, FileText } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';

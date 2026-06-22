@@ -1,20 +1,8 @@
 // 문서 관련 유틸리티와 상수
 
-export type DocType =
-  | 'prd'
-  | 'feature-list'
-  | 'screen-list'
-  | 'ia'
-  | 'flowchart'
-  | 'wireframe'
-  | 'storyboard'
-  | 'user-story'
-  | 'wbs'
-  | 'api-spec'
-  | 'test-plan'
-  | 'test-case'
-  | 'database'
-  | 'deployment';
+// DocType은 types/index.ts가 단일 출처(canonical). 여기서는 re-export해 호환 유지.
+import type { DocType } from '@/types';
+export type { DocType };
 
 export interface Document {
   type: DocType;

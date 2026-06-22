@@ -20,7 +20,6 @@ interface WBSViewerProps {
 }
 
 function parseWBS(content: string): WBSTask[] {
-  const lines = content.split('\n');
   const tasks: WBSTask[] = [];
   const taskMap = new Map<string, WBSTask>();
 

@@ -1,4 +1,4 @@
-import { getSystemDateInfo } from '../dateUtils';
+import { getSystemDateInfo, correctPastYears } from '../dateUtils';
 
 /**
  * 타임라인 생성 모델 가드레일
@@ -171,7 +171,6 @@ export function postProcessGeneratedDocument(content: string, metadata?: PostPro
   processed = validateAndFixBillingPlans(processed);
 
   // 2. 과거 연도 보정 (dateUtils.correctPastYears)
-  const { correctPastYears } = require('../dateUtils');
   processed = correctPastYears(processed);
 
   // 3. 과장 표현 자동 치환 (멱등: 치환 결과에 다시 과장어가 생기지 않는 안전한 사전)

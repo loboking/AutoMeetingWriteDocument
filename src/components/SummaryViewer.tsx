@@ -1,11 +1,10 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { FileText, Loader2, CheckCircle, Clock, User, AlertCircle, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Separator } from '@/components/ui/separator';
 import { useBeforeUnload } from '@/hooks/useBeforeUnload';
 import { useMeetingStore } from '@/store/meetingStore';
 import { authedFetch } from '@/lib/authFetch';
