@@ -401,14 +401,16 @@ export const useMeetingStore = create<MeetingStore>()(
 
       createMeeting: (title) => {
         const now = new Date();
+        // 회의 생성 즉시 녹음 단계로 진입 — 'idle'은 표시 탭이 없어 빈 화면이 뜨므로,
+        // "회의 시작하기" → 곧바로 녹음 화면이 보이도록 'recording'으로 시작한다.
         const newMeeting: Meeting = {
           id: generateId(),
           title,
           createdAt: now,
           updatedAt: now, // LWW 머지 기준 안정화
-          step: 'idle',
+          step: 'recording',
         };
-        set({ currentMeeting: newMeeting, currentStep: 'idle', meetings: [...get().meetings, newMeeting] });
+        set({ currentMeeting: newMeeting, currentStep: 'recording', meetings: [...get().meetings, newMeeting] });
         return newMeeting;
       },
 
@@ -498,7 +500,8 @@ export const useMeetingStore = create<MeetingStore>()(
         const hasSummary = !!meeting.summary;
         const hasTranscript = !!meeting.transcript?.trim();
 
-        let inferredStep: MeetingStep = 'idle';
+        // 데이터가 전혀 없으면 녹음부터 — 'idle'은 표시 탭이 없어 빈 화면이 된다.
+        let inferredStep: MeetingStep = 'recording';
         if (hasDocuments || hasSummary) {
           inferredStep = 'done';
         } else if (hasTranscript) {
@@ -507,8 +510,8 @@ export const useMeetingStore = create<MeetingStore>()(
           inferredStep = 'transcribing';
         }
 
-        // 저장된 step이 있으면 우선, 없으면 추론된 step 사용
-        const step = meeting.step || inferredStep;
+        // 저장된 step이 있으면 우선, 단 'idle'은 표시 탭이 없으므로 추론값으로 보정
+        const step = meeting.step && meeting.step !== 'idle' ? meeting.step : inferredStep;
         set({ currentMeeting: meeting, currentStep: step });
       },
 
