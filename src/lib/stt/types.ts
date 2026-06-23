@@ -27,6 +27,9 @@ export interface TranscriptionResult {
 export interface STTTranscribeOptions {
   language?: string; // 'ko' 등
   detectSpeaker?: boolean; // MVP=무시(항상 false 동작)
+  // 원본 오디오 MIME. Whisper는 파일 확장자로 포맷을 판단하므로, 업로드 포맷(m4a/mp3/wav 등)을
+  // 정확히 전달해야 디코딩 실패(500)를 막는다. 미지정 시 webm으로 가정.
+  contentType?: string;
 }
 
 // 서버측 STT provider 인터페이스 (Buffer 입력 — Whisper API, dummy).

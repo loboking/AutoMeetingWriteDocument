@@ -27,7 +27,7 @@ function isAllowedSignedUrl(url: string): boolean {
 // 반환: { buffer, language } 또는 { errorResponse }(검증 실패 시 즉시 응답).
 async function resolveAudio(
   request: NextRequest
-): Promise<{ buffer: Buffer; language: string } | { errorResponse: NextResponse }> {
+): Promise<{ buffer: Buffer; language: string; contentType?: string } | { errorResponse: NextResponse }> {
   const contentType = request.headers.get('content-type') || '';
 
   // 경로 A: 클라가 저장소에 직접 업로드 후 서명 URL 전달 (Vercel 4.5MB 바디 한계 우회)
@@ -67,7 +67,9 @@ async function resolveAudio(
         ),
       };
     }
-    return { buffer, language };
+    // 저장소가 보존한 원본 MIME → Whisper 포맷 판단용
+    const contentType = res.headers.get('content-type') || undefined;
+    return { buffer, language, contentType };
   }
 
   // 경로 B: 기존 multipart 직접 업로드 (하위호환 — 소형 파일/폴백)
@@ -92,7 +94,7 @@ async function resolveAudio(
     };
   }
   const arrayBuffer = await audioFile.arrayBuffer();
-  return { buffer: Buffer.from(arrayBuffer), language };
+  return { buffer: Buffer.from(arrayBuffer), language, contentType: audioFile.type || undefined };
 }
 
 export async function POST(request: NextRequest) {
@@ -102,11 +104,11 @@ export async function POST(request: NextRequest) {
 
     const resolved = await resolveAudio(request);
     if ('errorResponse' in resolved) return resolved.errorResponse;
-    const { buffer, language } = resolved;
+    const { buffer, language, contentType } = resolved;
 
     // Provider DI: OPENAI_API_KEY 있으면 Whisper, 없으면 Dummy(NO_STT_PROVIDER throw)
     const provider = getServerProvider();
-    const result = await provider.transcribe(buffer, { language });
+    const result = await provider.transcribe(buffer, { language, contentType });
 
     // TranscribeResponseSchema 형태로 반환
     return NextResponse.json({

@@ -13,7 +13,7 @@ values (
   'recordings',
   false,                                   -- private: 서명 URL로만 접근
   52428800,                                -- 50MB
-  array['audio/webm','audio/mpeg','audio/mp4','audio/m4a','audio/aac','audio/wav','audio/x-wav','audio/ogg','application/octet-stream']
+  array['audio/webm','audio/mpeg','audio/mp3','audio/mp4','audio/m4a','audio/x-m4a','audio/aac','audio/wav','audio/x-wav','audio/ogg','audio/x-flac','audio/flac','application/octet-stream']
 )
 on conflict (id) do update
   set public = excluded.public,

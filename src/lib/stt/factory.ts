@@ -24,6 +24,19 @@ interface WhisperVerboseResponse {
   segments?: WhisperVerboseSegment[];
 }
 
+// 원본 MIME → Whisper에 보낼 (mime, 확장자). Whisper 지원: mp3/mp4/m4a/wav/webm/ogg/flac/mpeg/mpga.
+// 미상이면 webm으로 가정(브라우저 녹음 기본 포맷).
+function whisperFileMeta(contentType?: string): { mime: string; ext: string } {
+  const t = (contentType || '').toLowerCase();
+  if (t.includes('m4a') || t.includes('mp4') || t.includes('aac')) return { mime: 'audio/mp4', ext: 'm4a' };
+  if (t.includes('mpeg') || t.includes('mp3') || t.includes('mpga')) return { mime: 'audio/mpeg', ext: 'mp3' };
+  if (t.includes('wav')) return { mime: 'audio/wav', ext: 'wav' };
+  if (t.includes('ogg') || t.includes('oga')) return { mime: 'audio/ogg', ext: 'ogg' };
+  if (t.includes('flac')) return { mime: 'audio/flac', ext: 'flac' };
+  if (t.includes('webm')) return { mime: 'audio/webm', ext: 'webm' };
+  return { mime: 'audio/webm', ext: 'webm' };
+}
+
 export class WhisperApiProvider implements STTProvider {
   readonly name: STTProviderName = 'whisper-api';
 
@@ -39,9 +52,12 @@ export class WhisperApiProvider implements STTProvider {
 
     const language = opts?.language || 'ko';
 
+    // Whisper는 파일 확장자로 포맷을 판단한다. 원본 MIME에 맞는 확장자/타입을 보내야
+    // m4a·mp3·wav 등이 디코딩 실패(500) 없이 변환된다. (이전엔 무조건 audio.webm 고정 → m4a 깨짐)
+    const { mime, ext } = whisperFileMeta(opts?.contentType);
     const formData = new FormData();
-    const blob = new Blob([new Uint8Array(audio)], { type: 'audio/webm' });
-    formData.append('file', blob, 'audio.webm');
+    const blob = new Blob([new Uint8Array(audio)], { type: mime });
+    formData.append('file', blob, `audio.${ext}`);
     formData.append('model', 'whisper-1');
     formData.append('language', language);
     formData.append('response_format', 'verbose_json');
