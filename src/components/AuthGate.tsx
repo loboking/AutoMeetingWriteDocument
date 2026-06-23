@@ -13,8 +13,8 @@ import { Loader2, LogOut } from 'lucide-react';
 
 const SYNC_DEBOUNCE_MS = 2500;
 
-// 비로그인도 접근 가능한 공개 경로 (약관/개인정보)
-const PUBLIC_PATHS = ['/terms', '/privacy'];
+// 비로그인도 접근 가능한 공개 경로 (약관/개인정보/소개 랜딩)
+const PUBLIC_PATHS = ['/terms', '/privacy', '/about'];
 
 export default function AuthGate({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
