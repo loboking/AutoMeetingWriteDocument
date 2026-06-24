@@ -1,42 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireUser } from '@/lib/apiAuth';
-import OpenAI from 'openai';
+import { llmComplete } from '@/lib/llm';
 
 export const runtime = 'nodejs';
 // Vercel 함수 상한 (긴 회의록 보정 대응)
 export const maxDuration = 300;
 
-// OpenAI 클라이언트 초기화 (summarize/route.ts 패턴 복제)
-// OpenAI 우선 → 없으면 z.ai GLM 사용
-function createOpenAIClient() {
-  const hasOpenAI = !!process.env.OPENAI_API_KEY;
-  const hasZai = !!process.env.ZAI_API_KEY;
-
-  const useZai = !hasOpenAI && hasZai;
-  const API_KEY = hasOpenAI ? process.env.OPENAI_API_KEY! : process.env.ZAI_API_KEY!;
-  const API_BASE = useZai
-    ? (process.env.ZAI_BASE_URL || 'https://open.bigmodel.cn/api/coding/paas/v4')
-    : 'https://api.openai.com/v1';
-
-  if (!API_KEY) {
-    throw new Error('API_KEY가 필요합니다. ZAI_API_KEY 또는 OPENAI_API_KEY 환경변수를 설정하세요.');
-  }
-
-  return new OpenAI({
-    apiKey: API_KEY,
-    baseURL: API_BASE,
-    timeout: 180000,
-  });
-}
-
 // GLM 맥락 보정 — 회의 내용 정확 파악이 1순위.
 // 실패 시 원문 그대로 반환 (파이프라인을 절대 끊지 않음).
 async function refineWithGPT(transcript: string): Promise<string> {
-  const hasOpenAI = !!process.env.OPENAI_API_KEY;
-  const useZai = !hasOpenAI && !!process.env.ZAI_API_KEY;
-  // summarize/generate-doc과 동일하게 glm-5-turbo로 통일
-  const MODEL = useZai ? (process.env.ZAI_MODEL || 'glm-5-turbo') : 'gpt-4o';
-
   const prompt = `당신은 회의 녹취 교정 전문가입니다. 아래 텍스트는 회의 음성을 STT(음성→텍스트)로 변환한 결과로, 오타·끊김·잘못 인식된 단어(오인식)·중복·잡음이 섞여 있을 수 있습니다.
 
 ## 교정 규칙 (반드시 준수)
@@ -54,26 +26,11 @@ ${transcript}
 교정된 회의록 텍스트만 반환하세요.`;
 
   try {
-    const openai = createOpenAIClient();
-
-    const createParams = {
-      model: MODEL,
-      messages: [{ role: 'user' as const, content: prompt }],
-      max_tokens: 8192,
-      // GLM 계열 thinking 비활성화 (속도 향상, timeout 방지)
-      ...(MODEL.includes('glm') ? { thinking: { type: 'disabled' } } : {}),
-    } as OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming;
-
-    const response = await openai.chat.completions.create(createParams, {
-      timeout: 180000,
+    const { text: content } = await llmComplete({
+      prompt,
+      maxTokens: 8192,
+      timeoutMs: 180000,
     });
-
-    const message = response.choices[0]?.message;
-    // 코딩 플랜 추론 모델은 content 또는 reasoning_content 확인
-    const content =
-      message?.content ||
-      (message as { reasoning_content?: string })?.reasoning_content ||
-      '';
 
     // 제어 문자 정리 (개행/탭은 보존, 그 외 제어문자만 제거)
     const cleaned = content

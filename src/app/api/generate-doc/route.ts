@@ -19,14 +19,11 @@ import { getWBSPrompt } from '@/lib/wbsTemplate';
 import { getTestPlanPrompt } from '@/lib/testPlanTemplate';
 import { reviewDocument, type ReviewResult } from '@/lib/docReviewer';
 import type { MeetingSummary } from '@/types';
-import OpenAI from 'openai';
+import { llmComplete, resolveProvider } from '@/lib/llm';
 
 export const runtime = 'nodejs';
 // Vercel Hobby 플랜 상한 = 300초. PRD 병렬 청킹(~3.5분)이 이 안에 완성됨.
 export const maxDuration = 300;
-
-// Z.ai GLM 모델 설정 (코딩 플랜 구독 권장)
-const ZAI_MODEL = process.env.ZAI_MODEL || 'glm-5-turbo';
 
 // 문서별 출력 토큰 차등: 긴 문서(표/엔드포인트 많음)는 16384 유지, 짧은 목록류는 축소 → 생성 시간 절감.
 // 출력이 상한에 닿는 문서에만 시간효과 있음. heavy는 절대 줄이지 않음(잘림 방지).
@@ -54,65 +51,7 @@ const KOREAN_OUTPUT_SYSTEM_PROMPT =
   '절대 중국어 한자나 일본어 가나를 섞지 마세요 (예: "上述"→"위에서 언급한", "心理"→"심리"). 모든 한자어는 한글로만 표기합니다. ' +
   '마크다운 표/제목/리스트의 항목명도 한국어로 작성합니다.';
 
-// OpenAI 클라이언트 초기화 함수 (빌드 시 실행 방지)
-function createOpenAIClient() {
-  // OpenAI를 명확히 우선 (OPENAI_API_KEY가 있으면 무조건 OpenAI 사용)
-  const hasOpenAI = !!process.env.OPENAI_API_KEY;
-  const hasZai = !!process.env.ZAI_API_KEY;
-
-  const useZai = !hasOpenAI && hasZai;
-  const API_KEY = hasOpenAI ? process.env.OPENAI_API_KEY! : process.env.ZAI_API_KEY!;
-  const API_BASE = useZai ? (process.env.ZAI_BASE_URL || 'https://open.bigmodel.cn/api/coding/paas/v4') : 'https://api.openai.com/v1';
-
-  if (!API_KEY) {
-    throw new Error('API_KEY가 필요합니다. ZAI_API_KEY 또는 OPENAI_API_KEY 환경변수를 설정하세요.');
-  }
-
-  console.log('[generate-doc] OpenAI 클라이언트 초기화', {
-    hasOpenAI,
-    hasZai,
-    useZai,
-    API_BASE,
-  });
-
-  return new OpenAI({
-    apiKey: API_KEY,
-    baseURL: API_BASE,
-    timeout: 900000, // 15분 (GLM 코딩플랜은 reasoning으로 긴 PRD에 수 분 소요)
-    maxRetries: 0,   // 재시도 시 시간 2배 → mock fallback 유발하므로 비활성화
-  });
-}
-
-// GLM-5 응답에서 실제 본문 추출
-// - 정상: content에 한글 답변, reasoning_content에 영어 사고과정
-// - content가 비어있을 때만 reasoning_content를 fallback으로 사용
-function extractContent(message: { content?: string | null; reasoning_content?: string | null } | undefined): string {
-  if (!message) return '';
-  const content = (message.content || '').trim();
-  if (content) return content;
-  return (message.reasoning_content || '').trim();
-}
-
-// GLM-5 thinking 비활성화 파라미터 (reasoning 생략 → 생성 속도 대폭 향상)
-// thinking을 켜면 32k 토큰 PRD 생성이 10분+ 소요되어 timeout 발생
-function buildCreateParams(
-  model: string,
-  systemPrompt: string,
-  userPrompt: string,
-  maxTokens: number
-): OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming {
-  const base = {
-    model,
-    messages: [
-      { role: 'system' as const, content: systemPrompt },
-      { role: 'user' as const, content: userPrompt },
-    ],
-    max_tokens: maxTokens,
-    // GLM 계열만 thinking 비활성화 (gpt-4o 등에는 미적용)
-    ...(model.includes('glm') ? { thinking: { type: 'disabled' } } : {}),
-  };
-  return base as OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming;
-}
+// (LLM 클라이언트 생성/응답추출/파라미터 구성은 @/lib/llm 모듈로 이관됨)
 
 // 문서 의존 관계 (1뎁스 → 2뎁스 → 3뎁스...)
 type DocType =
@@ -228,21 +167,17 @@ async function generateDocument(
   // PRD 외 문서 또는 청킹 fallback: 단일 통합 프롬프트 (의존 문서를 컨텍스트로 전달)
   const prompt = getPromptForDocType(docType, summary, transcript, meetingInfo, contextDocs);
 
-  // OpenAI 우선 명확히
-  const hasOpenAI = !!process.env.OPENAI_API_KEY;
-  const useZai = !hasOpenAI && !!process.env.ZAI_API_KEY;
-  const MODEL = useZai ? ZAI_MODEL : 'gpt-4o';
+  const isGlm = resolveProvider().id === 'zai';
 
   try {
-    const openai = createOpenAIClient();
     // 문서별 출력토큰 차등(목록류는 축소 → 생성 시간 절감, 긴 문서는 16384 유지)
-    const response = await openai.chat.completions.create(
-      buildCreateParams(MODEL, KOREAN_OUTPUT_SYSTEM_PROMPT, prompt, maxTokensFor(docType, MODEL.includes('glm')))
-    );
-
-    // GLM-5 실제 답변은 content에 있음 (reasoning_content는 영어 사고과정이므로 fallback만)
-    const message = response.choices[0]?.message;
-    const content = extractContent(message);
+    const { text: content } = await llmComplete({
+      prompt,
+      system: KOREAN_OUTPUT_SYSTEM_PROMPT,
+      maxTokens: maxTokensFor(docType, isGlm),
+      timeoutMs: 900000,
+      maxRetries: 0,
+    });
     if (!content || !content.trim()) {
       throw new Error('빈 응답');
     }
@@ -359,10 +294,7 @@ async function generateDocumentWithContext(
 
   const prompt = getPromptForDocType(docType, summary, transcript, meetingInfo, contextDocs);
 
-  // OpenAI 우선 명확히
-  const hasOpenAI = !!process.env.OPENAI_API_KEY;
-  const useZai = !hasOpenAI && !!process.env.ZAI_API_KEY;
-  const MODEL = useZai ? ZAI_MODEL : 'gpt-4o';
+  const isGlm = resolveProvider().id === 'zai';
 
   console.log('[generate-doc] 문서 생성', {
     docType,
@@ -372,17 +304,17 @@ async function generateDocumentWithContext(
   });
 
   // 최대 출력 토큰 (16k가 속도·안정성·상세도의 검증된 최적점)
-  const maxTokens = MODEL.includes('glm') ? 16384 : 12288;
+  const maxTokens = isGlm ? 16384 : 12288;
 
   try {
-    const openai = createOpenAIClient();
-    const response = await openai.chat.completions.create(
-      buildCreateParams(MODEL, KOREAN_OUTPUT_SYSTEM_PROMPT, prompt, maxTokens)
-    );
-
-    // GLM-5 실제 답변은 content에 있음 (reasoning_content는 영어 사고과정이므로 fallback만)
-    const message = response.choices[0]?.message;
-    return extractContent(message);
+    const { text } = await llmComplete({
+      prompt,
+      system: KOREAN_OUTPUT_SYSTEM_PROMPT,
+      maxTokens,
+      timeoutMs: 900000,
+      maxRetries: 0,
+    });
+    return text;
   } catch (error) {
     console.error('OpenAI API 오류:', error);
     throw error;

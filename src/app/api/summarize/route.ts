@@ -1,51 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireUser } from '@/lib/apiAuth';
 import type { MeetingSummary } from '@/types';
-import OpenAI from 'openai';
+import { llmComplete } from '@/lib/llm';
 
 export const runtime = 'nodejs';
 // Vercel 함수 상한 (요약은 단일 호출이라 180초로 충분, generate-doc은 300초)
 export const maxDuration = 300;
 
-// OpenAI 클라이언트 초기화 함수 (빌드 시 실행 방지)
-function createOpenAIClient() {
-  // OpenAI를 명확히 우선 (OPENAI_API_KEY가 있으면 무조건 OpenAI 사용)
-  const hasOpenAI = !!process.env.OPENAI_API_KEY;
-  const hasZai = !!process.env.ZAI_API_KEY;
-
-  const useZai = !hasOpenAI && hasZai;  // OpenAI가 없을 때만 Z.ai 사용
-  const API_KEY = hasOpenAI ? process.env.OPENAI_API_KEY! : process.env.ZAI_API_KEY!;
-  const API_BASE = useZai ? (process.env.ZAI_BASE_URL || 'https://open.bigmodel.cn/api/coding/paas/v4') : 'https://api.openai.com/v1';
-
-  if (!API_KEY) {
-    throw new Error('API_KEY가 필요합니다. ZAI_API_KEY 또는 OPENAI_API_KEY 환경변수를 설정하세요.');
-  }
-
-  console.log('[API] OpenAI 클라이언트 초기화', {
-    hasOpenAI,
-    hasZai,
-    useZai,
-    API_BASE,
-  });
-
-  return new OpenAI({
-    apiKey: API_KEY,
-    baseURL: API_BASE,
-    timeout: 180000, // 180초 (요청별 timeout과 일치, 긴 회의록 대응)
-  });
-}
-
 // 코딩 플랜 GLM API를 통한 요약 생성
 async function summarizeWithGPT(text: string, context?: string): Promise<MeetingSummary> {
-  // OpenAI 우선 명확히 (함수 시작 시점에 한 번만 결정)
-  const hasOpenAI = !!process.env.OPENAI_API_KEY;
-  const useZai = !hasOpenAI && !!process.env.ZAI_API_KEY;
-  // 다른 엔드포인트(generate-doc, prdChunkGenerator)와 동일하게 glm-5-turbo로 통일
-  // glm-5.1은 서버에서 추론급 glm-5.2로 매핑되어 응답이 느려짐 → timeout 위험
-  const MODEL = useZai ? (process.env.ZAI_MODEL || 'glm-5-turbo') : 'gpt-4o';
-
-  console.log('[API] 요약 모델 선택', { hasOpenAI, useZai, MODEL, textLength: text.length });
-
   const prompt = `당신은 회의록 전문가입니다. 다음 회의 내용을 **상세하게 분석**하여 구조화된 요약을 제공해주세요.
 
 ## 회의 녹취록 (전체)
@@ -88,30 +51,14 @@ ${context ? `## 추가 맥락\n${context}` : ''}
 분석하여 JSON만 반환해주세요.`;
 
   try {
-    const openai = createOpenAIClient();
-    console.log('[API] API 호출 시작 - Model:', MODEL);
-
-    const createParams = {
-      model: MODEL,
-      messages: [{ role: 'user' as const, content: prompt }],
-      max_tokens: 8192,
-      // GLM 계열 thinking 비활성화 (reasoning 생략 → 속도 7배 향상, timeout 방지)
-      ...(MODEL.includes('glm') ? { thinking: { type: 'disabled' } } : {}),
-    } as OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming;
-
-    const response = await openai.chat.completions.create(createParams, {
-      timeout: 180000, // 180초 (긴 회의록도 여유 있게, generate-doc과 동일 기조)
+    const { text: rawText, provider, model } = await llmComplete({
+      prompt,
+      maxTokens: 8192,
+      timeoutMs: 180000,
     });
+    console.log('[API] 요약 응답 수신:', { provider, model, hasContent: !!rawText });
 
-    console.log('[API] Z.ai API 응답 수신:', {
-      choices: response.choices?.length,
-      finishReason: response.choices?.[0]?.finish_reason,
-      hasContent: !!response.choices?.[0]?.message?.content
-    });
-
-    // 코딩 플랜 추론 모델은 content 또는 reasoning_content를 확인
-    const message = response.choices[0]?.message;
-    const content = message?.content || (message as { reasoning_content?: string })?.reasoning_content || '{}';
+    const content = rawText || '{}';
 
     // 실제 응답 내용 로그 출력 (디버깅용)
     console.log('[API] 응답 content 미리보기:', content.substring(0, 200));

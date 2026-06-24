@@ -15,14 +15,11 @@ import { getStoryboardPrompt } from '@/lib/storyboardTemplate';
 import { getWBSPrompt } from '@/lib/wbsTemplate';
 import { getTestPlanPrompt } from '@/lib/testPlanTemplate';
 import type { MeetingSummary } from '@/types';
-import OpenAI from 'openai';
+import { llmComplete, resolveProvider } from '@/lib/llm';
 
 export const runtime = 'nodejs';
 // Vercel Hobby 플랜 상한 = 300초.
 export const maxDuration = 300;
-
-// Z.ai GLM 모델 설정
-const ZAI_MODEL = process.env.ZAI_MODEL || 'glm-5-turbo';
 
 // 한국어 출력 강제 시스템 프롬프트 (GLM-5는 한/영/중 혼합 출력 경향 있음)
 const KOREAN_OUTPUT_SYSTEM_PROMPT =
@@ -33,35 +30,6 @@ const KOREAN_OUTPUT_SYSTEM_PROMPT =
   '예: "user" → "사용자", "feature" → "기능", "implement" → "구현", "process" → "처리", "manage" → "관리". ' +
   '문장은 자연스러운 한국어 어순과 어미를 사용하고, 어색한 직역체나 중국어식 표현을 피하세요. ' +
   '마크다운 표/제목/리스트의 항목명도 한국어로 작성합니다.';
-
-// GLM-5 응답에서 실제 본문 추출 (content 우선, 비었을 때만 reasoning_content fallback)
-function extractContent(message: { content?: string | null; reasoning_content?: string | null } | undefined): string {
-  if (!message) return '';
-  const content = (message.content || '').trim();
-  if (content) return content;
-  return (message.reasoning_content || '').trim();
-}
-
-// OpenAI 클라이언트 초기화
-function createOpenAIClient() {
-  const hasOpenAI = !!process.env.OPENAI_API_KEY;
-  const hasZai = !!process.env.ZAI_API_KEY;
-
-  const useZai = !hasOpenAI && hasZai;
-  const API_KEY = hasOpenAI ? process.env.OPENAI_API_KEY! : process.env.ZAI_API_KEY!;
-  const API_BASE = useZai ? (process.env.ZAI_BASE_URL || 'https://open.bigmodel.cn/api/coding/paas/v4') : 'https://api.openai.com/v1';
-
-  if (!API_KEY) {
-    throw new Error('API_KEY가 필요합니다.');
-  }
-
-  return new OpenAI({
-    apiKey: API_KEY,
-    baseURL: API_BASE,
-    timeout: 600000, // 10분 타임아웃 (GLM-5 문서 생성은 수 분 소요)
-    maxRetries: 1,
-  });
-}
 
 type DocType =
   | 'prd'
@@ -166,29 +134,18 @@ async function generateDocument(
 ): Promise<string> {
   const prompt = getPromptForDocType(docType, summary, transcript, meetingInfo, contextDocs);
 
-  const hasOpenAI = !!process.env.OPENAI_API_KEY;
-  const useZai = !hasOpenAI && !!process.env.ZAI_API_KEY;
-  const MODEL = useZai ? ZAI_MODEL : 'gpt-4o';
+  // GLM은 reasoning에 토큰을 많이 써 16384, 그 외(gpt-4o 등)는 12288
+  const isGlm = resolveProvider().id === 'zai';
 
   try {
-    const openai = createOpenAIClient();
-    const params = {
-      model: MODEL,
-      messages: [
-        { role: 'system' as const, content: KOREAN_OUTPUT_SYSTEM_PROMPT },
-        { role: 'user' as const, content: prompt },
-      ],
-      max_tokens: MODEL.includes('glm') ? 16384 : 12288,
-      // GLM 계열은 thinking 비활성화 시도 (코딩플랜은 무시할 수 있으나 무해)
-      ...(MODEL.includes('glm') ? { thinking: { type: 'disabled' } } : {}),
-    };
-    const response = await openai.chat.completions.create(
-      params as unknown as OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming
-    );
-
-    // GLM-5 실제 답변은 content에 있음 (reasoning_content는 영어 사고과정이므로 fallback만)
-    const message = response.choices[0]?.message;
-    return extractContent(message);
+    const { text } = await llmComplete({
+      prompt,
+      system: KOREAN_OUTPUT_SYSTEM_PROMPT,
+      maxTokens: isGlm ? 16384 : 12288,
+      timeoutMs: 600000,
+      maxRetries: 1,
+    });
+    return text;
   } catch (error) {
     console.error(`${docType} 생성 오류:`, error);
     throw error;

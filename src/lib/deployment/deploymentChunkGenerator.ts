@@ -1,4 +1,4 @@
-import OpenAI from 'openai';
+import { llmComplete, resolveProvider } from '@/lib/llm';
 import { DEPLOYMENT_SECTIONS, DeploymentChunkProgress, DeploymentGenerationResult } from './deploymentSections';
 import { SECTION_PROMPTS } from './sectionPrompts';
 import { postProcessGeneratedDocument } from './advancedGuards';
@@ -7,35 +7,9 @@ import type { MeetingSummary, MeetingMetadata } from '@/types';
 // Re-export types
 export type { DeploymentChunkProgress, DeploymentGenerationResult };
 
-// API 클라이언트 생성
-function createOpenAIClient() {
-  const hasOpenAI = !!process.env.OPENAI_API_KEY;
-  const hasZai = !!process.env.ZAI_API_KEY;
-
-  const useZai = !hasOpenAI && hasZai;
-  const API_KEY = hasOpenAI ? process.env.OPENAI_API_KEY! : process.env.ZAI_API_KEY!;
-  const API_BASE = useZai
-    ? (process.env.ZAI_BASE_URL || 'https://open.bigmodel.cn/api/coding/paas/v4')
-    : 'https://api.openai.com/v1';
-
-  if (!API_KEY) {
-    throw new Error('API_KEY가 필요합니다. ZAI_API_KEY 또는 OPENAI_API_KEY 환경변수를 설정하세요.');
-  }
-
-  return new OpenAI({
-    apiKey: API_KEY,
-    baseURL: API_BASE,
-    timeout: 120000,
-  });
-}
-
-// 모델 설정
-function getModelConfig() {
-  const hasOpenAI = !!process.env.OPENAI_API_KEY;
-  const useZai = !hasOpenAI && !!process.env.ZAI_API_KEY;
-  const model = useZai ? (process.env.ZAI_MODEL || 'glm-5') : 'gpt-4o';
-  const maxTokens = model.includes('glm') ? 8192 : 4096;
-  return { model, maxTokens, useZai };
+// 섹션 출력 토큰: GLM 8192, 그 외(gpt-4o 등) 4096
+function sectionMaxTokens(): number {
+  return resolveProvider().id === 'zai' ? 8192 : 4096;
 }
 
 // 단일 섹션 생성
@@ -73,19 +47,17 @@ async function generateSection(
       metadata,
     });
 
-    const { model, maxTokens } = getModelConfig();
-    const openai = createOpenAIClient();
+    const maxTokens = sectionMaxTokens();
+    console.log(`[Deployment Chunk] 섹션 생성 시작: ${sectionId} (maxTokens=${maxTokens})`);
 
-    console.log(`[Deployment Chunk] 섹션 생성 시작: ${sectionId} (${model}, maxTokens=${maxTokens})`);
-
-    const response = await openai.chat.completions.create({
-      model,
-      messages: [{ role: 'user', content: prompt }],
-      max_tokens: maxTokens,
+    const { text } = await llmComplete({
+      prompt,
+      maxTokens,
       temperature: 0.7,
+      timeoutMs: 120000,
     });
 
-    let content = response.choices[0]?.message?.content || `## ${section.title}\n\n내용 생성 실패`;
+    let content = text || `## ${section.title}\n\n내용 생성 실패`;
 
     content = postProcessGeneratedDocument(content);
 

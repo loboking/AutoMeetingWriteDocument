@@ -1,4 +1,4 @@
-import OpenAI from 'openai';
+import { llmComplete, resolveProvider } from '@/lib/llm';
 import { PRD_SECTIONS, PRDChunkProgress, PRDGenerationResult } from './prdSections';
 import { SECTION_PROMPTS } from './sectionPrompts';
 import { mapWithConcurrency, withRetry } from '@/lib/concurrency';
@@ -9,38 +9,22 @@ import type { MeetingSummary, MeetingMetadata } from '@/types';
 // Re-export types
 export type { PRDChunkProgress, PRDGenerationResult };
 
-// API 클라이언트 생성
-function createOpenAIClient() {
-  const hasOpenAI = !!process.env.OPENAI_API_KEY;
-  const hasZai = !!process.env.ZAI_API_KEY;
-
-  const useZai = !hasOpenAI && hasZai;
-  const API_KEY = hasOpenAI ? process.env.OPENAI_API_KEY! : process.env.ZAI_API_KEY!;
-  const API_BASE = useZai
-    ? (process.env.ZAI_BASE_URL || 'https://open.bigmodel.cn/api/coding/paas/v4')
-    : 'https://api.openai.com/v1';
-
-  if (!API_KEY) {
-    throw new Error('API_KEY가 필요합니다. ZAI_API_KEY 또는 OPENAI_API_KEY 환경변수를 설정하세요.');
-  }
-
-  return new OpenAI({
-    apiKey: API_KEY,
-    baseURL: API_BASE,
-    timeout: 240000, // 섹션당 4분 (실측 최대 130초 + 여유, Vercel 300초 함수 한계 내)
-    maxRetries: 0,
-  });
+// 섹션 출력 토큰: GLM은 reasoning에 토큰을 많이 써 16384, 그 외(gpt-4o 등)는 8192
+function sectionMaxTokens(): number {
+  return resolveProvider().id === 'zai' ? 16384 : 8192;
 }
 
-// 모델 설정
-function getModelConfig() {
-  const hasOpenAI = !!process.env.OPENAI_API_KEY;
-  const useZai = !hasOpenAI && !!process.env.ZAI_API_KEY;
-  const model = useZai ? (process.env.ZAI_MODEL || 'glm-5-turbo') : 'gpt-4o';
-  // GLM-5는 reasoning에 토큰을 많이 쓰므로 섹션 본문이 잘리지 않도록 충분히 확보
-  const maxTokens = model.includes('glm') ? 16384 : 8192;
-  return { model, maxTokens, useZai };
-}
+// PRD 섹션 system 프롬프트 (한국어 출력 강제)
+const PRD_SECTION_SYSTEM =
+  '당신은 한국 기업의 시니어 PM입니다. 모든 출력은 반드시 한국어(한글)로 작성합니다. ' +
+  '영어 단어는 고유명사(제품명, 회사명, 기술 스택명 - 예: React, Next.js, AWS), ' +
+  '업계 표준 약어(API, DB, UI, UX, KPI, MAU, PRD 등), 코드/명령어에만 허용합니다. ' +
+  '그 외 일반 명사, 동사, 형용사, 설명문은 모두 한국어로 작성하세요. ' +
+  '예: "user" → "사용자", "feature" → "기능", "implement" → "구현", "process" → "처리". ' +
+  '문장은 자연스러운 한국어 어순과 어미를 사용하고, 어색한 직역체를 피하세요. ' +
+  '절대 중국어 한자나 일본어 가나를 섞지 마세요. ' +
+  '예: "上述"(X) → "위에서 언급한"(O), "心理"(X) → "심리"(O), "該当"(X) → "해당"(O). ' +
+  '모든 한자어는 반드시 한글로만 표기합니다.';
 
 // 단일 섹션 생성
 async function generateSection(
@@ -77,48 +61,21 @@ async function generateSection(
       metadata,
     });
 
-    const { model, maxTokens } = getModelConfig();
-    const openai = createOpenAIClient();
+    const maxTokens = sectionMaxTokens();
+    console.log(`[PRD Chunk] 섹션 생성 시작: ${sectionId} (maxTokens=${maxTokens})`);
 
-    console.log(`[PRD Chunk] 섹션 생성 시작: ${sectionId} (${model}, maxTokens=${maxTokens})`);
-
-    const createParams = {
-      model,
-      messages: [
-        {
-          role: 'system' as const,
-          content:
-            '당신은 한국 기업의 시니어 PM입니다. 모든 출력은 반드시 한국어(한글)로 작성합니다. ' +
-            '영어 단어는 고유명사(제품명, 회사명, 기술 스택명 - 예: React, Next.js, AWS), ' +
-            '업계 표준 약어(API, DB, UI, UX, KPI, MAU, PRD 등), 코드/명령어에만 허용합니다. ' +
-            '그 외 일반 명사, 동사, 형용사, 설명문은 모두 한국어로 작성하세요. ' +
-            '예: "user" → "사용자", "feature" → "기능", "implement" → "구현", "process" → "처리". ' +
-            '문장은 자연스러운 한국어 어순과 어미를 사용하고, 어색한 직역체를 피하세요. ' +
-            '절대 중국어 한자나 일본어 가나를 섞지 마세요. ' +
-            '예: "上述"(X) → "위에서 언급한"(O), "心理"(X) → "심리"(O), "該当"(X) → "해당"(O). ' +
-            '모든 한자어는 반드시 한글로만 표기합니다.',
-        },
-        { role: 'user' as const, content: prompt },
-      ],
-      max_tokens: maxTokens,
-      temperature: 0.7,
-      // GLM 계열은 thinking 비활성화로 섹션 생성 속도 향상
-      ...(model.includes('glm') ? { thinking: { type: 'disabled' } } : {}),
-    };
-    // 429(rate limit) 발생 시 지수 backoff 재시도
-    const response = await withRetry(
+    // 429(rate limit) 발생 시 지수 backoff 재시도 (withRetry 유지, 내부 호출만 llmComplete로)
+    const { text: extracted } = await withRetry(
       () =>
-        openai.chat.completions.create(
-          createParams as unknown as OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming
-        ),
+        llmComplete({
+          prompt,
+          system: PRD_SECTION_SYSTEM,
+          maxTokens,
+          temperature: 0.7,
+          timeoutMs: 240000, // 섹션당 4분 (Vercel 300초 함수 한계 내)
+        }),
       { retries: 3, baseDelayMs: 2000 }
     );
-
-    // GLM-5 실제 답변은 content에 있음 (reasoning_content는 영어 사고과정이므로 fallback만)
-    const message = response.choices[0]?.message as
-      | { content?: string | null; reasoning_content?: string | null }
-      | undefined;
-    const extracted = (message?.content || '').trim() || (message?.reasoning_content || '').trim();
     // 프롬프트 누출 제거 + 중국어(한자) 정리 → 일관성/비용/과장 후처리
     const cleaned = sanitizeSectionContent(extracted);
     const processed = cleaned ? postProcessGeneratedDocument(cleaned, metadata) : cleaned;

@@ -1,38 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireUser } from '@/lib/apiAuth';
 import type { MeetingMetadata } from '@/types';
-import OpenAI from 'openai';
+import { llmComplete } from '@/lib/llm';
 
 export const runtime = 'nodejs';
-
-// OpenAI 클라이언트 초기화
-function createOpenAIClient() {
-  const hasOpenAI = !!process.env.OPENAI_API_KEY;
-  const hasZai = !!process.env.ZAI_API_KEY;
-
-  const useZai = !hasOpenAI && hasZai;
-  const API_KEY = hasOpenAI ? process.env.OPENAI_API_KEY! : process.env.ZAI_API_KEY!;
-  const API_BASE = useZai
-    ? (process.env.ZAI_BASE_URL || 'https://open.bigmodel.cn/api/coding/paas/v4')
-    : 'https://api.openai.com/v1';
-
-  if (!API_KEY) {
-    throw new Error('API_KEY가 필요합니다.');
-  }
-
-  return new OpenAI({
-    apiKey: API_KEY,
-    baseURL: API_BASE,
-    timeout: 60000,
-  });
-}
-
-// 모델 설정
-function getModel() {
-  const hasOpenAI = !!process.env.OPENAI_API_KEY;
-  const useZai = !hasOpenAI && !!process.env.ZAI_API_KEY;
-  return useZai ? (process.env.ZAI_MODEL || 'glm-5') : 'gpt-4o';
-}
 
 /**
  * Stage 1: 회의록에서 핵심 메타데이터 추출
@@ -120,21 +91,13 @@ ${transcript}
 분석하여 JSON만 반환해주세요.`;
 
   try {
-    const openai = createOpenAIClient();
-    const model = getModel();
-
-    const response = await openai.chat.completions.create({
-      model,
-      messages: [{ role: 'user', content: prompt }],
-      max_tokens: 4096,
-      temperature: 0.3, // 낮은 온도로 일관성 확보
+    const { text } = await llmComplete({
+      prompt,
+      maxTokens: 4096,
+      temperature: 0.3, // 낮은 온도로 일관성 확보 (OpenAI호환 전용)
+      timeoutMs: 60000,
     });
-
-    // GLM-5 실제 답변은 content에 있음 (reasoning_content는 영어 사고과정이므로 fallback만)
-    const message = response.choices[0]?.message as
-      | { content?: string | null; reasoning_content?: string | null }
-      | undefined;
-    const content = (message?.content || '').trim() || (message?.reasoning_content || '').trim() || '{}';
+    const content = text || '{}';
 
     // JSON 파싅
     const cleanedContent = content.replace(/[\x00-\x1F\x7F]/g, ' ');
