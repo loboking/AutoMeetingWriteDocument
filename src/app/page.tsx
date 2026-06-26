@@ -32,6 +32,7 @@ import TranscriptViewer from '@/components/TranscriptViewer';
 import SummaryViewer from '@/components/SummaryViewer';
 import PrdViewer from '@/components/PrdViewer';
 import { ProjectList } from '@/components/ProjectList';
+import { PageContainer } from '@/components/layout/PageContainer';
 import { DateFormat } from '@/components/DateFormat';
 import { authedFetch } from '@/lib/authFetch';
 
@@ -206,15 +207,15 @@ export default function Home() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-slate-100 to-slate-200 dark:from-slate-950 dark:via-slate-900 dark:to-slate-900">
-      <div className="container mx-auto px-4 sm:px-6 py-6 sm:py-8 max-w-6xl">
+      <PageContainer width="default" className="py-6 sm:py-8">
         {/* 헤더 */}
         <header className="mb-6 sm:mb-8">
           <div className="flex flex-col sm:flex-row items-center justify-between gap-3 sm:gap-4">
             <div className="text-center sm:text-left flex-1 min-w-0">
-              <h1 className="text-2xl sm:text-3xl md:text-4xl font-bold tracking-tight text-slate-900 dark:text-slate-50 mb-1 sm:mb-2">
+              <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-foreground mb-1 sm:mb-2">
                 MeetingAutoDocs
               </h1>
-              <p className="text-xs sm:text-sm md:text-base text-slate-600 dark:text-slate-400">
+              <p className="text-xs sm:text-sm md:text-base text-muted-foreground">
                 회의 녹음 → 요약 → 기획 문서 자동 생성
               </p>
             </div>
@@ -467,32 +468,32 @@ export default function Home() {
             </div>
           </div>
         )}
-      </div>
+      </PageContainer>
 
-        {/* 새 회의 확인 다이얼로그 */}
-        {showNewMeetingConfirm && (
-          <AlertDialog open={showNewMeetingConfirm} onOpenChange={setShowNewMeetingConfirm}>
-            <AlertDialogContent role="alertdialog" aria-describedby="new-meeting-desc">
-              <AlertDialogHeader>
-                <AlertDialogTitle id="new-meeting-title">새 회의 시작</AlertDialogTitle>
-                <AlertDialogDescription id="new-meeting-desc">
-                  현재 회의 내용은 자동 저장됩니다. 새 회의를 시작하시겠습니까?
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel>취소</AlertDialogCancel>
-                <AlertDialogAction
-                  onClick={() => {
-                    setCurrentMeeting(null);
-                    setShowNewMeetingConfirm(false);
-                  }}
-                >
-                  시작하기
-                </AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
-        )}
+      {/* 새 회의 확인 다이얼로그 */}
+      {showNewMeetingConfirm && (
+        <AlertDialog open={showNewMeetingConfirm} onOpenChange={setShowNewMeetingConfirm}>
+          <AlertDialogContent role="alertdialog" aria-describedby="new-meeting-desc">
+            <AlertDialogHeader>
+              <AlertDialogTitle id="new-meeting-title">새 회의 시작</AlertDialogTitle>
+              <AlertDialogDescription id="new-meeting-desc">
+                현재 회의 내용은 자동 저장됩니다. 새 회의를 시작하시겠습니까?
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>취소</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={() => {
+                  setCurrentMeeting(null);
+                  setShowNewMeetingConfirm(false);
+                }}
+              >
+                시작하기
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      )}
     </div>
   );
 }
