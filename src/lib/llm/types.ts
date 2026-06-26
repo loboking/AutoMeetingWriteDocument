@@ -28,5 +28,8 @@ export interface ResolvedProvider {
 
 export interface LLMAdapter {
   readonly id: ProviderId;
+  // 어댑터 본문 구현 여부. false면 resolveAllProviders 폴백 시 건너뛴다.
+  // (anthropicAdapter는 phase2 미구현 → false → 호출 안 됨)
+  readonly implemented: boolean;
   complete(req: LLMRequest, ctx: ResolvedProvider): Promise<LLMResult>;
 }

@@ -7,6 +7,7 @@ import { extractContent } from './extractContent';
 // GLM 계열만 thinking 비활성화(reasoning 생략 → 생성 속도 7배, timeout 방지).
 export const openaiCompatAdapter: LLMAdapter = {
   id: 'zai', // 대표 id. 실제 id는 ctx에서 온다 (resolveProvider가 결정).
+  implemented: true,
 
   async complete(req: LLMRequest, ctx: ResolvedProvider): Promise<LLMResult> {
     const client = new OpenAI({

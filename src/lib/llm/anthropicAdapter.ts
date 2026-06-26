@@ -24,7 +24,10 @@ import type { LLMAdapter, LLMRequest, LLMResult, ResolvedProvider } from './type
 // return { text, provider: ctx.id, model: ctx.model };
 export const anthropicAdapter: LLMAdapter = {
   id: 'anthropic',
+  implemented: false, // phase2 미구현. index의 폴백 가드가 이 어댑터를 건너뛴다.
 
+  // 방어선: implemented:false라 정상 경로에선 호출되지 않지만,
+  // 누가 직접 호출하면 즉시 "미연결"을 알린다 (침묵 실패 금지).
   async complete(_req: LLMRequest, _ctx: ResolvedProvider): Promise<LLMResult> {
     void _req;
     void _ctx;

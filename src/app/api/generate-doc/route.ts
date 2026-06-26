@@ -186,6 +186,8 @@ async function generateDocument(
     console.error('OpenAI API 오류:', error);
     // API 키가 아예 없으면(데모/개발) mock 허용. 키는 있는데 호출 실패면 throw해서
     // 클라가 mock을 '진짜 문서'로 저장하지 않고 실패로 집계·재시도하게 한다.
+    // TODO(llm-guard): hasKey가 ANTHROPIC/GEMINI를 안 본다. anthropic은 implemented:false라
+    //   실제 선택되지 않으므로 지금은 안 터지지만, 같은 뿌리. 가드와 동일 출처로 정리 필요(도현 보고됨).
     const hasKey = !!process.env.OPENAI_API_KEY || !!process.env.ZAI_API_KEY;
     if (hasKey) {
       throw error instanceof Error ? error : new Error('문서 생성 실패');
