@@ -1,13 +1,14 @@
 // 개인정보처리방침 (베타). 회의 녹취록=민감 업무정보. 국외이전 고지 포함. 법률 검토 필요.
 import Link from 'next/link';
+import { PageContainer } from '@/components/layout/PageContainer';
 
 export const metadata = { title: '개인정보처리방침 - MeetingAutoDocs' };
 
 export default function PrivacyPage() {
   return (
-    <main className="max-w-2xl mx-auto px-5 py-10 text-slate-800 dark:text-slate-200">
+    <PageContainer width="narrow" className="py-10 text-foreground">
       <h1 className="text-2xl font-bold mb-2">개인정보처리방침</h1>
-      <p className="text-sm text-slate-500 mb-8">
+      <p className="text-sm text-muted-foreground mb-8">
         MeetingAutoDocs(이하 &ldquo;서비스&rdquo;)는 이용자의 개인정보를 중요하게 여기며, 아래와 같이 처리합니다. 본 서비스는 <strong>베타 단계</strong>입니다.
       </p>
 
@@ -54,10 +55,10 @@ export default function PrivacyPage() {
         </div>
       </section>
 
-      <p className="mt-10 text-xs text-slate-400">
+      <p className="mt-10 text-xs text-muted-foreground">
         본 방침은 베타 운영용 최소 고지이며 정식 출시 전 법률 검토 후 보완됩니다.
       </p>
-      <Link href="/" className="inline-block mt-4 text-sm text-blue-600 dark:text-blue-400 underline">← 돌아가기</Link>
-    </main>
+      <Link href="/" className="inline-block mt-4 text-sm text-primary underline">← 돌아가기</Link>
+    </PageContainer>
   );
 }

@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { PrdViewer } from '@/components/PrdViewer';
+import { PageContainer } from '@/components/layout/PageContainer';
 import { useMeetingStore } from '@/store/meetingStore';
 import { Loader2, AlertCircle } from 'lucide-react';
 
@@ -60,8 +61,8 @@ export default function SharedPage() {
 
   return (
     <div className="min-h-screen">
-      <div className="bg-amber-50 border-b border-amber-200 px-4 py-2">
-        <div className="max-w-7xl mx-auto flex items-center justify-between">
+      <div className="bg-amber-50 border-b border-amber-200 py-2">
+        <PageContainer width="wide" className="flex items-center justify-between">
           <span className="text-amber-800 text-sm">
             🔗 공유 문서 보기 모드
           </span>
@@ -71,7 +72,7 @@ export default function SharedPage() {
           >
             새 문서 만들기 →
           </button>
-        </div>
+        </PageContainer>
       </div>
       <PrdViewer />
     </div>
