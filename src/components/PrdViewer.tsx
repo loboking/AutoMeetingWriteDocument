@@ -42,6 +42,9 @@ import { CommandPanel } from '@/components/CommandPanel';
 // 전체 내보내기 ZIP에 담을 수 있는 포맷(개별 다운로드와 동일).
 type ExportFormat = 'md' | 'txt' | 'pdf' | 'docx' | 'xlsx' | 'pptx';
 
+// 시각화('visual')를 지원하지 않는 문서. 기본 진입은 'preview'로, '시각화' 탭은 유지.
+const NO_VISUAL: DocType[] = ['prd', 'feature-list', 'screen-list', 'user-story', 'api-spec', 'deployment'];
+
 // PDF 내보내기(html2pdf)용 스타일. 인쇄(handlePrint)와 동일 톤의 컬러 헤더/표 디자인.
 const PDF_EXPORT_CSS = `
   body, div { font-family: 'NanumGothic', 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif; line-height: 1.7; color: #333; }
@@ -153,7 +156,8 @@ export function PrdViewer() {
   const [copied, setCopied] = useState(false);
   const [sharing, setSharing] = useState(false);
   const [showShareSuccess, setShowShareSuccess] = useState(false);
-  const [viewMode, setViewMode] = useState<'raw' | 'preview' | 'visual' | 'terminal'>('visual'); // 기본을 시각화로 변경
+  // 기본 시각화. 단 시각화 미지원 문서로 시작하면 빈 패널 대신 'preview'로 진입.
+  const [viewMode, setViewMode] = useState<'raw' | 'preview' | 'visual' | 'terminal'>(() => NO_VISUAL.includes(activeDoc) ? 'preview' : 'visual');
   const [terminalCommands, setTerminalCommands] = useState<string[]>([]);
   const treeRef = useRef<HTMLDivElement>(null);
   const tabsListRef = useRef<HTMLDivElement>(null);
@@ -217,6 +221,15 @@ export function PrdViewer() {
     setDocuments(getDocumentsFromMeeting());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentMeeting?.id, docCountKey]);
+
+  // 활성 문서 전환 보정: 시각화 미지원 문서로 넘어갈 때 'visual'이면 빈 패널 방지를 위해 'preview'로.
+  // (사용자가 고른 'raw'/'preview'/'terminal'은 건드리지 않음)
+  useEffect(() => {
+    if (viewMode === 'visual' && NO_VISUAL.includes(activeDoc)) {
+      setViewMode('preview');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeDoc]);
 
   // 스크롤 초기화 - 컴포넌트 마운트 시와 activeDoc 변경 시 실행
   useEffect(() => {
@@ -1781,10 +1794,10 @@ export function PrdViewer() {
         </div>
 
         {/* 문서 컨텐츠 영역 */}
-        <div className="px-2 sm:px-6 py-4 sm:py-6" ref={contentRef}>
+        <div className="px-4 sm:px-6 py-4 sm:py-6 space-y-4" ref={contentRef}>
         {/* 다이어그램 렌더 실패 → 재생성 유도 배너 */}
         {diagramBroken && (
-          <div className="mb-4 rounded-lg border border-red-200 bg-red-50 dark:border-red-700 dark:bg-red-900/30 p-3">
+          <Card className="rounded-lg ring-0 border border-red-200 bg-red-50 dark:border-red-700 dark:bg-red-900/30 p-3">
             <div className="flex items-start gap-2">
               <AlertTriangle className="w-4 h-4 mt-0.5 text-red-600 dark:text-red-400 flex-shrink-0" />
               <div className="flex-1 min-w-0">
@@ -1810,12 +1823,12 @@ export function PrdViewer() {
                 </Button>
               </div>
             </div>
-          </div>
+          </Card>
         )}
 
         {/* 저장 후 영향받은 하위 문서 안내 배너 */}
         {impactedDocs.length > 0 && (
-          <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 dark:border-amber-700 dark:bg-amber-900/30 p-3">
+          <Card className="rounded-lg ring-0 border border-amber-200 bg-amber-50 dark:border-amber-700 dark:bg-amber-900/30 p-3">
             <div className="flex items-start gap-2">
               <AlertTriangle className="w-4 h-4 mt-0.5 text-amber-600 dark:text-amber-400 flex-shrink-0" />
               <div className="flex-1 min-w-0">
@@ -1879,11 +1892,11 @@ export function PrdViewer() {
                 <X className="w-4 h-4" />
               </button>
             </div>
-          </div>
+          </Card>
         )}
         {/* 자식 수정 → 상위(부모) 모순 가능성 안내 (비-blocking 인라인, 영향배너와 독립 dismiss) (#8) */}
         {parentWarning && (
-          <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800/50 p-3">
+          <Card className="rounded-lg ring-0 border border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800/50 p-3">
             <div className="flex items-start gap-2">
               <Info className="w-4 h-4 mt-0.5 text-blue-500 dark:text-blue-400 flex-shrink-0" />
               <div className="flex-1 min-w-0">
@@ -1917,7 +1930,7 @@ export function PrdViewer() {
                 <X className="w-4 h-4" />
               </button>
             </div>
-          </div>
+          </Card>
         )}
         <div className="min-w-0">
           {DOCUMENTS.map((doc) => {
@@ -1972,7 +1985,7 @@ export function PrdViewer() {
 
                 {/* 문서 완료 상태 표시 */}
                 {docHasContent && (
-                  <div className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium ${
+                  <div className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium ${
                     isDocCompleted(doc.key)
                       ? 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300'
                       : scrollAtBottom
@@ -2015,9 +2028,15 @@ export function PrdViewer() {
                     <div className="flex flex-wrap gap-2 sm:flex-shrink-0">
                       {docHasContent ? (
                         <>
-                          <Button onClick={handleCopy} variant="outline" size="sm" title="복사">
-                            {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
-                          </Button>
+                          {/* 보조 아이콘 액션(복사·인쇄) 한 묶음 */}
+                          <div className="inline-flex rounded-md border divide-x">
+                            <Button onClick={handleCopy} variant="ghost" size="sm" className="rounded-none" title="복사">
+                              {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                            </Button>
+                            <Button onClick={() => void handlePrint()} variant="ghost" size="sm" className="rounded-none" title="인쇄">
+                              <Printer className="w-4 h-4" />
+                            </Button>
+                          </div>
                           <Button
                             onClick={() => {
                               if (docViewMode === 'raw') setViewMode('preview');
@@ -2030,9 +2049,6 @@ export function PrdViewer() {
                             title="보기 모드"
                           >
                             {docViewMode === 'raw' ? <BookOpen className="w-4 h-4" /> : docViewMode === 'preview' ? <Eye className="w-4 h-4" /> : docViewMode === 'visual' ? <Terminal className="w-4 h-4" /> : <Code className="w-4 h-4" />}
-                          </Button>
-                          <Button onClick={() => void handlePrint()} variant="outline" size="sm" title="인쇄">
-                            <Printer className="w-4 h-4" />
                           </Button>
                           {!docIsEditing && (
                             <Button onClick={() => setIsEditing(true)} variant="outline" size="sm" title="편집">
@@ -2157,7 +2173,7 @@ export function PrdViewer() {
 
                 {isEditing ? (
                 <Card>
-                  <CardContent className="px-2 sm:px-6 pt-4 sm:pt-6">
+                  <CardContent className="py-4 sm:py-6">
                     <Textarea
                       value={editedContent || docContent}
                       onChange={(e) => setEditedContent(e.target.value)}
@@ -2187,7 +2203,7 @@ export function PrdViewer() {
                       </Button>
                     </CardTitle>
                   </CardHeader>
-                  <CardContent className="px-2 sm:px-6 py-4 sm:py-6">
+                  <CardContent className="py-4 sm:py-6">
                     {activeDoc === 'ia' && (
                       <ZoomBox title="정보 구조도(IA)" onZoom={(el) => openHtmlLightbox('정보 구조도(IA)', el)}>
                         <ScreenDiagram content={docContent} type="ia" />
@@ -2230,7 +2246,7 @@ export function PrdViewer() {
                         <WBSViewer content={docContent} />
                       </ZoomBox>
                     )}
-                    {['prd', 'feature-list', 'screen-list', 'user-story', 'api-spec', 'deployment'].includes(activeDoc) && (
+                    {NO_VISUAL.includes(activeDoc) && (
                       <div className="text-center p-4 sm:p-8 text-slate-500 dark:text-slate-400">
                         <p className="mb-4">{doc?.title} 문서는 시각화를 지원하지 않습니다.</p>
                         <Button onClick={() => setViewMode('preview')} variant="outline">
@@ -2293,7 +2309,7 @@ export function PrdViewer() {
                 </div>
               ) : viewMode === 'preview' ? (
                 <Card>
-                  <CardContent className="px-2 sm:px-6 py-4 sm:py-6">
+                  <CardContent className="py-4 sm:py-6">
                     <div className="document-preview max-w-4xl mx-auto bg-white dark:bg-slate-900 rounded-lg shadow-inner p-4 sm:p-8" style={{ fontFamily: "'NanumGothic', Arial, sans-serif" }}>
                       <ReactMarkdown
                         // singleTilde:false → 물결 1개(~)는 일반 텍스트로 처리.
@@ -2385,7 +2401,7 @@ export function PrdViewer() {
                 </Card>
               ) : (
                 <Card>
-                  <CardContent className="px-2 sm:px-6 py-4 sm:py-6">
+                  <CardContent className="py-4 sm:py-6">
                     <pre className="whitespace-pre-wrap font-sans text-sm leading-relaxed text-slate-700 dark:text-slate-300">
                       {docContent}
                     </pre>
@@ -2395,7 +2411,7 @@ export function PrdViewer() {
             </>
             ) : (
               <Card>
-                <CardContent className="text-center px-3 sm:px-6 py-12 sm:py-16">
+                <CardContent className="text-center py-12 sm:py-16">
                   <div className="text-6xl mb-4">{doc.icon}</div>
                   <h3 className="text-lg font-medium mb-2">{doc.title} 문서</h3>
                   <p className="text-slate-500 mb-6">{doc.description}</p>
