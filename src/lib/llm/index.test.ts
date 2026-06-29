@@ -1,10 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { resolveProvider, llmComplete } from './index';
 
-// 2026-06-26 운영버그 재현·방어:
-// ANTHROPIC_API_KEY가 셋(.env.local) 다 SET일 때 resolveProvider가 anthropic 최우선 반환 →
-// anthropicAdapter(미구현)가 complete()에서 throw → 문서생성 100% 실패였다.
-// index의 가드(implemented:true인 첫 provider 선택)로, anthropic은 건너뛰고 zai가 실제 선택돼야 한다.
+// index의 가드: implemented:true인 첫 provider를 선택, 미구현은 건너뛰며 warn.
+// 2026-06-29 anthropicAdapter 구현 완료 → 이제 4개 provider 모두 implemented:true.
+//   (과거: anthropic 미구현 시 zai로 폴백하던 버그 방어 테스트였음.)
+// 가드 자체는 유지 — 향후 새 미구현 어댑터가 추가되면 동일하게 건너뛴다.
 const LLM_KEYS = [
   'ANTHROPIC_API_KEY',
   'GEMINI_API_KEY',
@@ -16,6 +16,7 @@ const LLM_KEYS = [
   'ZAI_MODEL',
   'ZAI_BASE_URL',
   'GEMINI_BASE_URL',
+  'LLM_PROVIDER',
 ];
 
 describe('llm index — 미구현 어댑터 폴백 가드', () => {
@@ -37,24 +38,22 @@ describe('llm index — 미구현 어댑터 폴백 가드', () => {
     vi.restoreAllMocks();
   });
 
-  it('ANTHROPIC+ZAI 둘 다 있을 때, anthropic 미구현이므로 실제 선택은 zai (오늘 버그 방어)', () => {
+  it('ANTHROPIC+ZAI 둘 다 있으면 anthropic 최우선 선택(이제 구현됨)', () => {
     process.env.ANTHROPIC_API_KEY = 'ak';
     process.env.ZAI_API_KEY = 'zk';
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
     const r = resolveProvider();
 
-    expect(r.id).toBe('zai'); // anthropic이 아니라 폴백된 zai
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("provider 'anthropic'")
-    );
+    expect(r.id).toBe('anthropic'); // 구현 완료라 더는 폴백 안 함
+    expect(warn).not.toHaveBeenCalled();
   });
 
-  it('ANTHROPIC만 있으면(구현된 어댑터 없음) throw — 침묵 실패 금지', () => {
+  it('ANTHROPIC만 있으면 anthropic 선택(구현 완료)', () => {
     process.env.ANTHROPIC_API_KEY = 'ak';
     vi.spyOn(console, 'warn').mockImplementation(() => {});
 
-    expect(() => resolveProvider()).toThrow(/구현된 어댑터가 없습니다/);
+    expect(resolveProvider().id).toBe('anthropic');
   });
 
   it('OPENAI(구현됨)만 있으면 폴백 없이 openai 선택, warn 미발생', () => {
@@ -71,22 +70,38 @@ describe('llm index — 미구현 어댑터 폴백 가드', () => {
     expect(() => resolveProvider()).toThrow(/API 키가 없습니다/);
   });
 
-  it('llmComplete도 미구현 anthropic을 건너뛰고 구현 어댑터로 위임한다(실호출 직전까지)', async () => {
-    process.env.ANTHROPIC_API_KEY = 'ak';
+  it('llmComplete가 선택된 provider 어댑터로 위임한다(실호출 직전까지)', async () => {
     process.env.OPENAI_API_KEY = 'ok';
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    process.env.ZAI_API_KEY = 'zk';
+    process.env.LLM_PROVIDER = 'zai'; // z.ai 메인 강제
 
-    // 실제 OpenAI 호출은 막고, 위임된 provider만 확인한다.
+    // 실제 호출은 막고, 위임된 provider만 확인.
     const adapters = await import('./openaiCompatAdapter');
     const spy = vi
       .spyOn(adapters.openaiCompatAdapter, 'complete')
-      .mockResolvedValue({ text: 'ok', provider: 'openai', model: 'gpt-4o' });
+      .mockResolvedValue({ text: 'ok', provider: 'zai', model: 'glm-5-turbo' });
 
     const res = await llmComplete({ prompt: 'hi', maxTokens: 16 });
 
     expect(spy).toHaveBeenCalledTimes(1);
-    // 위임 시 ctx.id가 anthropic이 아니라 openai여야 한다(가드가 골랐으므로)
-    expect(spy.mock.calls[0][1].id).toBe('openai');
+    expect(spy.mock.calls[0][1].id).toBe('zai'); // LLM_PROVIDER가 고른 provider
     expect(res.text).toBe('ok');
+  });
+
+  it('LLM_PROVIDER=anthropic면 anthropic 어댑터로 위임', async () => {
+    process.env.ANTHROPIC_API_KEY = 'ak';
+    process.env.ZAI_API_KEY = 'zk';
+    process.env.LLM_PROVIDER = 'anthropic';
+
+    const { anthropicAdapter } = await import('./anthropicAdapter');
+    const spy = vi
+      .spyOn(anthropicAdapter, 'complete')
+      .mockResolvedValue({ text: 'claude', provider: 'anthropic', model: 'claude-opus-4-8' });
+
+    const res = await llmComplete({ prompt: 'hi', maxTokens: 16 });
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy.mock.calls[0][1].id).toBe('anthropic');
+    expect(res.text).toBe('claude');
   });
 });

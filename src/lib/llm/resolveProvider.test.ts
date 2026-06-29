@@ -14,6 +14,7 @@ const LLM_KEYS = [
   'ZAI_MODEL',
   'ZAI_BASE_URL',
   'GEMINI_BASE_URL',
+  'LLM_PROVIDER',
 ];
 
 describe('resolveProvider', () => {
@@ -82,5 +83,26 @@ describe('resolveProvider', () => {
     process.env.ANTHROPIC_API_KEY = 'ak';
     process.env.ANTHROPIC_MODEL = 'claude-sonnet-4-6';
     expect(resolveProvider().model).toBe('claude-sonnet-4-6');
+  });
+
+  it('LLM_PROVIDER=zai면 OPENAI보다 위에 있어도 z.ai 선택(우선순위 무시)', () => {
+    process.env.OPENAI_API_KEY = 'ok';
+    process.env.ZAI_API_KEY = 'zk';
+    process.env.LLM_PROVIDER = 'zai';
+    expect(resolveProvider().id).toBe('zai');
+  });
+
+  it('LLM_PROVIDER=anthropic면 키 있으면 anthropic으로 끌어올림', () => {
+    process.env.ANTHROPIC_API_KEY = 'ak';
+    process.env.ZAI_API_KEY = 'zk';
+    process.env.LLM_PROVIDER = 'anthropic';
+    expect(resolveProvider().id).toBe('anthropic');
+  });
+
+  it('LLM_PROVIDER 지정 키가 없으면 무시하고 기본 우선순위', () => {
+    process.env.OPENAI_API_KEY = 'ok';
+    process.env.ZAI_API_KEY = 'zk';
+    process.env.LLM_PROVIDER = 'gemini'; // 키 없음
+    expect(resolveProvider().id).toBe('openai'); // 기본 우선순위 유지
   });
 });
