@@ -1,11 +1,11 @@
 // 사용량 미터링: "월 회의 처리 건수" 카운팅/조회/한도. 서버 전용(supabaseAdmin 사용).
 // 결제 전 단계라 ENFORCE_LIMIT=false(기록만)가 기본. 결제 붙으면 true로 켠다.
 import { supabaseAdmin } from '@/lib/supabaseAdmin';
+import { getPlanLimit } from '@/lib/plans';
+import { getUserPlan } from '@/lib/subscriptionStore';
 
 // 차단 스위치: 결제 붙는 순간 'true'로. 기본 꺼둠(지금은 숫자만 쌓음).
 export const ENFORCE_LIMIT = process.env.ENFORCE_LIMIT === 'true';
-// 무료 월 한도(신규 회의 건수). 확장점: getMonthlyLimit가 추후 user_plans로 대체.
-const FREE_MONTHLY_LIMIT = Number(process.env.FREE_MONTHLY_LIMIT) || 3;
 
 // KST(Asia/Seoul) 기준 'YYYY-MM'. period 경계를 서버 단일 기준으로 고정.
 export function getCurrentPeriod(): string {
@@ -45,11 +45,10 @@ export async function countThisPeriod(userId: string, period: string): Promise<n
   return count ?? 0;
 }
 
-// 월 한도. 지금은 상수. 확장점: 결제 붙으면 user_plans(userId) 조회로 교체(호출부 불변).
-// userId 파라미터는 그 확장을 위해 시그니처에 유지.
+// 월 한도. 유저의 구독 플랜(subscriptions)을 읽어 plans.ts의 한도 반환. 구독 없으면 free.
 export async function getMonthlyLimit(userId: string): Promise<number> {
-  void userId;
-  return FREE_MONTHLY_LIMIT;
+  const plan = await getUserPlan(userId);
+  return getPlanLimit(plan);
 }
 
 // 첫 문서 생성 성공 시 1건 기록(멱등). best-effort — 실패해도 문서 응답은 막지 않음.
