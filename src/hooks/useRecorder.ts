@@ -47,7 +47,12 @@ export function useRecorder(): UseRecorderReturn {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
 
-      const mediaRecorder = new MediaRecorder(stream);
+      // 회의 음성용 저비트레이트(opus 32kbps): 1시간 ~14MB -> Whisper 25MB 한계 안에 70분 수용.
+      // codecs=opus 미지원 브라우저면 기본값으로 폴백.
+      const preferred = 'audio/webm;codecs=opus';
+      const mediaRecorder = MediaRecorder.isTypeSupported?.(preferred)
+        ? new MediaRecorder(stream, { mimeType: preferred, audioBitsPerSecond: 32000 })
+        : new MediaRecorder(stream);
       mediaRecorderRef.current = mediaRecorder;
       audioChunksRef.current = [];
 
