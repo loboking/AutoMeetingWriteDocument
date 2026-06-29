@@ -172,7 +172,7 @@ async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
         const res = await authedFetch('/api/generate-doc', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ docType, summary, transcript, meetingInfo, contextDocs, review: false }),
+          body: JSON.stringify({ docType, summary, transcript, meetingInfo, contextDocs, review: false, meetingId }),
           signal: controller.signal,
         });
         if (!res.ok) {

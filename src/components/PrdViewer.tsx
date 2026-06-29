@@ -437,6 +437,7 @@ export function PrdViewer() {
             date: new Date(currentMeeting.createdAt).toLocaleDateString('ko-KR'),
           },
           contextDocs,
+          meetingId: currentMeeting.id,
         }),
       });
 

@@ -20,6 +20,14 @@ import { getTestPlanPrompt } from '@/lib/testPlanTemplate';
 import { reviewDocument, type ReviewResult } from '@/lib/docReviewer';
 import type { MeetingSummary } from '@/types';
 import { llmComplete, resolveProvider } from '@/lib/llm';
+import {
+  ENFORCE_LIMIT,
+  getCurrentPeriod,
+  isMeetingCounted,
+  countThisPeriod,
+  getMonthlyLimit,
+  recordUsage,
+} from '@/lib/usageMetering';
 
 export const runtime = 'nodejs';
 // Vercel Hobby 플랜 상한 = 300초. PRD 병렬 청킹(~3.5분)이 이 안에 완성됨.
@@ -896,7 +904,7 @@ export async function POST(request: NextRequest) {
     if (auth.response) return auth.response;
 
     const body = await request.json();
-    const { docType, summary, transcript, meetingInfo, mode, review = true, contextDocs = {} } = body;
+    const { docType, summary, transcript, meetingInfo, mode, review = true, contextDocs = {}, meetingId } = body;
 
     if (!summary || !meetingInfo) {
       return NextResponse.json(
@@ -936,7 +944,31 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // 사용량 차단 가드(생성 전). meetingId 없으면 레거시 호출이라 스킵(하위호환).
+    // 진행 중 회의(이미 차감됨)의 나머지 문서는 무조건 통과. 신규 회의만 한도 검사.
+    const period = getCurrentPeriod();
+    if (ENFORCE_LIMIT && meetingId) {
+      const counted = await isMeetingCounted(auth.user.id, meetingId);
+      if (!counted) {
+        const [used, limit] = await Promise.all([
+          countThisPeriod(auth.user.id, period),
+          getMonthlyLimit(auth.user.id),
+        ]);
+        if (used >= limit) {
+          return NextResponse.json(
+            { error: 'LIMIT_EXCEEDED', message: `이번 달 무료 한도(${limit}건)를 모두 사용했습니다.`, used, limit },
+            { status: 402 }
+          );
+        }
+      }
+    }
+
     const content = await generateDocument(docType, summary, transcript || '', meetingInfo, contextDocs);
+
+    // 첫 문서 생성 성공 시 1건 기록(멱등). 회의당 평생 1회. best-effort(응답 안 막음).
+    if (meetingId) {
+      await recordUsage(auth.user.id, meetingId, period, docType);
+    }
 
     // 검토 수행
     let docReview;
