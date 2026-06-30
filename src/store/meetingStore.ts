@@ -19,6 +19,12 @@ function generateId(): string {
   });
 }
 
+// DocHelper 대화 메시지 (회의별 persist). 영속 대상이라 직렬화 가능한 형태만.
+export interface ChatMsg {
+  role: 'user' | 'assistant';
+  text: string;
+}
+
 // 전체 생성 진행 상태 (런타임 표시용, persist 제외)
 export interface GenerationProgress {
   currentLevel: number;
@@ -51,6 +57,8 @@ export interface ActiveGenerationJob {
 const MAX_RESUME_ATTEMPTS = 3;
 // 문서당 보관할 버전 수 상한 (localStorage/jsonb 비대 방지)
 const MAX_DOC_VERSIONS = 30;
+// 회의당 보관할 DocHelper 대화 수 상한
+const MAX_CHAT_MESSAGES = 100;
 
 // 직렬화 불가한 캔슬 제어는 store state가 아닌 모듈 스코프에 보관.
 // HMR(dev) 시 모듈 재평가로 끊기지 않도록 globalThis에 캐시.
@@ -349,6 +357,11 @@ interface MeetingStore {
   activeDocType: DocType | null;
   setActiveDocType: (docType: DocType | null) => void;
 
+  // DocHelper 대화 기록 (회의별). persist 포함 → 같은 프로젝트 복귀/새로고침 시 복원.
+  chatMessages: Record<string, ChatMsg[]>;
+  appendChatMessage: (meetingId: string, msg: ChatMsg) => void;
+  clearChatMessages: (meetingId: string) => void;
+
   // 전체 생성 상태 (persist 제외)
   isGenerating: boolean;
   generationProgress: GenerationProgress | null;
@@ -410,6 +423,7 @@ export const useMeetingStore = create<MeetingStore>()(
       currentMeeting: null,
       currentStep: 'idle',
       activeDocType: null,
+      chatMessages: {},
       docStatuses: {},
       docVersions: {},
       frozenDocs: {},
@@ -419,6 +433,20 @@ export const useMeetingStore = create<MeetingStore>()(
       activeJob: null,
 
       setActiveDocType: (docType) => set({ activeDocType: docType }),
+
+      appendChatMessage: (meetingId, msg) => {
+        const all = get().chatMessages;
+        const prev = all[meetingId] ?? [];
+        // 회의당 최근 MAX_CHAT_MESSAGES개만 유지(localStorage 비대 방지)
+        const next = [...prev, msg].slice(-MAX_CHAT_MESSAGES);
+        set({ chatMessages: { ...all, [meetingId]: next } });
+      },
+
+      clearChatMessages: (meetingId) => {
+        const all = { ...get().chatMessages };
+        delete all[meetingId];
+        set({ chatMessages: all });
+      },
 
       createMeeting: (title) => {
         const now = new Date();
@@ -569,6 +597,7 @@ export const useMeetingStore = create<MeetingStore>()(
           meetings: [],
           currentMeeting: null,
           currentStep: 'idle',
+          chatMessages: {},
           docStatuses: {},
           docVersions: {},
           frozenDocs: {},
@@ -581,6 +610,8 @@ export const useMeetingStore = create<MeetingStore>()(
 
       deleteMeeting: (id) => {
         set({ meetings: get().meetings.filter((m) => m.id !== id) });
+        // 삭제된 회의의 DocHelper 대화도 정리(고아 데이터 방지)
+        get().clearChatMessages(id);
         // 현재 열려있는 회의를 지우면 화면도 닫는다(잔상 방지)
         if (get().currentMeeting?.id === id) {
           set({ currentMeeting: null, currentStep: 'idle' });
@@ -887,6 +918,7 @@ export const useMeetingStore = create<MeetingStore>()(
       partialize: (state) => ({
         meetings: state.meetings,
         currentMeeting: state.currentMeeting,
+        chatMessages: state.chatMessages,
         docStatuses: state.docStatuses,
         docVersions: state.docVersions,
         frozenDocs: state.frozenDocs,
