@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { Meeting, MeetingStep, DocType, DocStatus } from '@/types';
+import type { Meeting, MeetingStep, DocType, DocStatus, DocVersion, DocVersionSource } from '@/types';
 import { DOCUMENTS, DEPENDENCIES, docTypeToField, getAllDependents, topoSortLevels, levelsFor, topoSortDocs } from '@/lib/documentUtils';
 import { authedFetch } from '@/lib/authFetch';
 import { mapWithConcurrency } from '@/lib/concurrency';
@@ -48,6 +48,8 @@ export interface ActiveGenerationJob {
 
 // error로 끝난 잡을 복귀 시 몇 번까지 자동 재개할지. 초과하면 사용자 수동 재생성에 위임.
 const MAX_RESUME_ATTEMPTS = 3;
+// 문서당 보관할 버전 수 상한 (localStorage/jsonb 비대 방지)
+const MAX_DOC_VERSIONS = 30;
 
 // 직렬화 불가한 캔슬 제어는 store state가 아닌 모듈 스코프에 보관.
 // HMR(dev) 시 모듈 재평가로 끊기지 않도록 globalThis에 캐시.
@@ -218,6 +220,13 @@ async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
     if (content) {
       generated[docType] = content;
       const field = docTypeToField(docType);
+      // 덮어쓰기 직전 기존 내용을 버전 스냅샷으로 보존(재생성 이력). 최초 생성이면 기존 빈값이라 skip.
+      const meetingForSnap = get().meetings.find((m) => m.id === meetingId)
+        ?? (get().currentMeeting?.id === meetingId ? get().currentMeeting : undefined);
+      const prevContent = (meetingForSnap?.[field as keyof Meeting] as string | undefined) ?? '';
+      if (prevContent.trim() && prevContent !== content) {
+        get().recordDocVersion(meetingId, docType, prevContent, 'generated', '재생성 전 버전');
+      }
       // 저장은 함수형 set으로 — 병렬 worker 간 last-write 경쟁 방지
       if (get().currentMeeting?.id === meetingId) {
         get().updateCurrentMeeting({ [field]: content });
@@ -335,6 +344,9 @@ interface MeetingStore {
   meetings: Meeting[];
   currentMeeting: Meeting | null;
   currentStep: MeetingStep;
+  // 현재 보고 있는 문서 타입 (PrdViewer가 동기화 → 채팅 도우미가 컨텍스트로 사용). persist 제외.
+  activeDocType: DocType | null;
+  setActiveDocType: (docType: DocType | null) => void;
 
   // 전체 생성 상태 (persist 제외)
   isGenerating: boolean;
@@ -365,6 +377,11 @@ interface MeetingStore {
   getNextIncompleteDoc: () => DocType | null;
   setAutoAdvance: (enabled: boolean) => void;
 
+  // 문서 버전 히스토리 액션
+  recordDocVersion: (meetingId: string, docType: DocType, content: string, source: DocVersionSource, note?: string) => void;
+  getDocVersions: (meetingId: string, docType: DocType) => DocVersion[];
+  restoreDocVersion: (meetingId: string, versionId: string) => void;
+
   // 문서 상태 관리 액션
   setDocStatus: (meetingId: string, docType: DocType, status: DocStatus) => void;
   getDocStatus: (meetingId: string, docType: DocType) => DocStatus;
@@ -391,6 +408,7 @@ export const useMeetingStore = create<MeetingStore>()(
       meetings: [],
       currentMeeting: null,
       currentStep: 'idle',
+      activeDocType: null,
       docStatuses: {},
       docVersions: {},
       frozenDocs: {},
@@ -398,6 +416,8 @@ export const useMeetingStore = create<MeetingStore>()(
       generationProgress: null,
       generatingMeetingId: null,
       activeJob: null,
+
+      setActiveDocType: (docType) => set({ activeDocType: docType }),
 
       createMeeting: (title) => {
         const now = new Date();
@@ -438,6 +458,85 @@ export const useMeetingStore = create<MeetingStore>()(
             set({ meetings: updatedMeetings });
           }
         }
+      },
+
+      // 문서 버전 히스토리 ----------------------------------------------------
+      // 문서 내용이 바뀌기 "직전" 호출 → 현재(=이전) 내용을 스냅샷으로 1건 적재.
+      // 문서별 최근 MAX_DOC_VERSIONS개만 유지(jsonb 비대 방지). meetings 배열을
+      // 갱신하므로 AuthGate 구독이 자동 디바운스 upsert → Supabase 영속화.
+      recordDocVersion: (meetingId, docType, content, source, note) => {
+        if (!content || !content.trim()) return; // 빈 문서는 기록 안 함
+        const apply = (m: Meeting): Meeting => {
+          const prev = m.docVersions ?? [];
+          // 같은 문서의 직전 버전과 내용 동일하면 중복 적재 skip
+          const lastSame = [...prev].reverse().find((v) => v.docType === docType);
+          if (lastSame && lastSame.content === content) return m;
+          const entry: DocVersion = {
+            id: generateId(),
+            docType,
+            content,
+            createdAt: new Date(),
+            source,
+            note,
+          };
+          // 이 문서 타입 버전만 골라 cap 적용(다른 문서 버전은 보존)
+          const others = prev.filter((v) => v.docType !== docType);
+          const sameType = prev.filter((v) => v.docType === docType);
+          const trimmed = [...sameType, entry].slice(-MAX_DOC_VERSIONS);
+          return { ...m, docVersions: [...others, ...trimmed], updatedAt: new Date() };
+        };
+        const cur = get().currentMeeting;
+        const meetings = get().meetings;
+        const idx = meetings.findIndex((m) => m.id === meetingId);
+        const updates: Partial<MeetingStore> = {};
+        if (idx >= 0) {
+          const next = [...meetings];
+          next[idx] = apply(next[idx]);
+          updates.meetings = next;
+        }
+        if (cur && cur.id === meetingId) updates.currentMeeting = apply(cur);
+        set(updates);
+      },
+
+      getDocVersions: (meetingId, docType) => {
+        const m = get().meetings.find((x) => x.id === meetingId)
+          ?? (get().currentMeeting?.id === meetingId ? get().currentMeeting : undefined);
+        const list = (m?.docVersions ?? []).filter((v) => v.docType === docType);
+        // 최신 우선
+        return [...list].sort(
+          (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+        );
+      },
+
+      // 과거 버전으로 복원: 현재 내용을 먼저 'restored' 스냅샷으로 남기고(무손실),
+      // 해당 버전 content를 현재 문서 필드에 반영.
+      restoreDocVersion: (meetingId, versionId) => {
+        const m = get().meetings.find((x) => x.id === meetingId)
+          ?? (get().currentMeeting?.id === meetingId ? get().currentMeeting : undefined);
+        if (!m) return;
+        const target = (m.docVersions ?? []).find((v) => v.id === versionId);
+        if (!target) return;
+        const field = docTypeToField(target.docType) as keyof Meeting;
+        const currentContent = (m[field] as string | undefined) ?? '';
+        // 1) 현재 내용 보존(복원 직전 스냅샷)
+        if (currentContent.trim()) {
+          get().recordDocVersion(meetingId, target.docType, currentContent, 'restored',
+            `복원 전 자동 백업 (${new Date().toLocaleString('ko-KR')})`);
+        }
+        // 2) 선택 버전 내용 반영
+        if (get().currentMeeting?.id === meetingId) {
+          get().updateCurrentMeeting({ [field]: target.content });
+        } else {
+          const meetings = get().meetings;
+          const idx = meetings.findIndex((x) => x.id === meetingId);
+          if (idx >= 0) {
+            const next = [...meetings];
+            next[idx] = { ...next[idx], [field]: target.content, updatedAt: new Date() };
+            set({ meetings: next });
+          }
+        }
+        // 복원된 문서는 최신 취급
+        get().setDocStatus(meetingId, target.docType, 'latest');
       },
 
       saveCurrentMeeting: () => {

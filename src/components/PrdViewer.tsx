@@ -98,11 +98,18 @@ export function PrdViewer() {
     canRegenerateDoc,
     setDocStatus,
     incrementDocVersion,
-    markDependentsOutdated
+    markDependentsOutdated,
+    recordDocVersion
   } = useMeetingStore();
 
   // 항상 PRD로 시작 - 초기화 함수 사용
   const [activeDoc, setActiveDoc] = useState<DocType>('prd');
+
+  // 현재 보고 있는 문서를 전역에 반영 → 채팅 도우미가 컨텍스트로 사용
+  const setActiveDocType = useMeetingStore(s => s.setActiveDocType);
+  useEffect(() => {
+    setActiveDocType(activeDoc);
+  }, [activeDoc, setActiveDocType]);
 
   // currentMeeting에서 문서들을 초기화
   const getDocumentsFromMeeting = (): Record<DocType, string> => ({
@@ -680,6 +687,11 @@ export function PrdViewer() {
   // 실제 저장 수행. major=true면 하위 전파 + 영향 배너, 부모 모순 경고.
   const performSaveEdit = (major: boolean) => {
     const savedDoc = activeDoc;
+    // 덮어쓰기 직전 기존 내용을 버전으로 보존 (수동 편집 이력)
+    const prevContent = documents[savedDoc] ?? '';
+    if (currentMeeting?.id && prevContent.trim() && prevContent !== editedContent) {
+      recordDocVersion(currentMeeting.id, savedDoc, prevContent, 'manual-edit');
+    }
     setDocuments(prev => ({ ...prev, [savedDoc]: editedContent }));
     updateCurrentMeeting({ [docTypeToField(savedDoc)]: editedContent });
 

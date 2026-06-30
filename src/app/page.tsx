@@ -33,6 +33,7 @@ import MeetingRecorder from '@/components/MeetingRecorder';
 import TranscriptViewer from '@/components/TranscriptViewer';
 import SummaryViewer from '@/components/SummaryViewer';
 import PrdViewer from '@/components/PrdViewer';
+import DocAssistant from '@/components/DocAssistant';
 import { ProjectList } from '@/components/ProjectList';
 import { PageContainer } from '@/components/layout/PageContainer';
 import { DateFormat } from '@/components/DateFormat';
@@ -482,6 +483,9 @@ export default function Home() {
           </div>
         )}
       </PageContainer>
+
+      {/* 문서 채팅 도우미 (플로팅) — 회의/문서 없으면 스스로 숨김 */}
+      <DocAssistant />
 
       {/* 새 회의 확인 다이얼로그 */}
       {showNewMeetingConfirm && (

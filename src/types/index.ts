@@ -14,6 +14,22 @@ export interface DocVersionInfo {
   contentHash?: string;
 }
 
+// 문서 버전 스냅샷 (히스토리/복원용). 문서 내용이 바뀔 때 이전 값을 1건씩 기록.
+export type DocVersionSource =
+  | 'generated' // AI 최초 생성/재생성
+  | 'manual-edit' // 사용자 직접 편집 저장
+  | 'ai-edit' // 채팅 도우미 수정 적용
+  | 'restored'; // 과거 버전으로 복원
+
+export interface DocVersion {
+  id: string;
+  docType: DocType;
+  content: string; // 스냅샷 시점의 문서 전체 마크다운
+  createdAt: Date;
+  source: DocVersionSource;
+  note?: string; // ai-edit 시 사용자 지시문, restored 시 원본 버전 시각 등
+}
+
 // 문서 타입 (14개 기획 문서)
 export type DocType =
   | 'prd'
@@ -64,6 +80,8 @@ export interface Meeting {
   // 학습 완료 추적
   completedDocs?: DocType[];
   autoAdvance?: boolean; // 자동 넘김 설정
+  // 문서 버전 히스토리 (문서별 최근 N개만 유지, jsonb data에 함께 영속화)
+  docVersions?: DocVersion[];
 }
 
 // 요약 결과 타입
