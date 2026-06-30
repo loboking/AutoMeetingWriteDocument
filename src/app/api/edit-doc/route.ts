@@ -96,6 +96,7 @@ export async function POST(request: NextRequest) {
     '- 수정(외부 사실 필요): {"mode":"edit","needSearch":true,"searchQuery":"검색에 쓸 핵심 질의(한국어)","reply":"무엇을 조사할지 한 줄"}',
     '',
     'needSearch=true는 "당신이 확실히 알지 못하는 실제 기업/서비스명·시장규모·통계·법규·최신 동향 등"이 필요할 때만. 문체 다듬기·요약·구조 변경 등엔 절대 쓰지 않는다(그땐 content를 바로 작성).',
+    'chat 답변(reply)은 핵심만 간결하게 3~5문장 이내로. 불필요하게 장황하게 늘리지 않는다.',
     '',
     ...commonRules,
   ].join('\n');
