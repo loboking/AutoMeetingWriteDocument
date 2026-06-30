@@ -126,41 +126,29 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ mode: 'chat', reply: p1.reply, provider: r1.provider });
     }
 
-    // ── 2차: 검색 필요 → web_search 켜서 실제 정보로 수정안 작성 ──
+    // 검색과 문서생성을 분리(각 단계 짧게 → 전체 시간/timeout 감소):
+    //   2차=검색해서 "사실 bullet"만 수집(작은 출력, 빠름) → 3차=그 사실로 문서 수정(검색 없음, 빠름)
     const searchQuery = typeof p1.searchQuery === 'string' && p1.searchQuery.trim() ? p1.searchQuery.trim() : instruction;
-    const system2 = [
-      `당신은 숙련된 기획자 "DocHelper"입니다. 웹 검색으로 확인된 실제 사실을 반영해 "${label}" 문서를 수정합니다.`,
-      '',
-      '제공된 웹 검색으로 아래 조사 주제의 실제 정보(실명·수치 등)를 찾아 반영하세요. 검색으로 확인된 사실만 쓰고, 못 찾은 값은 "[확인 필요]"로 표기합니다.',
-      `조사 주제: ${searchQuery}`,
-      '',
-      '아래 JSON으로만 응답: {"mode":"edit","reply":"무엇을 조사해 어떻게 반영했는지 1~2문장","content":"수정된 문서 전체"}',
-      '',
-      ...commonRules,
-    ].join('\n');
-
-    // 2차는 별도 try: 검색이 느려 실패(timeout)해도 "모의"로 빠지지 말고 검색 없이라도 수정안을 준다.
+    let researchFacts = '';
     try {
       const r2 = await llmComplete({
-        prompt: `${docBlock}\n\n위 문서에 검색 결과를 반영해 edit JSON으로 응답하세요.`,
-        system: system2,
-        maxTokens: 16384,
-        temperature: 0.4,
-        timeoutMs: 210_000, // 함수 maxDuration(300s) 안전 마진
-        maxRetries: 0, // 재시도하면 시간 2배 → timeout 위험. 1회만.
-        enableWebSearch: true, // 2차에서만 검색
+        prompt: `다음 주제로 웹을 검색해 확인된 사실만 간결한 한국어 bullet로 정리하세요(최대 10줄). 실제 명칭·수치 위주, 출처 불명확하면 제외.\n\n주제: ${searchQuery}`,
+        system: '당신은 리서처입니다. 웹 검색 결과에서 확인된 사실만 bullet로 출력합니다. 설명·서론 없이 "- 사실" 목록만.',
+        maxTokens: 1500, // 사실 수집만 → 작게 잡아 빠르게
+        temperature: 0.2,
+        timeoutMs: 150_000,
+        maxRetries: 0,
+        enableWebSearch: true,
       });
-      const p2 = parseModelJson(r2.text ?? '');
-      if (p2 && p2.mode === 'edit' && typeof p2.content === 'string' && p2.content.trim()) {
-        return NextResponse.json({ mode: 'edit', reply: p2.reply || '검색 결과를 반영했습니다.', content: p2.content, provider: r2.provider, model: r2.model, searched: true });
-      }
+      researchFacts = (r2.text ?? '').trim();
     } catch (e2) {
-      console.error('[edit-doc] 2차(검색) 실패 → 검색없이 폴백:', e2 instanceof Error ? e2.message : e2);
+      console.error('[edit-doc] 검색 단계 실패 → 검색없이 진행:', e2 instanceof Error ? e2.message : e2);
     }
 
-    // 2차 실패/빈응답 → 검색 없이라도 수정안 생성(빠름). "모의"로 떨어지지 않게.
+    // 3차: 수집된 사실(있으면)을 문서에 반영. 검색 없음 → thinking off로 빠름.
+    const factsBlock = researchFacts ? `\n참고(웹 검색으로 확인된 사실):\n${researchFacts}\n` : '';
     const r3 = await llmComplete({
-      prompt: `${docBlock}\n\n위 문서를 요청대로 수정해 edit JSON으로 응답하세요. 외부 정보가 필요하면 알고 있는 범위에서 반영하고 불확실한 값은 "[확인 필요]"로 표기하세요.`,
+      prompt: `${docBlock}\n${factsBlock}\n위 문서를 요청대로 수정해 edit JSON으로 응답하세요. 참고 사실이 있으면 실제 명칭·수치를 반영하고, 불확실한 값은 "[확인 필요]"로 표기하세요. 가공의 가명은 쓰지 마세요.`,
       system: [
         `당신은 숙련된 기획자 "DocHelper"입니다. "${label}" 문서를 요청대로 수정합니다.`,
         '아래 JSON으로만 응답: {"mode":"edit","reply":"바꾼 내용 요약","content":"수정된 문서 전체"}',
@@ -169,12 +157,13 @@ export async function POST(request: NextRequest) {
       ].join('\n'),
       maxTokens: 16384,
       temperature: 0.4,
-      timeoutMs: 60_000,
+      timeoutMs: 90_000,
       maxRetries: 1,
     });
     const p3 = parseModelJson(r3.text ?? '');
     if (p3 && p3.mode === 'edit' && typeof p3.content === 'string' && p3.content.trim()) {
-      return NextResponse.json({ mode: 'edit', reply: (p3.reply || '수정했습니다.') + ' (실시간 검색은 일시적으로 건너뛰었어요)', content: p3.content, provider: r3.provider, model: r3.model });
+      const note = researchFacts ? '' : ' (실시간 검색은 일시적으로 건너뛰었어요)';
+      return NextResponse.json({ mode: 'edit', reply: (p3.reply || '수정했습니다.') + note, content: p3.content, provider: r3.provider, model: r3.model, searched: !!researchFacts });
     }
     // 그래도 안되면 1차 reply라도 대화로
     return NextResponse.json({ mode: 'chat', reply: p1.reply, provider: r3.provider });
