@@ -41,6 +41,8 @@ export default function DocAssistant() {
   const [tab, setTab] = useState<'chat' | 'history'>('chat');
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
+  // 진행 단계 표시(경과 시간 기반) — 2분 걸려도 멈춘 느낌 안 들게
+  const [progressMsg, setProgressMsg] = useState('생각하는 중...');
   // 제안된 수정본 (diff 미리보기 → 적용 대기). 휘발성 UI 상태라 영속 안 함.
   const [proposal, setProposal] = useState<{ docType: DocType; before: string; after: string; instruction: string } | null>(null);
   // 적용 후 "연관 문서도 갱신" 제안 (사용자 클릭 시 regenerateDocs). 휘발성.
@@ -113,6 +115,15 @@ export default function DocAssistant() {
     setInput('');
     addMsg({ role: 'user', text: instruction });
     setBusy(true);
+    // 경과 시간 기반 단계 표시 (서버는 단일 응답이라 클라에서 안내). 길게 걸려도 멈춘 느낌 방지.
+    setProgressMsg('생각하는 중...');
+    const startedAt = Date.now();
+    const ticker = setInterval(() => {
+      const s = (Date.now() - startedAt) / 1000;
+      if (s > 70) setProgressMsg('거의 다 됐어요...');
+      else if (s > 30) setProgressMsg('문서를 다듬는 중...');
+      else if (s > 8) setProgressMsg('자료를 찾아보는 중...');
+    }, 1000);
     try {
       const res = await authedFetch('/api/edit-doc', {
         method: 'POST',
@@ -149,6 +160,7 @@ export default function DocAssistant() {
       const msg = err instanceof Error ? err.message : '오류가 발생했습니다.';
       addMsg({ role: 'assistant', text: `⚠️ ${msg}` });
     } finally {
+      clearInterval(ticker);
       setBusy(false);
     }
   };
@@ -341,7 +353,7 @@ export default function DocAssistant() {
 
                 {busy && (
                   <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <Loader2 className="h-4 w-4 animate-spin" /> 생각하는 중...
+                    <Loader2 className="h-4 w-4 animate-spin" /> {progressMsg}
                   </div>
                 )}
               </div>
