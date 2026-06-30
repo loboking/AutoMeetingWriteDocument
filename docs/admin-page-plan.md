@@ -14,7 +14,7 @@
 
 **특정 이메일 화이트리스트.** DB role 컬럼 도입 안 함(1인 운영에 과함).
 
-- 화이트리스트: 환경변수 `ADMIN_EMAILS`(쉼표구분) 또는 상수. 1차는 `wisemanroot@gmail.com`.
+- 화이트리스트: 환경변수 `ADMIN_EMAILS`(쉼표구분) 또는 상수. 1차는 `loboking@nate.com`.
 - 서버 가드: `src/lib/apiAuth.ts`에 `requireAdmin(request)` 추가 — `requireUser`로 user 얻은 뒤
   `user.email`이 화이트리스트에 있는지 검사. 아니면 403.
 - 클라 가드: `/admin` 페이지는 로그인 + 이메일 확인 후에만 렌더(아니면 홈 리다이렉트).
@@ -81,7 +81,7 @@
 
 ### 관리자 가드 (apiAuth.ts 확장)
 ```
-ADMIN_EMAILS = (process.env.ADMIN_EMAILS || 'wisemanroot@gmail.com').split(',')
+ADMIN_EMAILS = (process.env.ADMIN_EMAILS || 'loboking@nate.com').split(',')
 export async function requireAdmin(request): Promise<AuthResult> {
   const auth = await requireUser(request);
   if (auth.response) return auth;
@@ -92,7 +92,7 @@ export async function requireAdmin(request): Promise<AuthResult> {
 
 ## 6. 수동 작업 (배포 전 필수)
 1. Supabase 대시보드 → Settings → API → **service_role 키** 복사 → `SUPABASE_SERVICE_ROLE_KEY` 환경변수(Vercel + 로컬). **절대 공개 금지.**
-2. `ADMIN_EMAILS` 환경변수 설정(미설정 시 코드 기본값 wisemanroot@gmail.com).
+2. `ADMIN_EMAILS` 환경변수 설정(미설정 시 코드 기본값 loboking@nate.com).
 3. (Phase B) `usage_events` 테이블 SQL 실행.
 
 ## 7. 구현 순서 (권장)

@@ -11,7 +11,7 @@ export interface Plan {
 }
 
 export const PLANS: Record<PlanId, Plan> = {
-  free: { id: 'free', name: 'Free', priceKRW: 0, monthlyMeetings: 3, seats: 1 },
+  free: { id: 'free', name: 'Free', priceKRW: 0, monthlyMeetings: 1, seats: 1 },
   pro: { id: 'pro', name: 'Pro', priceKRW: 9900, monthlyMeetings: 10, seats: 1 },
   team: { id: 'team', name: 'Team', priceKRW: 49900, monthlyMeetings: 55, seats: 5 },
 };
