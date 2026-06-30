@@ -4,6 +4,7 @@ import type { Meeting, MeetingStep, DocType, DocStatus, DocVersion, DocVersionSo
 import { DOCUMENTS, DEPENDENCIES, docTypeToField, getAllDependents, topoSortLevels, levelsFor, topoSortDocs } from '@/lib/documentUtils';
 import { authedFetch } from '@/lib/authFetch';
 import { mapWithConcurrency } from '@/lib/concurrency';
+import { deleteMeetingRow } from '@/lib/meetingsSync';
 
 // UUID 생성 유틸 (브라우저 호환성)
 function generateId(): string {
@@ -580,6 +581,13 @@ export const useMeetingStore = create<MeetingStore>()(
 
       deleteMeeting: (id) => {
         set({ meetings: get().meetings.filter((m) => m.id !== id) });
+        // 현재 열려있는 회의를 지우면 화면도 닫는다(잔상 방지)
+        if (get().currentMeeting?.id === id) {
+          set({ currentMeeting: null, currentStep: 'idle' });
+        }
+        // 서버(Supabase)에서도 삭제 — 안 하면 다음 동기화에 부활. best-effort(비로그인/실패 무시).
+        // RLS 때문에 클라에서 직접 호출(서버 라우트 X). deleteMeetingRow 내부에서 에러 로깅.
+        void deleteMeetingRow(id);
       },
 
       setCurrentMeeting: (meeting) => {
