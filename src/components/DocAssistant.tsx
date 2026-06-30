@@ -11,7 +11,7 @@ import { cn } from '@/lib/utils';
 import type { DocType, DocVersionSource } from '@/types';
 
 // 버튼/패널에 노출되는 도우미 이름 (한 곳에서만 수정)
-const ASSISTANT_NAME = '기획 도우미';
+const ASSISTANT_NAME = 'DocHelper';
 
 interface ChatMsg {
   role: 'user' | 'assistant';
