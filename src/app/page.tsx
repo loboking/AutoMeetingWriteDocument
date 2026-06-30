@@ -1,8 +1,10 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { Mic, Play, Upload, FileText, Download, FileUp, FolderOpen, X, Plus } from 'lucide-react';
-import { Button } from '@/components/ui/button';
+import { Mic, Play, Upload, FileText, Download, FileUp, FolderOpen, X, Plus, CreditCard } from 'lucide-react';
+import Link from 'next/link';
+import { Button, buttonVariants } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
@@ -249,6 +251,17 @@ export default function Home() {
                   <Badge variant="secondary" className="ml-0.5 sm:ml-1 px-1 sm:px-1.5 py-0 text-[10px] sm:text-xs">{meetings.length}</Badge>
                 )}
               </Button>
+              <Link
+                href="/pricing"
+                aria-label="요금제 보기"
+                className={cn(
+                  buttonVariants({ variant: 'outline', size: 'sm' }),
+                  'gap-1.5 sm:gap-2 h-8 sm:h-9 px-2 sm:px-2.5'
+                )}
+              >
+                <CreditCard className="w-3.5 h-3.5 sm:w-4 sm:h-4" aria-hidden="true" />
+                <span className="hidden xs:inline">요금제</span>
+              </Link>
             </div>
           </div>
         </header>
