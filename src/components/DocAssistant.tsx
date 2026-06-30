@@ -108,6 +108,8 @@ export default function DocAssistant() {
       addMsg({ role: 'assistant', text: '먼저 수정할 문서를 선택하거나 생성해주세요.' });
       return;
     }
+    // 직전 대화 맥락 전송 (최근 12개) — "그걸 수정해줘"의 '그거'를 AI가 알도록
+    const history = messages.slice(-12).map((m) => ({ role: m.role, text: m.text }));
     setInput('');
     addMsg({ role: 'user', text: instruction });
     setBusy(true);
@@ -119,26 +121,30 @@ export default function DocAssistant() {
           docType: targetDoc,
           currentContent: targetContent,
           instruction,
+          history,
           title: currentMeeting.title,
         }),
       });
       if (!res.ok) {
         const e = await res.json().catch(() => ({}));
-        throw new Error(e.error || '수정 요청에 실패했습니다.');
+        throw new Error(e.error || '요청에 실패했습니다.');
       }
       const data = await res.json();
-      const after: string = data.content ?? '';
-      if (!after.trim() || after.trim() === targetContent) {
-        addMsg({ role: 'assistant', text: '변경할 내용이 없습니다. 지시를 더 구체적으로 적어주세요.' });
+
+      // edit 모드: 수정안 → diff 제안
+      if (data.mode === 'edit' && typeof data.content === 'string' && data.content.trim()) {
+        const after: string = data.content;
+        if (after.trim() === targetContent) {
+          addMsg({ role: 'assistant', text: data.reply || '이미 반영돼 있어 바뀐 내용이 없어요.' });
+          return;
+        }
+        setProposal({ docType: targetDoc, before: targetContent, after, instruction });
+        addMsg({ role: 'assistant', text: data.reply || '수정안을 만들었어요. 아래 변경 내용을 확인하고 적용하세요.' });
         return;
       }
-      setProposal({ docType: targetDoc, before: targetContent, after, instruction });
-      addMsg({
-        role: 'assistant',
-        text: data.mock
-          ? '(모의) 키 미설정이라 실제 수정은 안 됐지만 미리보기를 표시합니다.'
-          : '수정안을 만들었어요. 아래 변경 내용을 확인하고 적용하세요.',
-      });
+
+      // chat 모드(기본): 대화 답변만
+      addMsg({ role: 'assistant', text: data.reply || '다시 한 번 말씀해 주세요.' });
     } catch (err) {
       const msg = err instanceof Error ? err.message : '오류가 발생했습니다.';
       addMsg({ role: 'assistant', text: `⚠️ ${msg}` });
@@ -265,8 +271,9 @@ export default function DocAssistant() {
               <div className="space-y-3">
                 {messages.length === 0 && !proposal && (
                   <div className="rounded-lg bg-muted/50 p-3 text-xs text-muted-foreground">
-                    <p className="mb-1 font-medium text-foreground">{docTitle(targetDoc ?? 'prd')} 문서를 함께 다듬어요.</p>
-                    예: &quot;보안 요구사항 섹션 추가&quot;, &quot;타깃 사용자를 B2B로 바꿔줘&quot;, &quot;표를 더 구체적으로&quot;
+                    <p className="mb-1 font-medium text-foreground">{docTitle(targetDoc ?? 'prd')} 문서를 함께 논의하고 다듬어요.</p>
+                    <p className="mb-1">먼저 편하게 물어보세요. 예: &quot;타깃 고객이 너무 넓지 않아?&quot;, &quot;이 기능 우선순위 어때?&quot;</p>
+                    수정하려면: &quot;그럼 B2B 중소기업으로 바꿔줘&quot;, &quot;보안 요구사항 섹션 추가해줘&quot; — 수정안을 미리보기로 보여드려요.
                   </div>
                 )}
                 {messages.map((m, i) => (
@@ -334,7 +341,7 @@ export default function DocAssistant() {
 
                 {busy && (
                   <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <Loader2 className="h-4 w-4 animate-spin" /> 문서를 수정하는 중...
+                    <Loader2 className="h-4 w-4 animate-spin" /> 생각하는 중...
                   </div>
                 )}
               </div>
@@ -375,7 +382,7 @@ export default function DocAssistant() {
                       void send();
                     }
                   }}
-                  placeholder={`${docTitle(targetDoc ?? 'prd')} 수정 지시를 입력... (Enter 전송, Shift+Enter 줄바꿈)`}
+                  placeholder={`${docTitle(targetDoc ?? 'prd')}에 대해 묻거나 수정 요청... (Enter 전송, Shift+Enter 줄바꿈)`}
                   rows={2}
                   disabled={busy}
                   className="flex-1 resize-none rounded-lg border border-border bg-background px-2.5 py-2 text-sm outline-none focus:border-primary disabled:opacity-50"
