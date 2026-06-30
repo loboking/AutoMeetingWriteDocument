@@ -134,9 +134,9 @@ export async function POST(request: NextRequest) {
       const r2 = await llmComplete({
         prompt: `다음 주제로 웹을 검색해 확인된 사실만 간결한 한국어 bullet로 정리하세요(최대 10줄). 실제 명칭·수치 위주, 출처 불명확하면 제외.\n\n주제: ${searchQuery}`,
         system: '당신은 리서처입니다. 웹 검색 결과에서 확인된 사실만 bullet로 출력합니다. 설명·서론 없이 "- 사실" 목록만.',
-        maxTokens: 1500, // 사실 수집만 → 작게 잡아 빠르게
+        maxTokens: 1200, // 사실 수집만 → 작게 잡아 빠르게
         temperature: 0.2,
-        timeoutMs: 150_000,
+        timeoutMs: 75_000, // 검색은 빨리 포기하고 3차로(누적 timeout 방지). 못 찾으면 검색없이 수정.
         maxRetries: 0,
         enableWebSearch: true,
       });
@@ -146,27 +146,40 @@ export async function POST(request: NextRequest) {
     }
 
     // 3차: 수집된 사실(있으면)을 문서에 반영. 검색 없음 → thinking off로 빠름.
+    // 별도 try: 3차가 timeout나도 바깥 "모의"로 빠지지 않고 명확히 안내.
     const factsBlock = researchFacts ? `\n참고(웹 검색으로 확인된 사실):\n${researchFacts}\n` : '';
-    const r3 = await llmComplete({
-      prompt: `${docBlock}\n${factsBlock}\n위 문서를 요청대로 수정해 edit JSON으로 응답하세요. 참고 사실이 있으면 실제 명칭·수치를 반영하고, 불확실한 값은 "[확인 필요]"로 표기하세요. 가공의 가명은 쓰지 마세요.`,
-      system: [
-        `당신은 숙련된 기획자 "DocHelper"입니다. "${label}" 문서를 요청대로 수정합니다.`,
-        '아래 JSON으로만 응답: {"mode":"edit","reply":"바꾼 내용 요약","content":"수정된 문서 전체"}',
-        '',
-        ...commonRules,
-      ].join('\n'),
-      maxTokens: 16384,
-      temperature: 0.4,
-      timeoutMs: 90_000,
-      maxRetries: 1,
-    });
-    const p3 = parseModelJson(r3.text ?? '');
-    if (p3 && p3.mode === 'edit' && typeof p3.content === 'string' && p3.content.trim()) {
-      const note = researchFacts ? '' : ' (실시간 검색은 일시적으로 건너뛰었어요)';
-      return NextResponse.json({ mode: 'edit', reply: (p3.reply || '수정했습니다.') + note, content: p3.content, provider: r3.provider, model: r3.model, searched: !!researchFacts });
+    try {
+      const r3 = await llmComplete({
+        prompt: `${docBlock}\n${factsBlock}\n위 문서를 요청대로 수정해 edit JSON으로 응답하세요. 참고 사실이 있으면 실제 명칭·수치를 반영하고, 불확실한 값은 "[확인 필요]"로 표기하세요. 가공의 가명은 쓰지 마세요.`,
+        system: [
+          `당신은 숙련된 기획자 "DocHelper"입니다. "${label}" 문서를 요청대로 수정합니다.`,
+          '아래 JSON으로만 응답: {"mode":"edit","reply":"바꾼 내용 요약","content":"수정된 문서 전체"}',
+          '',
+          ...commonRules,
+        ].join('\n'),
+        maxTokens: 16384,
+        temperature: 0.4,
+        timeoutMs: 150_000, // 문서 전체 생성 여유. 검색(최대75s)+생성이 함수 300s 안에 들어옴.
+        maxRetries: 0, // 재시도하면 시간 2배 → 누적 timeout. 1회만.
+      });
+      const p3 = parseModelJson(r3.text ?? '');
+      if (p3 && p3.mode === 'edit' && typeof p3.content === 'string' && p3.content.trim()) {
+        const note = researchFacts ? '' : ' (실시간 검색은 일시적으로 건너뛰었어요)';
+        return NextResponse.json({ mode: 'edit', reply: (p3.reply || '수정했습니다.') + note, content: p3.content, provider: r3.provider, model: r3.model, searched: !!researchFacts });
+      }
+      // edit content를 못 만든 경우: chat reply라도
+      return NextResponse.json({
+        mode: 'chat',
+        reply: p3?.reply || p1.reply || '문서가 길어 한 번에 수정하지 못했어요. 범위를 좁혀(예: 특정 섹션만) 다시 요청해 주세요.',
+        provider: r3.provider,
+      });
+    } catch (e3) {
+      console.error('[edit-doc] 3차(수정 생성) 실패:', e3 instanceof Error ? e3.message : e3);
+      return NextResponse.json({
+        mode: 'chat',
+        reply: '문서가 길어 수정 생성이 시간 안에 끝나지 못했어요. 수정 범위를 좁혀서(예: "경쟁사 표만 추가") 다시 요청해 주세요.',
+      });
     }
-    // 그래도 안되면 1차 reply라도 대화로
-    return NextResponse.json({ mode: 'chat', reply: p1.reply, provider: r3.provider });
   } catch (e) {
     const msg = e instanceof Error ? e.message : '요청 처리 중 오류가 발생했습니다.';
     console.error('[edit-doc] error:', msg);
