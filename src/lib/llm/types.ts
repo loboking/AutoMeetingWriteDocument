@@ -10,6 +10,7 @@ export interface LLMRequest {
   temperature?: number; // OpenAI호환 전용. anthropic(Opus 4.8)은 전달 시 400 → 어댑터가 무시.
   timeoutMs?: number; // 호출부별 timeout 보존 (60s~900s)
   maxRetries?: number; // OpenAI SDK 재시도. 현행 0/1/미지정 보존. 미지정 시 0.
+  enableWebSearch?: boolean; // GLM 한정: web_search 내장 도구 부착(리서치). 미지원 provider는 무시.
 }
 
 export interface LLMResult {

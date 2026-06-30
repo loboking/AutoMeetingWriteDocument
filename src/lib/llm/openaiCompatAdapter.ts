@@ -22,13 +22,33 @@ export const openaiCompatAdapter: LLMAdapter = {
     messages.push({ role: 'user', content: req.prompt });
 
     const isGlm = ctx.model.includes('glm');
+    // 리서치 요청 + GLM일 때만 web_search 내장 도구 부착(추가 검색 API 키 불필요).
+    // thinking 비활성화 시 도구호출이 막힐 수 있어, 검색 시엔 thinking을 끄지 않는다.
+    const useWebSearch = !!req.enableWebSearch && isGlm;
     const params = {
       model: ctx.model,
       messages,
       max_tokens: req.maxTokens,
       ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
-      // GLM 계열만 thinking 비활성화 (gpt-4o/gemini 등에는 미적용)
-      ...(isGlm ? { thinking: { type: 'disabled' } } : {}),
+      // GLM 계열만 thinking 비활성화 (검색 시엔 유지 — 도구 사용 가능하게)
+      ...(isGlm && !useWebSearch ? { thinking: { type: 'disabled' } } : {}),
+      ...(useWebSearch
+        ? {
+            tools: [
+              {
+                type: 'web_search',
+                web_search: {
+                  enable: 'True',
+                  search_engine: 'search-prime',
+                  search_result: 'True',
+                  count: '5',
+                  search_recency_filter: 'noLimit',
+                  content_size: 'high',
+                },
+              },
+            ],
+          }
+        : {}),
     } as OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming;
 
     const response = await client.chat.completions.create(params);
