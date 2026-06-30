@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireUser } from '@/lib/apiAuth';
 import { llmComplete } from '@/lib/llm';
 import { DOCUMENTS } from '@/lib/documentUtils';
+import { applyPatches, type DocPatch } from '@/lib/docPatch';
 import type { DocType } from '@/types';
 
 export const runtime = 'nodejs';
@@ -31,7 +32,7 @@ function renderHistory(history: HistoryMsg[]): string {
 }
 
 // JSON 블록 안전 추출 (모델이 코드펜스/잡텍스트로 감싸도)
-function parseModelJson(raw: string): { mode?: string; reply?: string; content?: string; needSearch?: boolean; searchQuery?: string } | null {
+function parseModelJson(raw: string): { mode?: string; reply?: string; content?: string; patches?: DocPatch[]; needSearch?: boolean; searchQuery?: string } | null {
   let s = raw.trim();
   if (s.startsWith('```')) s = s.replace(/^```[a-zA-Z]*\n?/, '').replace(/\n?```$/, '').trim();
   // 첫 { 부터 마지막 } 까지
@@ -63,14 +64,26 @@ export async function POST(request: NextRequest) {
 
   const label = docLabel(docType);
 
-  // 공통 규칙(1차·2차 공유)
+  // 패치(부분 수정) 출력 지침 — 전체 재작성 대신 작은 패치만 생성 → 긴 문서도 빠르고 정확.
+  const patchGuide = [
+    '★문서 수정은 "전체 다시 쓰기"가 아니라 "patches(부분 변경)"로 합니다. 긴 문서를 통째로 출력하지 마세요.',
+    'edit 응답: {"mode":"edit","reply":"바꾼 내용 1~2문장 요약","patches":[ ...패치들... ]}',
+    'patches의 각 항목은 셋 중 하나:',
+    '  - 교체: {"find":"원문에 그대로 있는 짧고 고유한 텍스트","replace":"새 텍스트"}',
+    '  - 삽입: {"after":"이 텍스트(원문 그대로) 바로 뒤에","insert":"\\n삽입할 내용"}',
+    '  - 끝에 추가: {"append":"문서 맨 끝에 붙일 내용(예: 새 섹션)"}',
+    '★find/after는 반드시 "현재 문서에 글자 그대로 존재하는" 짧고 고유한 문자열이어야 합니다(공백·기호 포함 정확히). 길게 잡지 말고 식별 가능한 최소 길이로.',
+    '바꿀 부분이 여러 곳이면 패치를 여러 개 넣으세요. 표/문단 추가는 after+insert 또는 append를 쓰세요.',
+  ];
+
+  // 공통 규칙
   const commonRules = [
     '규칙:',
-    '1. 모든 텍스트는 한국어. content(문서 본문)도 반드시 한국어로 작성한다(영문 문서라도 수정 시 한국어로 옮긴다).',
-    '2. edit일 때 content는 문서 "전체"를 담는다. 일부만/생략 금지. 요청과 무관한 기존 내용·구조·표는 보존하고 요청된 부분만 변경.',
-    '3. 되묻기 금지: "수정해줘/진행해줘"처럼 변경을 명확히 지시하면 정보가 부족해도 되묻지 말고 edit으로 진행한다. 진짜로 사용자만 답할 수 있는 내부 고유정보(우리 회사 내부 수치 등)만 chat으로 1회 되묻는다.',
-    '4. 추측·가공 금지: 가공의 회사명/가명("로컬 B사" 등)이나 지어낸 수치를 쓰지 않는다. 확인 불가한 값은 옆에 "[확인 필요]"를 단다.',
-    '5. content 안의 줄바꿈/따옴표는 JSON 규칙에 맞게 이스케이프한다.',
+    '1. 모든 텍스트(reply, 패치 내용)는 한국어. 영문 문서라도 수정/추가 내용은 한국어로.',
+    '2. 요청과 무관한 부분은 건드리지 않는다(패치에 포함하지 않는다). 요청된 부분만 정확히.',
+    '3. 되묻기 금지: "수정/진행해줘"처럼 명확히 지시하면 정보 부족해도 진행한다. 사용자만 답할 내부 고유정보만 chat으로 1회 되묻는다.',
+    '4. 추측·가공 금지: 가명("로컬 B사")·지어낸 수치 금지. 확인 불가 값은 "[확인 필요]" 표기.',
+    '5. JSON 문자열 안의 줄바꿈은 \\n, 따옴표는 \\"로 이스케이프한다.',
   ];
 
   const docBlock = [
@@ -86,30 +99,49 @@ export async function POST(request: NextRequest) {
     `사용자: ${instruction}`,
   ].filter(Boolean).join('\n');
 
-  // ── 1차: 빠른 판단 (검색 없음, thinking off). 검색 필요 여부도 함께 받음 ──
-  const system1 = [
-    `당신은 숙련된 기획자 "DocHelper"입니다. 사용자와 "${label}" 문서를 대화하며 다듬습니다.`,
-    '',
-    '사용자 의도를 보고 판단해 아래 JSON 중 하나로만 응답하세요(설명·코드펜스 없이 JSON만):',
-    '- 대화/논의: {"mode":"chat","reply":"답변"}',
-    '- 수정(외부 정보 불필요): {"mode":"edit","reply":"바꾼 내용 요약","content":"수정된 문서 전체"}',
-    '- 수정(외부 사실 필요): {"mode":"edit","needSearch":true,"searchQuery":"검색에 쓸 핵심 질의(한국어)","reply":"무엇을 조사할지 한 줄"}',
-    '',
-    'needSearch=true는 "당신이 확실히 알지 못하는 실제 기업/서비스명·시장규모·통계·법규·최신 동향 등"이 필요할 때만. 문체 다듬기·요약·구조 변경 등엔 절대 쓰지 않는다(그땐 content를 바로 작성).',
-    'chat 답변(reply)은 핵심만 간결하게 3~5문장 이내로. 불필요하게 장황하게 늘리지 않는다.',
-    '',
-    ...commonRules,
-  ].join('\n');
+  // patches 적용 → 응답 JSON 생성. 실패가 과하면 null 반환(폴백 유도).
+  const buildEditResponse = (
+    parsed: NonNullable<ReturnType<typeof parseModelJson>>,
+    provider: string,
+    model: string | undefined,
+    extraNote = '',
+    searched = false
+  ) => {
+    if (!Array.isArray(parsed.patches) || parsed.patches.length === 0) return null;
+    const res = applyPatches(currentContent, parsed.patches);
+    // 하나도 적용 못 했으면 실패(폴백). 일부 실패는 허용하되 안내.
+    if (res.applied === 0) return null;
+    if (res.content.trim() === currentContent.trim()) return null; // 변화 없음
+    let reply = parsed.reply || '수정했습니다.';
+    if (res.failed > 0) reply += ` (일부 ${res.failed}곳은 원문에서 찾지 못해 건너뛰었어요)`;
+    reply += extraNote;
+    return NextResponse.json({ mode: 'edit', reply, content: res.content, provider, model, searched, partial: res.failed > 0 });
+  };
 
   try {
+    // ── 1차: 판단 + (수정이면) 패치 생성. 검색X, thinking off → 빠름 ──
+    const system1 = [
+      `당신은 숙련된 기획자 "DocHelper"입니다. 사용자와 "${label}" 문서를 대화하며 다듬습니다.`,
+      '',
+      '사용자 의도를 보고 아래 JSON 중 하나로만 응답하세요(설명·코드펜스 없이 JSON만):',
+      '- 대화/논의: {"mode":"chat","reply":"답변(3~5문장 이내로 간결히)"}',
+      '- 수정(외부 정보 불필요): {"mode":"edit","reply":"요약","patches":[...]}',
+      '- 수정(외부 사실 필요): {"mode":"edit","needSearch":true,"searchQuery":"검색 질의(한국어)","reply":"무엇을 조사할지 한 줄"}',
+      '',
+      'needSearch=true는 "확실히 알지 못하는 실제 기업/서비스명·시장규모·통계·법규·최신 동향"이 필요할 때만. 문체·요약·구조 변경엔 쓰지 말고 바로 patches를 작성.',
+      '',
+      ...patchGuide,
+      '',
+      ...commonRules,
+    ].join('\n');
+
     const r1 = await llmComplete({
       prompt: `${docBlock}\n\n위 의도에 맞게 JSON으로 응답하세요.`,
       system: system1,
-      maxTokens: 16384,
-      temperature: 0.5,
-      timeoutMs: 120_000,
+      maxTokens: 8192, // 패치만 내므로 작게 충분 → 빠름
+      temperature: 0.4,
+      timeoutMs: 90_000,
       maxRetries: 1,
-      // 1차는 검색 미부착 → thinking off로 빠르게
     });
 
     const p1 = parseModelJson(r1.text ?? '');
@@ -118,75 +150,78 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ mode: 'chat', reply: fallback, provider: r1.provider });
     }
 
-    // 검색 불필요 → 1차 결과 그대로 (대화·단순수정 = 빠름)
+    // 검색 불필요 → 1차 결과로 끝 (대화·단순수정 = 빠름)
     if (!p1.needSearch) {
-      if (p1.mode === 'edit' && typeof p1.content === 'string' && p1.content.trim()) {
-        return NextResponse.json({ mode: 'edit', reply: p1.reply, content: p1.content, provider: r1.provider, model: r1.model });
+      if (p1.mode === 'edit') {
+        const resp = buildEditResponse(p1, r1.provider, r1.model);
+        if (resp) return resp;
+        // 패치 실패 → 한 번 더 명확히 패치 재요청(작은 호출)
+      } else {
+        return NextResponse.json({ mode: 'chat', reply: p1.reply, provider: r1.provider });
       }
-      return NextResponse.json({ mode: 'chat', reply: p1.reply, provider: r1.provider });
     }
 
-    // 검색과 문서생성을 분리(각 단계 짧게 → 전체 시간/timeout 감소):
-    //   2차=검색해서 "사실 bullet"만 수집(작은 출력, 빠름) → 3차=그 사실로 문서 수정(검색 없음, 빠름)
-    const searchQuery = typeof p1.searchQuery === 'string' && p1.searchQuery.trim() ? p1.searchQuery.trim() : instruction;
+    // ── 검색 필요 시: 2차=사실 수집(작게, 빠름) ──
     let researchFacts = '';
-    try {
-      const r2 = await llmComplete({
-        prompt: `다음 주제로 웹을 검색해 확인된 사실만 간결한 한국어 bullet로 정리하세요(최대 10줄). 실제 명칭·수치 위주, 출처 불명확하면 제외.\n\n주제: ${searchQuery}`,
-        system: '당신은 리서처입니다. 웹 검색 결과에서 확인된 사실만 bullet로 출력합니다. 설명·서론 없이 "- 사실" 목록만.',
-        maxTokens: 1200, // 사실 수집만 → 작게 잡아 빠르게
-        temperature: 0.2,
-        timeoutMs: 75_000, // 검색은 빨리 포기하고 3차로(누적 timeout 방지). 못 찾으면 검색없이 수정.
-        maxRetries: 0,
-        enableWebSearch: true,
-      });
-      researchFacts = (r2.text ?? '').trim();
-    } catch (e2) {
-      console.error('[edit-doc] 검색 단계 실패 → 검색없이 진행:', e2 instanceof Error ? e2.message : e2);
+    if (p1.needSearch) {
+      const searchQuery = typeof p1.searchQuery === 'string' && p1.searchQuery.trim() ? p1.searchQuery.trim() : instruction;
+      try {
+        const r2 = await llmComplete({
+          prompt: `다음 주제로 웹을 검색해 확인된 사실만 간결한 한국어 bullet로 정리하세요(최대 10줄). 실제 명칭·수치 위주, 출처 불명확하면 제외.\n\n주제: ${searchQuery}`,
+          system: '당신은 리서처입니다. 웹 검색 결과에서 확인된 사실만 "- 사실" bullet로 출력합니다. 설명·서론 없이.',
+          maxTokens: 1200,
+          temperature: 0.2,
+          timeoutMs: 75_000,
+          maxRetries: 0,
+          enableWebSearch: true,
+        });
+        researchFacts = (r2.text ?? '').trim();
+      } catch (e2) {
+        console.error('[edit-doc] 검색 실패 → 검색없이 진행:', e2 instanceof Error ? e2.message : e2);
+      }
     }
 
-    // 3차: 수집된 사실(있으면)을 문서에 반영. 검색 없음 → thinking off로 빠름.
-    // 별도 try: 3차가 timeout나도 바깥 "모의"로 빠지지 않고 명확히 안내.
+    // ── 3차(또는 1차 패치 실패 시 재시도): 패치 생성. 검색X → 빠름 ──
     const factsBlock = researchFacts ? `\n참고(웹 검색으로 확인된 사실):\n${researchFacts}\n` : '';
     try {
       const r3 = await llmComplete({
-        prompt: `${docBlock}\n${factsBlock}\n위 문서를 요청대로 수정해 edit JSON으로 응답하세요. 참고 사실이 있으면 실제 명칭·수치를 반영하고, 불확실한 값은 "[확인 필요]"로 표기하세요. 가공의 가명은 쓰지 마세요.`,
+        prompt: `${docBlock}\n${factsBlock}\n위 문서를 요청대로 수정해 patches로 응답하세요. 참고 사실이 있으면 실제 명칭·수치를 반영하세요.`,
         system: [
-          `당신은 숙련된 기획자 "DocHelper"입니다. "${label}" 문서를 요청대로 수정합니다.`,
-          '아래 JSON으로만 응답: {"mode":"edit","reply":"바꾼 내용 요약","content":"수정된 문서 전체"}',
+          `당신은 숙련된 기획자 "DocHelper"입니다. "${label}" 문서를 patches(부분 수정)로 고칩니다.`,
+          ...patchGuide,
           '',
           ...commonRules,
         ].join('\n'),
-        maxTokens: 16384,
+        maxTokens: 8192,
         temperature: 0.4,
-        timeoutMs: 150_000, // 문서 전체 생성 여유. 검색(최대75s)+생성이 함수 300s 안에 들어옴.
-        maxRetries: 0, // 재시도하면 시간 2배 → 누적 timeout. 1회만.
+        timeoutMs: 120_000,
+        maxRetries: 0,
       });
       const p3 = parseModelJson(r3.text ?? '');
-      if (p3 && p3.mode === 'edit' && typeof p3.content === 'string' && p3.content.trim()) {
-        const note = researchFacts ? '' : ' (실시간 검색은 일시적으로 건너뛰었어요)';
-        return NextResponse.json({ mode: 'edit', reply: (p3.reply || '수정했습니다.') + note, content: p3.content, provider: r3.provider, model: r3.model, searched: !!researchFacts });
+      if (p3) {
+        const note = p1.needSearch && !researchFacts ? ' (실시간 검색은 일시적으로 건너뛰었어요)' : '';
+        const resp = buildEditResponse(p3, r3.provider, r3.model, note, !!researchFacts);
+        if (resp) return resp;
+        if (p3.reply) return NextResponse.json({ mode: 'chat', reply: p3.reply, provider: r3.provider });
       }
-      // edit content를 못 만든 경우: chat reply라도
       return NextResponse.json({
         mode: 'chat',
-        reply: p3?.reply || p1.reply || '문서가 길어 한 번에 수정하지 못했어요. 범위를 좁혀(예: 특정 섹션만) 다시 요청해 주세요.',
+        reply: p1.reply || '요청하신 위치를 문서에서 정확히 찾지 못했어요. 바꿀 부분의 표현을 조금 더 구체적으로 알려주시겠어요?',
         provider: r3.provider,
       });
     } catch (e3) {
-      console.error('[edit-doc] 3차(수정 생성) 실패:', e3 instanceof Error ? e3.message : e3);
+      console.error('[edit-doc] 수정(패치) 생성 실패:', e3 instanceof Error ? e3.message : e3);
       return NextResponse.json({
         mode: 'chat',
-        reply: '문서가 길어 수정 생성이 시간 안에 끝나지 못했어요. 수정 범위를 좁혀서(예: "경쟁사 표만 추가") 다시 요청해 주세요.',
+        reply: '수정 생성이 시간 안에 끝나지 못했어요. 범위를 조금 좁혀서 다시 요청해 주세요.',
       });
     }
   } catch (e) {
     const msg = e instanceof Error ? e.message : '요청 처리 중 오류가 발생했습니다.';
     console.error('[edit-doc] error:', msg);
-    // 키 미설정/LLM 실패 → 모의 대화 응답(흐름 보존)
     return NextResponse.json({
       mode: 'chat',
-      reply: `(모의) 지금은 AI 연결이 안 돼 실제 대화·수정이 어려워요. (${msg})`,
+      reply: `지금은 응답이 지연되고 있어요. 잠시 후 다시 시도해 주세요. (${msg})`,
       mock: true,
     });
   }
