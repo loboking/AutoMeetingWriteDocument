@@ -1,10 +1,10 @@
 'use client';
 
 import { useState, useMemo, useRef, useEffect } from 'react';
-import { MessageSquarePlus, X, Send, History, Loader2, Check, RotateCcw, Sparkles } from 'lucide-react';
+import { MessageSquarePlus, X, Send, History, Loader2, Check, RotateCcw, Sparkles, GitBranch } from 'lucide-react';
 import { useMeetingStore } from '@/store/meetingStore';
 import { authedFetch } from '@/lib/authFetch';
-import { docTypeToField, DOCUMENTS } from '@/lib/documentUtils';
+import { docTypeToField, DOCUMENTS, getAllDependents } from '@/lib/documentUtils';
 import { diffLines, diffStats } from '@/lib/lineDiff';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
@@ -35,6 +35,8 @@ export default function DocAssistant() {
   const getDocVersions = useMeetingStore((s) => s.getDocVersions);
   const restoreDocVersion = useMeetingStore((s) => s.restoreDocVersion);
   const setDocStatus = useMeetingStore((s) => s.setDocStatus);
+  const regenerateDocs = useMeetingStore((s) => s.regenerateDocs);
+  const isGenerating = useMeetingStore((s) => s.isGenerating);
 
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<'chat' | 'history'>('chat');
@@ -43,7 +45,19 @@ export default function DocAssistant() {
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   // 제안된 수정본 (diff 미리보기 → 적용 대기)
   const [proposal, setProposal] = useState<{ docType: DocType; before: string; after: string; instruction: string } | null>(null);
+  // 적용 후 "연관 문서도 갱신" 제안 (사용자 클릭 시 regenerateDocs)
+  const [cascade, setCascade] = useState<{ from: DocType; targets: DocType[] } | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  // 프로젝트(회의) 전환 시: 이전 대화/제안 전부 초기화 → 바뀐 프로젝트 컨텍스트로 새 시작
+  const meetingId = currentMeeting?.id ?? null;
+  useEffect(() => {
+    setMessages([]);
+    setProposal(null);
+    setCascade(null);
+    setTab('chat');
+    setInput('');
+  }, [meetingId]);
 
   // 대상 문서: 사용자가 보고 있는 문서. 없으면 내용 있는 첫 문서.
   const targetDoc: DocType | null = useMemo(() => {
@@ -131,13 +145,43 @@ export default function DocAssistant() {
 
   const applyProposal = () => {
     if (!proposal || !currentMeeting) return;
-    const field = docTypeToField(proposal.docType) as keyof typeof currentMeeting;
+    const changed = proposal.docType;
+    const field = docTypeToField(changed) as keyof typeof currentMeeting;
     // 적용 직전 현재(이전) 내용을 버전으로 보존
-    recordDocVersion(currentMeeting.id, proposal.docType, proposal.before, 'ai-edit', proposal.instruction);
+    recordDocVersion(currentMeeting.id, changed, proposal.before, 'ai-edit', proposal.instruction);
     updateCurrentMeeting({ [field]: proposal.after });
-    setDocStatus(currentMeeting.id, proposal.docType, 'latest');
+    setDocStatus(currentMeeting.id, changed, 'latest');
     setMessages((m) => [...m, { role: 'assistant', text: '✅ 적용했어요. 이전 버전은 히스토리에서 복원할 수 있어요.' }]);
     setProposal(null);
+
+    // 연관(하위) 문서 갱신 제안 — 본문이 실제로 있는 것만(빈 문서는 재생성 대상 아님).
+    // summary 없으면 재생성 불가하므로 제안도 생략.
+    if (currentMeeting.summary) {
+      const dependents = getAllDependents(changed).filter((d) => {
+        const f = docTypeToField(d) as keyof typeof currentMeeting;
+        return !!(currentMeeting[f] as string | undefined)?.trim();
+      });
+      if (dependents.length > 0) {
+        setCascade({ from: changed, targets: dependents });
+      }
+    }
+  };
+
+  const runCascade = async () => {
+    if (!cascade || !currentMeeting || isGenerating) return;
+    const targets = cascade.targets;
+    setCascade(null);
+    setMessages((m) => [...m, {
+      role: 'assistant',
+      text: `🔄 ${targets.map(docTitle).join(' · ')} ${targets.length}개를 의존 순서대로 갱신 중이에요...`,
+    }]);
+    try {
+      await regenerateDocs(currentMeeting.id, targets);
+      setMessages((m) => [...m, { role: 'assistant', text: '✅ 연관 문서 갱신을 완료했어요. 각 문서의 이전 버전도 히스토리에 남아있어요.' }]);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : '갱신 중 오류가 발생했습니다.';
+      setMessages((m) => [...m, { role: 'assistant', text: `⚠️ ${msg}` }]);
+    }
   };
 
   const handleRestore = (versionId: string) => {
@@ -222,7 +266,7 @@ export default function DocAssistant() {
                 {proposal && (
                   <div className="rounded-lg border border-border">
                     <div className="flex items-center justify-between border-b border-border bg-muted/40 px-3 py-2 text-xs">
-                      <span className="font-medium">변경 미리보기</span>
+                      <span className="font-medium">{docTitle(proposal.docType)} 변경 미리보기</span>
                       <span className="text-muted-foreground">
                         <span className="text-green-600">+{stats.added}</span>{' '}
                         <span className="text-red-600">−{stats.removed}</span>
@@ -249,6 +293,29 @@ export default function DocAssistant() {
                     </div>
                   </div>
                 )}
+
+                {/* 연관 문서 갱신 제안 */}
+                {cascade && (
+                  <div className="rounded-lg border border-amber-400/40 bg-amber-50 p-3 dark:bg-amber-950/20">
+                    <div className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-amber-700 dark:text-amber-400">
+                      <GitBranch className="h-3.5 w-3.5" />
+                      {docTitle(cascade.from)} 변경으로 영향받는 문서 {cascade.targets.length}개
+                    </div>
+                    <p className="mb-2 text-xs text-muted-foreground">
+                      {cascade.targets.map(docTitle).join(' · ')}
+                    </p>
+                    <div className="flex gap-2">
+                      <Button size="sm" className="flex-1 gap-1" onClick={runCascade} disabled={isGenerating}>
+                        {isGenerating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+                        순서대로 모두 갱신
+                      </Button>
+                      <Button size="sm" variant="outline" className="flex-1" onClick={() => setCascade(null)}>
+                        나중에
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
                 {busy && (
                   <div className="flex items-center gap-2 text-sm text-muted-foreground">
                     <Loader2 className="h-4 w-4 animate-spin" /> 문서를 수정하는 중...
