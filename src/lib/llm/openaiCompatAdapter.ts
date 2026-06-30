@@ -41,9 +41,9 @@ export const openaiCompatAdapter: LLMAdapter = {
                   enable: 'True',
                   search_engine: 'search-prime',
                   search_result: 'True',
-                  count: '5',
+                  count: '3', // 5→3: 검색·요약 부담 낮춰 응답 속도 개선(timeout 방지)
                   search_recency_filter: 'noLimit',
-                  content_size: 'high',
+                  content_size: 'medium', // high→medium: 요약 길이 축소로 가속
                 },
               },
             ],

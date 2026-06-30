@@ -139,22 +139,45 @@ export async function POST(request: NextRequest) {
       ...commonRules,
     ].join('\n');
 
-    const r2 = await llmComplete({
-      prompt: `${docBlock}\n\n위 문서에 검색 결과를 반영해 edit JSON으로 응답하세요.`,
-      system: system2,
+    // 2차는 별도 try: 검색이 느려 실패(timeout)해도 "모의"로 빠지지 말고 검색 없이라도 수정안을 준다.
+    try {
+      const r2 = await llmComplete({
+        prompt: `${docBlock}\n\n위 문서에 검색 결과를 반영해 edit JSON으로 응답하세요.`,
+        system: system2,
+        maxTokens: 16384,
+        temperature: 0.4,
+        timeoutMs: 210_000, // 함수 maxDuration(300s) 안전 마진
+        maxRetries: 0, // 재시도하면 시간 2배 → timeout 위험. 1회만.
+        enableWebSearch: true, // 2차에서만 검색
+      });
+      const p2 = parseModelJson(r2.text ?? '');
+      if (p2 && p2.mode === 'edit' && typeof p2.content === 'string' && p2.content.trim()) {
+        return NextResponse.json({ mode: 'edit', reply: p2.reply || '검색 결과를 반영했습니다.', content: p2.content, provider: r2.provider, model: r2.model, searched: true });
+      }
+    } catch (e2) {
+      console.error('[edit-doc] 2차(검색) 실패 → 검색없이 폴백:', e2 instanceof Error ? e2.message : e2);
+    }
+
+    // 2차 실패/빈응답 → 검색 없이라도 수정안 생성(빠름). "모의"로 떨어지지 않게.
+    const r3 = await llmComplete({
+      prompt: `${docBlock}\n\n위 문서를 요청대로 수정해 edit JSON으로 응답하세요. 외부 정보가 필요하면 알고 있는 범위에서 반영하고 불확실한 값은 "[확인 필요]"로 표기하세요.`,
+      system: [
+        `당신은 숙련된 기획자 "DocHelper"입니다. "${label}" 문서를 요청대로 수정합니다.`,
+        '아래 JSON으로만 응답: {"mode":"edit","reply":"바꾼 내용 요약","content":"수정된 문서 전체"}',
+        '',
+        ...commonRules,
+      ].join('\n'),
       maxTokens: 16384,
       temperature: 0.4,
-      timeoutMs: 280_000,
+      timeoutMs: 60_000,
       maxRetries: 1,
-      enableWebSearch: true, // 2차에서만 검색
     });
-
-    const p2 = parseModelJson(r2.text ?? '');
-    if (p2 && p2.mode === 'edit' && typeof p2.content === 'string' && p2.content.trim()) {
-      return NextResponse.json({ mode: 'edit', reply: p2.reply || '검색 결과를 반영했습니다.', content: p2.content, provider: r2.provider, model: r2.model, searched: true });
+    const p3 = parseModelJson(r3.text ?? '');
+    if (p3 && p3.mode === 'edit' && typeof p3.content === 'string' && p3.content.trim()) {
+      return NextResponse.json({ mode: 'edit', reply: (p3.reply || '수정했습니다.') + ' (실시간 검색은 일시적으로 건너뛰었어요)', content: p3.content, provider: r3.provider, model: r3.model });
     }
-    // 2차 실패 → 1차 reply라도 대화로
-    return NextResponse.json({ mode: 'chat', reply: p1.reply, provider: r2.provider });
+    // 그래도 안되면 1차 reply라도 대화로
+    return NextResponse.json({ mode: 'chat', reply: p1.reply, provider: r3.provider });
   } catch (e) {
     const msg = e instanceof Error ? e.message : '요청 처리 중 오류가 발생했습니다.';
     console.error('[edit-doc] error:', msg);
