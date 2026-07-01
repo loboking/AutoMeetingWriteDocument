@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { Mic, Play, Upload, FileText, Download, FileUp, FolderOpen, X, Plus, CreditCard } from 'lucide-react';
+import { Mic, Play, Upload, FileText, Download, FileUp, FolderOpen, X, Plus, CreditCard, RefreshCw } from 'lucide-react';
 import Link from 'next/link';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
@@ -43,6 +43,8 @@ export default function Home() {
   const currentMeeting = useMeetingStore(s => s.currentMeeting);
   const currentStep = useMeetingStore(s => s.currentStep);
   const meetings = useMeetingStore(s => s.meetings);
+  const syncFromServer = useMeetingStore(s => s.syncFromServer);
+  const isSyncing = useMeetingStore(s => s.isSyncing);
   const { createMeeting, updateCurrentMeeting, updateMeetingStep, setCurrentMeeting } = useMeetingStore();
   const [meetingTitle, setMeetingTitle] = useState('');
   const [mounted, setMounted] = useState(false);
@@ -239,6 +241,18 @@ export default function Home() {
                   <span className="hidden xs:inline">새 회의</span>
                 </Button>
               )}
+              <Button
+                onClick={() => { void syncFromServer(); }}
+                disabled={isSyncing}
+                variant="outline"
+                size="sm"
+                className="gap-1.5 sm:gap-2 h-8 sm:h-9 px-2 sm:px-2.5"
+                aria-label="서버에서 최신 데이터 동기화"
+                title="다른 기기의 변경사항을 받아옵니다"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${isSyncing ? 'animate-spin' : ''}`} aria-hidden="true" />
+                <span className="hidden xs:inline">{isSyncing ? '동기화 중' : '동기화'}</span>
+              </Button>
               <Button
                 onClick={() => setShowProjectList(true)}
                 variant="outline"

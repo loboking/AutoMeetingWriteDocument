@@ -32,6 +32,27 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
     setMounted(true);
   }, []);
 
+  // 탭을 다시 볼 때(포커스) 서버 최신 데이터 자동 재조회.
+  // 로그인 후엔 onSignedIn이 유저당 1회만 fetch → 맥처럼 탭 오래 켜두면 재수신이 안 됨.
+  // 이걸 visibilitychange로 보완(다른 기기 변경이 탭 복귀 시 반영). 과호출 방지 위해 최소 간격 둠.
+  useEffect(() => {
+    if (!session) return;
+    let last = 0;
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return;
+      const now = Date.now();
+      if (now - last < 10_000) return; // 10초 내 중복 방지
+      last = now;
+      void useMeetingStore.getState().syncFromServer().catch(() => {});
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('focus', onVisible);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('focus', onVisible);
+    };
+  }, [session]);
+
   // 세션 초기 로드 + 인증 상태 변화 구독
   useEffect(() => {
     let active = true;

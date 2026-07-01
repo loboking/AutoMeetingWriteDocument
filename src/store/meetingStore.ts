@@ -4,7 +4,7 @@ import type { Meeting, MeetingStep, DocType, DocStatus, DocVersion, DocVersionSo
 import { DOCUMENTS, DEPENDENCIES, docTypeToField, getAllDependents, topoSortLevels, levelsFor, topoSortDocs } from '@/lib/documentUtils';
 import { authedFetch } from '@/lib/authFetch';
 import { mapWithConcurrency } from '@/lib/concurrency';
-import { deleteMeetingRow } from '@/lib/meetingsSync';
+import { deleteMeetingRow, fetchMeetings, mergeServer } from '@/lib/meetingsSync';
 
 // UUID 생성 유틸 (브라우저 호환성)
 function generateId(): string {
@@ -383,6 +383,9 @@ interface MeetingStore {
   setCurrentMeeting: (meeting: Meeting | null) => void;
   getMeeting: (id: string) => Meeting | undefined;
   setMeetings: (meetings: Meeting[]) => void; // 서버 동기화 결과로 교체 (로그인 시)
+  // 서버에서 최신 데이터를 다시 받아와 머지(수동 "동기화" 버튼용). 로그인 후 재조회 수단.
+  isSyncing: boolean;
+  syncFromServer: () => Promise<void>;
   resetForSignOut: () => void; // 로그아웃 시 메모리 상태 전체 리셋 (이전 사용자 데이터 잔류 차단)
 
   // 학습 완료 관련 액션
@@ -585,6 +588,22 @@ export const useMeetingStore = create<MeetingStore>()(
         } else {
           // 없으면 추가
           set({ meetings: [...meetings, current], currentMeeting: current });
+        }
+      },
+
+      isSyncing: false,
+      syncFromServer: async () => {
+        if (get().isSyncing) return;
+        set({ isSyncing: true });
+        try {
+          const server = await fetchMeetings();
+          const merged = mergeServer(get().meetings, server);
+          get().setMeetings(merged); // setMeetings가 currentMeeting도 최신본으로 갱신
+        } catch (e) {
+          console.error('[syncFromServer] 실패:', e instanceof Error ? e.message : e);
+          throw e;
+        } finally {
+          set({ isSyncing: false });
         }
       },
 
