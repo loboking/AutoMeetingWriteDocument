@@ -1,4 +1,5 @@
 import { llmComplete, resolveProvider } from '@/lib/llm';
+import type { LLMResult } from '@/lib/llm/types';
 import { PRD_SECTIONS, PRDChunkProgress, PRDGenerationResult } from './prdSections';
 import { SECTION_PROMPTS } from './sectionPrompts';
 import { mapWithConcurrency, withRetry } from '@/lib/concurrency';
@@ -34,7 +35,8 @@ async function generateSection(
   meetingInfo: { title: string; date: string },
   previousSections: Record<string, string>,
   onProgress?: (progress: PRDChunkProgress) => void,
-  metadata?: MeetingMetadata
+  metadata?: MeetingMetadata,
+  onTokens?: (r: LLMResult) => void
 ): Promise<{ sectionId: string; content: string }> {
   const section = PRD_SECTIONS.find(s => s.id === sectionId);
   if (!section) {
@@ -65,7 +67,7 @@ async function generateSection(
     console.log(`[PRD Chunk] 섹션 생성 시작: ${sectionId} (maxTokens=${maxTokens})`);
 
     // 429(rate limit) 발생 시 지수 backoff 재시도 (withRetry 유지, 내부 호출만 llmComplete로)
-    const { text: extracted } = await withRetry(
+    const llmRes = await withRetry(
       () =>
         llmComplete({
           prompt,
@@ -76,6 +78,8 @@ async function generateSection(
         }),
       { retries: 3, baseDelayMs: 2000 }
     );
+    onTokens?.(llmRes); // 섹션별 토큰 실측 기록
+    const extracted = llmRes.text;
     // 프롬프트 누출 제거 + 중국어(한자) 정리 → 일관성/비용/과장 후처리
     const cleaned = sanitizeSectionContent(extracted);
     const processed = cleaned ? postProcessGeneratedDocument(cleaned, metadata) : cleaned;
@@ -118,7 +122,8 @@ export async function generatePRDByChunks(
   transcript: string,
   meetingInfo: { title: string; date: string },
   onProgress?: (progress: PRDChunkProgress) => void,
-  metadata?: MeetingMetadata
+  metadata?: MeetingMetadata,
+  onTokens?: (r: LLMResult) => void
 ): Promise<PRDGenerationResult> {
   const sections: Record<string, string> = {};
   const progressList: PRDChunkProgress[] = [];
@@ -131,7 +136,7 @@ export async function generatePRDByChunks(
     generateSection(section.id, summary, transcript, meetingInfo, {}, (progress) => {
       progressList.push(progress);
       onProgress?.(progress);
-    }, metadata)
+    }, metadata, onTokens)
   );
 
   for (const result of results) {
@@ -218,7 +223,8 @@ export async function retryFailedSections(
   meetingInfo: { title: string; date: string },
   sections: Record<string, string>,
   failedSectionIds: string[],
-  onProgress?: (progress: PRDChunkProgress) => void
+  onProgress?: (progress: PRDChunkProgress) => void,
+  onTokens?: (r: LLMResult) => void
 ): Promise<Record<string, string>> {
   const updatedSections = { ...sections };
 
@@ -242,7 +248,9 @@ export async function retryFailedSections(
       transcript,
       meetingInfo,
       context,
-      onProgress
+      onProgress,
+      undefined,
+      onTokens
     );
 
     updatedSections[result.sectionId] = result.content;

@@ -20,6 +20,8 @@ import { getTestPlanPrompt } from '@/lib/testPlanTemplate';
 import { reviewDocument, type ReviewResult } from '@/lib/docReviewer';
 import type { MeetingSummary } from '@/types';
 import { llmComplete, resolveProvider } from '@/lib/llm';
+import type { LLMResult } from '@/lib/llm/types';
+import { recordTokenUsage } from '@/lib/tokenUsage';
 import {
   ENFORCE_LIMIT,
   getCurrentPeriod,
@@ -147,7 +149,8 @@ async function generateDocument(
   summary: MeetingSummary,
   transcript: string,
   meetingInfo: { title: string; date: string },
-  contextDocs: Record<string, string> = {}
+  contextDocs: Record<string, string> = {},
+  onTokens?: (r: LLMResult) => void
 ): Promise<string> {
   // PRD는 병렬 섹션 청킹으로 생성 (z.ai 5분 단일요청 리밋 회피 + 섹션별 상세 품질 유지)
   if (docType === 'prd') {
@@ -156,7 +159,7 @@ async function generateDocument(
       const metadata = inferMetadata(summary, transcript);
       // 핵심+파생 수치를 생성 전 1회 확정 → 전 섹션이 단일 출처를 따르게 (SaaS 수치 정합성)
       metadata.coreMetrics = await resolveCoreMetrics(summary, transcript, metadata.coreMetrics);
-      const result = await generatePRDByChunks(summary, transcript, meetingInfo, undefined, metadata);
+      const result = await generatePRDByChunks(summary, transcript, meetingInfo, undefined, metadata, onTokens);
       console.log('[generate-doc] PRD 병렬 청킹 완료', {
         sections: Object.keys(result.sections).length,
         length: result.fullDocument.length,
@@ -179,13 +182,15 @@ async function generateDocument(
 
   try {
     // 문서별 출력토큰 차등(목록류는 축소 → 생성 시간 절감, 긴 문서는 16384 유지)
-    const { text: content } = await llmComplete({
+    const llmRes = await llmComplete({
       prompt,
       system: KOREAN_OUTPUT_SYSTEM_PROMPT,
       maxTokens: maxTokensFor(docType, isGlm),
       timeoutMs: 900000,
       maxRetries: 0,
     });
+    onTokens?.(llmRes);
+    const content = llmRes.text;
     if (!content || !content.trim()) {
       throw new Error('빈 응답');
     }
@@ -209,7 +214,8 @@ async function generateAllDocuments(
   summary: MeetingSummary,
   transcript: string,
   meetingInfo: { title: string; date: string },
-  onProgress?: (progress: GenerationProgress) => void
+  onProgress?: (progress: GenerationProgress) => void,
+  onDocTokens?: (docType: DocType, r: LLMResult) => void
 ): Promise<{ docs: GeneratedDocs; progress: GenerationProgress }> {
   const docs: GeneratedDocs = {};
   const completedDocs: string[] = [];
@@ -243,7 +249,8 @@ async function generateAllDocuments(
           summary,
           transcript,
           meetingInfo,
-          contextDocs
+          contextDocs,
+          onDocTokens ? (r) => onDocTokens(docType, r) : undefined
         );
 
         docs[docType] = content;
@@ -285,14 +292,15 @@ async function generateDocumentWithContext(
   summary: MeetingSummary,
   transcript: string,
   meetingInfo: { title: string; date: string },
-  contextDocs: Record<string, string>
+  contextDocs: Record<string, string>,
+  onTokens?: (r: LLMResult) => void
 ): Promise<string> {
   // PRD는 병렬 섹션 청킹으로 생성 (단일 호출은 z.ai 5분 리밋 초과)
   if (docType === 'prd') {
     try {
       const metadata = inferMetadata(summary, transcript);
       metadata.coreMetrics = await resolveCoreMetrics(summary, transcript, metadata.coreMetrics);
-      const result = await generatePRDByChunks(summary, transcript, meetingInfo, undefined, metadata);
+      const result = await generatePRDByChunks(summary, transcript, meetingInfo, undefined, metadata, onTokens);
       const failed = Object.values(result.sections).filter((c) => c.includes('생성 실패')).length;
       if (failed <= 3 && result.fullDocument.length > 1000) {
         return result.fullDocument;
@@ -317,14 +325,15 @@ async function generateDocumentWithContext(
   const maxTokens = isGlm ? 16384 : 12288;
 
   try {
-    const { text } = await llmComplete({
+    const llmRes = await llmComplete({
       prompt,
       system: KOREAN_OUTPUT_SYSTEM_PROMPT,
       maxTokens,
       timeoutMs: 900000,
       maxRetries: 0,
     });
-    return text;
+    onTokens?.(llmRes);
+    return llmRes.text;
   } catch (error) {
     console.error('OpenAI API 오류:', error);
     throw error;
@@ -918,7 +927,9 @@ export async function POST(request: NextRequest) {
       const result = await generateAllDocuments(
         summary,
         transcript || '',
-        meetingInfo
+        meetingInfo,
+        undefined,
+        (dt, r) => recordTokenUsage({ userId: auth.user.id, op: 'doc-generate', provider: r.provider, model: r.model, usage: r.usage, meetingId, docType: dt })
       );
 
       // 검토 수행
@@ -963,7 +974,10 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const content = await generateDocument(docType, summary, transcript || '', meetingInfo, contextDocs);
+    const content = await generateDocument(
+      docType, summary, transcript || '', meetingInfo, contextDocs,
+      (r) => recordTokenUsage({ userId: auth.user.id, op: 'doc-generate', provider: r.provider, model: r.model, usage: r.usage, meetingId, docType })
+    );
 
     // 첫 문서 생성 성공 시 1건 기록(멱등). 회의당 평생 1회. best-effort(응답 안 막음).
     if (meetingId) {
