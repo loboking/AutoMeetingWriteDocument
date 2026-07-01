@@ -32,7 +32,7 @@ function renderHistory(history: HistoryMsg[]): string {
 }
 
 // JSON 블록 안전 추출 (모델이 코드펜스/잡텍스트로 감싸도)
-function parseModelJson(raw: string): { mode?: string; reply?: string; content?: string; patches?: DocPatch[]; needSearch?: boolean; searchQuery?: string } | null {
+function parseModelJson(raw: string): { mode?: string; reply?: string; content?: string; patches?: DocPatch[]; rewrite?: boolean; needSearch?: boolean; searchQuery?: string } | null {
   let s = raw.trim();
   if (s.startsWith('```')) s = s.replace(/^```[a-zA-Z]*\n?/, '').replace(/\n?```$/, '').trim();
   // 첫 { 부터 마지막 } 까지
@@ -125,9 +125,11 @@ export async function POST(request: NextRequest) {
       '',
       '사용자 의도를 보고 아래 JSON 중 하나로만 응답하세요(설명·코드펜스 없이 JSON만):',
       '- 대화/논의: {"mode":"chat","reply":"답변(3~5문장 이내로 간결히)"}',
-      '- 수정(외부 정보 불필요): {"mode":"edit","reply":"요약","patches":[...]}',
+      '- 부분 수정(바꿀 곳이 문서의 일부): {"mode":"edit","reply":"요약","patches":[...]}',
+      '- 전체 재검토/전면 개선(문서 대부분을 손봐야 함): {"mode":"edit","rewrite":true,"reply":"어떻게 개선할지 1~2문장"}',
       '- 수정(외부 사실 필요): {"mode":"edit","needSearch":true,"searchQuery":"검색 질의(한국어)","reply":"무엇을 조사할지 한 줄"}',
       '',
+      '★판단 기준: "이 부분/이 표현/이 수치"처럼 좁은 수정은 patches. "전체 검토/전면 개선/다시 써줘/품질 높여줘"처럼 문서 대부분을 손봐야 하면 rewrite:true(이땐 patches를 만들지 말 것 — 시스템이 별도로 전체를 다시 씁니다).',
       'needSearch=true는 "확실히 알지 못하는 실제 기업/서비스명·시장규모·통계·법규·최신 동향"이 필요할 때만. 문체·요약·구조 변경엔 쓰지 말고 바로 patches를 작성.',
       '',
       ...patchGuide,
@@ -148,6 +150,34 @@ export async function POST(request: NextRequest) {
     if (!p1 || !p1.reply) {
       const fallback = (r1.text ?? '').trim() || '죄송해요, 다시 한 번 말씀해 주세요.';
       return NextResponse.json({ mode: 'chat', reply: fallback, provider: r1.provider });
+    }
+
+    // ── 전체 재검토/재작성: 문서 대부분을 손봐야 하는 요청 → content 전체 생성(큰 토큰·긴 timeout) ──
+    if (p1.mode === 'edit' && p1.rewrite && !p1.needSearch) {
+      try {
+        const rw = await llmComplete({
+          prompt: `${docBlock}\n\n위 "${label}" 문서 전체를 요청에 맞게 검토·개선해 다시 작성하세요. 기존의 유효한 내용·구조·표는 살리되 부족한 부분을 보강하고 다듬으세요.`,
+          system: [
+            `당신은 숙련된 기획자 "DocHelper"입니다. "${label}" 문서 전체를 검토·개선해 재작성합니다.`,
+            '아래 JSON으로만 응답(설명·코드펜스 없이): {"mode":"edit","reply":"무엇을 어떻게 개선했는지 2~3문장","content":"개선된 문서 전체 마크다운"}',
+            'content는 문서 전체를 담습니다. 생략("...") 금지. 마크다운 구조를 지키세요.',
+            '',
+            ...commonRules,
+          ].join('\n'),
+          maxTokens: 15000, // 전체 재작성 → 큰 출력 허용
+          temperature: 0.5,
+          timeoutMs: 240_000, // 함수 300s 안전 마진
+          maxRetries: 0,
+        });
+        const prw = parseModelJson(rw.text ?? '');
+        if (prw && prw.mode === 'edit' && typeof prw.content === 'string' && prw.content.trim() && prw.content.trim() !== currentContent.trim()) {
+          return NextResponse.json({ mode: 'edit', reply: prw.reply || '문서 전체를 검토·개선했습니다.', content: prw.content, provider: rw.provider, model: rw.model, rewritten: true });
+        }
+        return NextResponse.json({ mode: 'chat', reply: prw?.reply || p1.reply || '문서를 개선해봤지만 변경할 내용을 확정하지 못했어요. 개선 방향을 조금 더 구체적으로 알려주시겠어요?', provider: rw.provider });
+      } catch (erw) {
+        console.error('[edit-doc] 전체 재작성 실패:', erw instanceof Error ? erw.message : erw);
+        return NextResponse.json({ mode: 'chat', reply: '문서가 커서 전체 재검토가 시간 안에 끝나지 못했어요. "개요 섹션만 검토" 처럼 섹션 단위로 나눠 요청하면 빠르게 개선할 수 있어요.' });
+      }
     }
 
     // 검색 불필요 → 1차 결과로 끝 (대화·단순수정 = 빠름)
