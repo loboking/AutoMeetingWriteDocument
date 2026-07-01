@@ -588,7 +588,21 @@ export const useMeetingStore = create<MeetingStore>()(
         }
       },
 
-      setMeetings: (meetings) => set({ meetings }),
+      setMeetings: (meetings) => {
+        // 화면이 보는 건 currentMeeting. 동기화로 meetings가 갱신되면 열려있는 회의도
+        // 머지 결과(LWW 채택본)로 맞춰야 "다른 기기 변경이 화면에 반영"된다.
+        // (mergeServer가 이미 최신 쪽을 채택했으므로 merged의 동일 id 항목이 진실.)
+        const cur = get().currentMeeting;
+        if (cur) {
+          const fresh = meetings.find((m) => m.id === cur.id);
+          // fresh가 cur와 다른 객체면 교체(서버 최신 반영). 같은 참조면 무변경.
+          if (fresh && fresh !== cur) {
+            set({ meetings, currentMeeting: fresh });
+            return;
+          }
+        }
+        set({ meetings });
+      },
 
       resetForSignOut: () => {
         // 이전 사용자 데이터가 메모리에 남지 않도록 전부 비움.
