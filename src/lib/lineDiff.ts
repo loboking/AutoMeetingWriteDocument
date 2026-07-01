@@ -51,3 +51,41 @@ export function diffStats(lines: DiffLine[]): { added: number; removed: number }
   }
   return { added, removed };
 }
+
+// 렌더용 조각: 변경 줄(add/remove), 문맥 줄(equal), 접힘 표시(gap)
+export type HunkLine =
+  | { op: 'add' | 'remove' | 'equal'; text: string }
+  | { op: 'gap'; hidden: number };
+
+// 변경 부분 + 앞뒤 문맥(context줄)만 남기고, 그 사이 긴 unchanged 구간은 gap으로 접는다.
+// 전체 문서 대신 "바뀐 곳 위주"로 보여 복잡함을 줄인다.
+export function collapseUnchanged(lines: DiffLine[], context = 2): HunkLine[] {
+  const n = lines.length;
+  // 각 줄을 보여줄지 여부: 변경줄 + 그 주변 context줄
+  const keep = new Array(n).fill(false);
+  for (let i = 0; i < n; i++) {
+    if (lines[i].op !== 'equal') {
+      for (let j = Math.max(0, i - context); j <= Math.min(n - 1, i + context); j++) keep[j] = true;
+    }
+  }
+  // 변경이 전혀 없으면 빈 배열(호출부에서 "변경 없음" 처리)
+  if (!keep.some(Boolean)) return [];
+
+  const out: HunkLine[] = [];
+  let i = 0;
+  while (i < n) {
+    if (keep[i]) {
+      out.push({ op: lines[i].op, text: lines[i].text });
+      i++;
+    } else {
+      // 연속으로 숨길 구간 → gap 하나로 압축
+      let hidden = 0;
+      while (i < n && !keep[i]) {
+        hidden++;
+        i++;
+      }
+      out.push({ op: 'gap', hidden });
+    }
+  }
+  return out;
+}

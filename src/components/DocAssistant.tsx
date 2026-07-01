@@ -5,7 +5,7 @@ import { MessageSquarePlus, X, Send, History, Loader2, Check, RotateCcw, Sparkle
 import { useMeetingStore, type ChatMsg } from '@/store/meetingStore';
 import { authedFetch } from '@/lib/authFetch';
 import { docTypeToField, DOCUMENTS, getAllDependents } from '@/lib/documentUtils';
-import { diffLines, diffStats } from '@/lib/lineDiff';
+import { diffLines, diffStats, collapseUnchanged } from '@/lib/lineDiff';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import type { DocType, DocVersionSource } from '@/types';
@@ -215,6 +215,8 @@ export default function DocAssistant() {
 
   const diff = proposal ? diffLines(proposal.before, proposal.after) : [];
   const stats = proposal ? diffStats(diff) : { added: 0, removed: 0 };
+  // 전체가 아니라 "바뀐 부분 + 앞뒤 2줄"만 (긴 unchanged는 접음)
+  const hunks = proposal ? collapseUnchanged(diff, 2) : [];
 
   return (
     <>
@@ -308,7 +310,12 @@ export default function DocAssistant() {
                       </span>
                     </div>
                     <div className="max-h-56 overflow-y-auto bg-background p-2 font-mono text-[11px] leading-relaxed">
-                      {diff.map((l, i) => (
+                      {hunks.map((l, i) =>
+                        l.op === 'gap' ? (
+                          <div key={i} className="select-none px-1 py-0.5 text-center text-[10px] text-muted-foreground/60">
+                            {`⋯ 변경 없는 ${l.hidden}줄 ⋯`}
+                          </div>
+                        ) : (
                         <div key={i} className={cn('whitespace-pre-wrap px-1',
                           l.op === 'add' && 'bg-green-500/10 text-green-700 dark:text-green-400',
                           l.op === 'remove' && 'bg-red-500/10 text-red-700 dark:text-red-400 line-through',
@@ -316,7 +323,8 @@ export default function DocAssistant() {
                           <span className="select-none opacity-50">{l.op === 'add' ? '+ ' : l.op === 'remove' ? '− ' : '  '}</span>
                           {l.text || ' '}
                         </div>
-                      ))}
+                        )
+                      )}
                     </div>
                     <div className="flex gap-2 border-t border-border p-2">
                       <Button size="sm" className="flex-1 gap-1" onClick={applyProposal}>

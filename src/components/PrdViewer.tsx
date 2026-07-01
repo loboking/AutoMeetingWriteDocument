@@ -224,10 +224,15 @@ export function PrdViewer() {
   const docCountKey = currentMeeting
     ? DOCUMENTS.filter(d => !!(currentMeeting as unknown as Record<string, unknown>)[docTypeToField(d.key)]).length
     : 0;
+  // 문서 "내용" 변경(개수 불변)도 감지해야 DocHelper 수정 적용 즉시 화면 반영.
+  // updateCurrentMeeting이 항상 updatedAt을 갱신하므로 이를 의존성에 포함.
+  const updatedKey = currentMeeting?.updatedAt ? new Date(currentMeeting.updatedAt).getTime() : 0;
   useEffect(() => {
+    // 편집(raw) 중이면 사용자 입력 유실 방지 위해 미러 갱신 보류(편집 종료 시 재동기화됨).
+    if (isEditing) return;
     setDocuments(getDocumentsFromMeeting());
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentMeeting?.id, docCountKey]);
+  }, [currentMeeting?.id, docCountKey, updatedKey, isEditing]);
 
   // 활성 문서 전환 보정: 시각화 미지원 문서로 넘어갈 때 'visual'이면 빈 패널 방지를 위해 'preview'로.
   // (사용자가 고른 'raw'/'preview'/'terminal'은 건드리지 않음)
