@@ -48,6 +48,12 @@ export default function DocAssistant() {
   // 적용 후 "연관 문서도 갱신" 제안 (사용자 클릭 시 regenerateDocs). 휘발성.
   const [cascade, setCascade] = useState<{ from: DocType; targets: DocType[] } | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // 진행 중 요청 취소용(ESC). textarea 포커스 시에만 취소 허용.
+  const abortRef = useRef<AbortController | null>(null);
+  // 패널 크기(px) — 사용자가 좌상단 핸들로 리사이즈. 기본값은 기존 크기.
+  const [panelSize, setPanelSize] = useState<{ w: number; h: number }>({ w: 420, h: 620 });
+  const resizingRef = useRef<{ startX: number; startY: number; startW: number; startH: number } | null>(null);
 
   const meetingId = currentMeeting?.id ?? null;
   // 현재 회의의 대화 기록 (store에서 영속). 회의 바꾸면 자동으로 그 회의 것으로 전환.
@@ -116,18 +122,21 @@ export default function DocAssistant() {
     addMsg({ role: 'user', text: instruction });
     setBusy(true);
     // 경과 시간 기반 단계 표시 (서버는 단일 응답이라 클라에서 안내). 길게 걸려도 멈춘 느낌 방지.
-    setProgressMsg('생각하는 중...');
+    setProgressMsg('생각하는 중... (ESC로 취소)');
     const startedAt = Date.now();
     const ticker = setInterval(() => {
       const s = (Date.now() - startedAt) / 1000;
-      if (s > 70) setProgressMsg('거의 다 됐어요...');
-      else if (s > 30) setProgressMsg('문서를 다듬는 중...');
-      else if (s > 8) setProgressMsg('자료를 찾아보는 중...');
+      if (s > 70) setProgressMsg('거의 다 됐어요... (ESC로 취소)');
+      else if (s > 30) setProgressMsg('문서를 다듬는 중... (ESC로 취소)');
+      else if (s > 8) setProgressMsg('자료를 찾아보는 중... (ESC로 취소)');
     }, 1000);
+    const controller = new AbortController();
+    abortRef.current = controller;
     try {
       const res = await authedFetch('/api/edit-doc', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
         body: JSON.stringify({
           docType: targetDoc,
           currentContent: targetContent,
@@ -157,12 +166,44 @@ export default function DocAssistant() {
       // chat 모드(기본): 대화 답변만
       addMsg({ role: 'assistant', text: data.reply || '다시 한 번 말씀해 주세요.' });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : '오류가 발생했습니다.';
-      addMsg({ role: 'assistant', text: `⚠️ ${msg}` });
+      // 사용자가 ESC로 취소한 경우 — 조용히 안내만
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        addMsg({ role: 'assistant', text: '요청을 취소했어요.' });
+      } else {
+        const msg = err instanceof Error ? err.message : '오류가 발생했습니다.';
+        addMsg({ role: 'assistant', text: `⚠️ ${msg}` });
+      }
     } finally {
       clearInterval(ticker);
+      abortRef.current = null;
       setBusy(false);
     }
+  };
+
+  // 진행 중 요청 취소(ESC). textarea 포커스 상태에서만 호출됨.
+  const cancelRequest = () => {
+    if (abortRef.current) abortRef.current.abort();
+  };
+
+  // 패널 리사이즈: 좌상단 핸들 드래그. 패널이 우하단 고정이라 좌↑로 끌면 커진다.
+  const startResize = (e: React.MouseEvent) => {
+    e.preventDefault();
+    resizingRef.current = { startX: e.clientX, startY: e.clientY, startW: panelSize.w, startH: panelSize.h };
+    const onMove = (ev: MouseEvent) => {
+      const r = resizingRef.current;
+      if (!r) return;
+      // 좌상단 핸들: 왼쪽/위로 끌수록(dx,dy 음수) 커진다 → 부호 반전
+      const w = Math.min(Math.max(r.startW + (r.startX - ev.clientX), 320), Math.min(900, window.innerWidth - 40));
+      const h = Math.min(Math.max(r.startH + (r.startY - ev.clientY), 360), window.innerHeight - 40);
+      setPanelSize({ w, h });
+    };
+    const onUp = () => {
+      resizingRef.current = null;
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
   };
 
   const applyProposal = () => {
@@ -234,7 +275,17 @@ export default function DocAssistant() {
 
       {/* 채팅 패널 */}
       {open && (
-        <div className="fixed bottom-5 right-5 z-50 flex h-[min(620px,85vh)] w-[min(420px,calc(100vw-2.5rem))] flex-col rounded-2xl border border-border bg-background shadow-2xl">
+        <div
+          className="fixed bottom-5 right-5 z-50 flex max-w-[calc(100vw-2.5rem)] max-h-[calc(100vh-2.5rem)] flex-col rounded-2xl border border-border bg-background shadow-2xl"
+          style={{ width: panelSize.w, height: panelSize.h }}
+        >
+          {/* 리사이즈 핸들(좌상단) — 좌↑로 끌면 커짐 */}
+          <div
+            onMouseDown={startResize}
+            className="absolute -left-1 -top-1 z-10 h-4 w-4 cursor-nwse-resize rounded-tl-lg border-l-2 border-t-2 border-primary/40 hover:border-primary"
+            title="드래그해서 크기 조절"
+            aria-label="채팅창 크기 조절"
+          />
           {/* 헤더 */}
           <div className="flex items-center justify-between border-b border-border px-4 py-3">
             <div className="flex items-center gap-2">
@@ -394,17 +445,25 @@ export default function DocAssistant() {
             <div className="border-t border-border p-2.5">
               <div className="flex items-end gap-2">
                 <textarea
+                  ref={textareaRef}
                   value={input}
-                  onChange={(e) => setInput(e.target.value)}
+                  onChange={(e) => { if (!busy) setInput(e.target.value); }}
                   onKeyDown={(e) => {
+                    // ESC: 응답 대기 중이면 취소(textarea 포커스 상태에서만 이 핸들러가 실행됨)
+                    if (e.key === 'Escape' && busy) {
+                      e.preventDefault();
+                      cancelRequest();
+                      return;
+                    }
+                    if (busy) return; // 대기 중 다른 입력 무시
                     if (e.key === 'Enter' && !e.shiftKey) {
                       e.preventDefault();
                       void send();
                     }
                   }}
-                  placeholder={`${docTitle(targetDoc ?? 'prd')}에 대해 묻거나 수정 요청... (Enter 전송, Shift+Enter 줄바꿈)`}
+                  placeholder={busy ? 'ESC를 누르면 취소돼요...' : `${docTitle(targetDoc ?? 'prd')}에 대해 묻거나 수정 요청... (Enter 전송, Shift+Enter 줄바꿈)`}
                   rows={2}
-                  disabled={busy}
+                  readOnly={busy}
                   className="flex-1 resize-none rounded-lg border border-border bg-background px-2.5 py-2 text-sm outline-none focus:border-primary disabled:opacity-50"
                 />
                 <Button size="icon" onClick={send} disabled={busy || !input.trim()} aria-label="전송">
