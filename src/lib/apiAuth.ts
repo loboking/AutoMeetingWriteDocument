@@ -23,3 +23,23 @@ export async function requireUser(request: NextRequest): Promise<AuthResult> {
   }
   return { user };
 }
+
+// 관리자 이메일 화이트리스트. env ADMIN_EMAILS(쉼표구분) 우선, 없으면 기본값.
+export const ADMIN_EMAILS = (process.env.ADMIN_EMAILS || 'loboking@nate.com')
+  .split(',')
+  .map((e) => e.trim().toLowerCase())
+  .filter(Boolean);
+
+export function isAdminEmail(email?: string | null): boolean {
+  return !!email && ADMIN_EMAILS.includes(email.toLowerCase());
+}
+
+// 관리자 전용 라우트 가드. requireUser 통과 + 이메일 화이트리스트 검사. 아니면 403.
+export async function requireAdmin(request: NextRequest): Promise<AuthResult> {
+  const auth = await requireUser(request);
+  if (auth.response) return auth;
+  if (!isAdminEmail(auth.user.email)) {
+    return { response: NextResponse.json({ error: '관리자 권한이 없습니다.' }, { status: 403 }) };
+  }
+  return auth;
+}
