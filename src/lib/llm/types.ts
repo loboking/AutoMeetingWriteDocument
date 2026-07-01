@@ -13,10 +13,18 @@ export interface LLMRequest {
   enableWebSearch?: boolean; // GLM 한정: web_search 내장 도구 부착(리서치). 미지원 provider는 무시.
 }
 
+// 토큰 사용량 (과금 설계 실측용). provider가 안 주면 undefined.
+export interface LLMUsage {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+}
+
 export interface LLMResult {
   text: string; // provider 무관 단일 본문
   provider: ProviderId; // 어떤 provider가 동작했는지 (로그/검증용)
   model: string; // 실제 사용 모델 id
+  usage?: LLMUsage; // 실제 토큰 사용량(있으면). 과금/원가 분석용.
 }
 
 // 활성 provider 1개 + 호출에 필요한 정보 (resolveProvider 반환)

@@ -30,6 +30,12 @@ export const anthropicAdapter: LLMAdapter = {
             .map((b) => b.text)
             .join('');
 
-    return { text, provider: ctx.id, model: ctx.model };
+    // 토큰 실측(과금 설계용). Anthropic은 usage.input_tokens/output_tokens.
+    const u = res.usage;
+    const usage = u
+      ? { inputTokens: u.input_tokens ?? 0, outputTokens: u.output_tokens ?? 0, totalTokens: (u.input_tokens ?? 0) + (u.output_tokens ?? 0) }
+      : undefined;
+
+    return { text, provider: ctx.id, model: ctx.model, usage };
   },
 };

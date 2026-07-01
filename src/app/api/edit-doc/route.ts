@@ -3,6 +3,8 @@ import { requireUser } from '@/lib/apiAuth';
 import { llmComplete } from '@/lib/llm';
 import { DOCUMENTS } from '@/lib/documentUtils';
 import { applyPatches, type DocPatch } from '@/lib/docPatch';
+import { recordTokenUsage, type TokenOp } from '@/lib/tokenUsage';
+import type { LLMResult } from '@/lib/llm/types';
 import type { DocType } from '@/types';
 
 export const runtime = 'nodejs';
@@ -19,6 +21,7 @@ interface EditDocBody {
   instruction: string; // 이번 사용자 메시지
   history?: HistoryMsg[]; // 이전 대화 맥락 (최근 N개)
   title?: string; // 회의 제목(맥락)
+  meetingId?: string; // 토큰 기록 연관용(옵션)
 }
 
 const docLabel = (t: DocType): string =>
@@ -57,12 +60,25 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: '잘못된 요청 형식입니다.' }, { status: 400 });
   }
 
-  const { docType, currentContent, instruction, history = [], title } = body;
+  const { docType, currentContent, instruction, history = [], title, meetingId } = body;
   if (!docType || typeof currentContent !== 'string' || !instruction?.trim()) {
     return NextResponse.json({ error: 'docType, currentContent, instruction이 필요합니다.' }, { status: 400 });
   }
 
   const label = docLabel(docType);
+
+  // 토큰 실측 기록(과금 설계용, best-effort). 각 llmComplete 결과를 op별로 남긴다.
+  const logTokens = (op: TokenOp, r: LLMResult) => {
+    void recordTokenUsage({
+      userId: auth.user.id,
+      op,
+      provider: r.provider,
+      model: r.model,
+      usage: r.usage,
+      meetingId,
+      docType,
+    });
+  };
 
   // 패치(부분 수정) 출력 지침 — 전체 재작성 대신 작은 패치만 생성 → 긴 문서도 빠르고 정확.
   const patchGuide = [
@@ -147,6 +163,8 @@ export async function POST(request: NextRequest) {
     });
 
     const p1 = parseModelJson(r1.text ?? '');
+    // r1은 판단 호출. chat이면 chat, edit이면 부분수정 시도로 기록(rewrite/research는 아래서 별도 기록).
+    logTokens(p1?.mode === 'edit' && !p1.rewrite && !p1.needSearch ? 'edit-patch' : 'chat', r1);
     if (!p1 || !p1.reply) {
       const fallback = (r1.text ?? '').trim() || '죄송해요, 다시 한 번 말씀해 주세요.';
       return NextResponse.json({ mode: 'chat', reply: fallback, provider: r1.provider });
@@ -169,6 +187,7 @@ export async function POST(request: NextRequest) {
           timeoutMs: 240_000, // 함수 300s 안전 마진
           maxRetries: 0,
         });
+        logTokens('edit-rewrite', rw);
         const prw = parseModelJson(rw.text ?? '');
         if (prw && prw.mode === 'edit' && typeof prw.content === 'string' && prw.content.trim() && prw.content.trim() !== currentContent.trim()) {
           return NextResponse.json({ mode: 'edit', reply: prw.reply || '문서 전체를 검토·개선했습니다.', content: prw.content, provider: rw.provider, model: rw.model, rewritten: true });
@@ -205,6 +224,7 @@ export async function POST(request: NextRequest) {
           maxRetries: 0,
           enableWebSearch: true,
         });
+        logTokens('research', r2);
         researchFacts = (r2.text ?? '').trim();
       } catch (e2) {
         console.error('[edit-doc] 검색 실패 → 검색없이 진행:', e2 instanceof Error ? e2.message : e2);
@@ -227,6 +247,7 @@ export async function POST(request: NextRequest) {
         timeoutMs: 120_000,
         maxRetries: 0,
       });
+      logTokens(researchFacts ? 'research' : 'edit-patch', r3);
       const p3 = parseModelJson(r3.text ?? '');
       if (p3) {
         const note = p1.needSearch && !researchFacts ? ' (실시간 검색은 일시적으로 건너뛰었어요)' : '';

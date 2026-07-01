@@ -56,6 +56,12 @@ export const openaiCompatAdapter: LLMAdapter = {
       | { content?: string | null; reasoning_content?: string | null }
       | undefined;
 
-    return { text: extractContent(message), provider: ctx.id, model: ctx.model };
+    // 토큰 실측(과금 설계용). OpenAI 호환은 usage.prompt_tokens/completion_tokens 제공.
+    const u = response.usage;
+    const usage = u
+      ? { inputTokens: u.prompt_tokens ?? 0, outputTokens: u.completion_tokens ?? 0, totalTokens: u.total_tokens ?? 0 }
+      : undefined;
+
+    return { text: extractContent(message), provider: ctx.id, model: ctx.model, usage };
   },
 };

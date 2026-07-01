@@ -143,6 +143,7 @@ export default function DocAssistant() {
           instruction,
           history,
           title: currentMeeting.title,
+          meetingId: currentMeeting.id,
         }),
       });
       if (!res.ok) {
