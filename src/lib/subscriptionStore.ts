@@ -22,18 +22,32 @@ function oneMonthLater(from: Date): Date {
 }
 
 // 유저의 현재 플랜. 구독 없거나 조회 실패 시 'free'(안전 폴백). getMonthlyLimit가 사용.
+// granted(관리자 제공)=true면 결제 상태와 무관하게 유료 취급(무제한은 getMonthlyLimit이 처리).
 export async function getUserPlan(userId: string): Promise<PlanId> {
   if (!supabaseAdmin) return 'free';
   const { data, error } = await supabaseAdmin
     .from('subscriptions')
-    .select('plan, status, current_period_end')
+    .select('plan, status, current_period_end, granted')
     .eq('user_id', userId)
     .maybeSingle();
   if (error || !data) return 'free';
+  // 관리자 제공 계정: 만료/상태 무시하고 유료로. plan이 free면 pro로 승격 취급.
+  if (data.granted) return isPlanId(data.plan) && data.plan !== 'free' ? data.plan : 'pro';
   // 만료됐거나 active 아니면 free 취급(cron이 갱신 전이거나 결제 실패 상태)
   const expired = data.current_period_end && new Date(data.current_period_end) < new Date();
   if (data.status !== 'active' || expired) return 'free';
   return isPlanId(data.plan) ? data.plan : 'free';
+}
+
+// 관리자 "제공(무제한)" 여부.
+export async function isGranted(userId: string): Promise<boolean> {
+  if (!supabaseAdmin) return false;
+  const { data } = await supabaseAdmin
+    .from('subscriptions')
+    .select('granted')
+    .eq('user_id', userId)
+    .maybeSingle();
+  return !!data?.granted;
 }
 
 export async function getSubscription(userId: string): Promise<Subscription | null> {

@@ -23,6 +23,9 @@ export function isPlanId(v: string): v is PlanId {
   return v === 'free' || v === 'pro' || v === 'team';
 }
 
+// 관리자 "제공(grant)" 계정의 사실상 무제한 한도. (실수치 상한이 필요한 미터링용 큰 값)
+export const GRANTED_LIMIT = 999999;
+
 // 플랜의 월 회의 한도. 미터링 getMonthlyLimit가 호출. 알 수 없으면 free로 안전 폴백.
 export function getPlanLimit(planId: string): number {
   return (isPlanId(planId) ? PLANS[planId] : PLANS.free).monthlyMeetings;

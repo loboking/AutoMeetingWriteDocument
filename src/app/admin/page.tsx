@@ -117,7 +117,16 @@ function Dashboard({ onDenied }: { onDenied: () => void }) {
 
 interface UserRow {
   id: string; email: string; createdAt: string; lastSignInAt: string | null;
-  banned: boolean; meetingCount: number; plan: string; subStatus: string | null;
+  banned: boolean; meetingCount: number; plan: string; subStatus: string | null; granted: boolean;
+}
+
+// 요금 상태 배지: 제공(관리자무제한) > 유료 > 무료
+function PlanBadge({ plan, subStatus, granted }: { plan: string; subStatus: string | null; granted: boolean }) {
+  if (granted) return <Badge className="bg-blue-600 text-white text-[10px] hover:bg-blue-600">제공</Badge>;
+  const isPaid = plan !== 'free' && subStatus === 'active';
+  return isPaid
+    ? <Badge className="text-[10px]">유료</Badge>
+    : <Badge variant="secondary" className="text-[10px]">무료</Badge>;
 }
 
 function UsersTab({ onDenied }: { onDenied: () => void }) {
@@ -139,11 +148,11 @@ function UsersTab({ onDenied }: { onDenied: () => void }) {
             <thead className="bg-muted/40 text-xs text-muted-foreground">
               <tr>
                 <th className="p-2 text-left">이메일</th>
-                <th className="p-2 text-left">플랜</th>
+                <th className="p-2 text-left">요금상태</th>
                 <th className="p-2 text-right">회의</th>
                 <th className="p-2 text-left">가입일</th>
                 <th className="p-2 text-left">최근 로그인</th>
-                <th className="p-2 text-center">상태</th>
+                <th className="p-2 text-center">계정</th>
               </tr>
             </thead>
             <tbody>
@@ -151,7 +160,7 @@ function UsersTab({ onDenied }: { onDenied: () => void }) {
                 <tr key={u.id} onClick={() => setSelected({ id: u.id, email: u.email })}
                   className="cursor-pointer border-t border-border hover:bg-muted/40">
                   <td className="p-2 text-primary underline-offset-2 hover:underline">{u.email}</td>
-                  <td className="p-2"><Badge variant={u.plan==='free'?'secondary':'default'} className="text-[10px]">{u.plan}</Badge></td>
+                  <td className="p-2"><PlanBadge plan={u.plan} subStatus={u.subStatus} granted={u.granted} /></td>
                   <td className="p-2 text-right">{u.meetingCount}</td>
                   <td className="p-2">{date(u.createdAt)}</td>
                   <td className="p-2">{date(u.lastSignInAt)}</td>
@@ -170,7 +179,7 @@ function UsersTab({ onDenied }: { onDenied: () => void }) {
 
 interface UserDetailData {
   user: { id: string; email: string | null; createdAt: string; lastSignInAt: string | null; banned: boolean };
-  subscription: { plan: string; status: string } | null;
+  subscription: { plan: string; status: string; granted?: boolean } | null;
   meetings: { client_id: string; title: string; created_at: string }[];
   usageByPeriod: Record<string, number>;
   tokens: { total: number; calls: number; byOp: Record<string, { calls: number; input: number; output: number }> };
@@ -178,9 +187,10 @@ interface UserDetailData {
 
 // 사용자 상세 모달 — 구독/사용량/토큰 + 회의 목록. 회의 클릭 시 문서 뷰어.
 function UserDetail({ userId, email, onClose, onDenied, onReload }: { userId: string; email: string; onClose: () => void; onDenied: () => void; onReload: () => void }) {
-  const { data, loading, error } = useAdminFetch<UserDetailData>(`/api/admin/users/${userId}`, onDenied);
+  const { data, loading, error, reload } = useAdminFetch<UserDetailData>(`/api/admin/users/${userId}`, onDenied);
   const [meetingId, setMeetingId] = useState<string | null>(null);
   const [banning, setBanning] = useState(false);
+  const [granting, setGranting] = useState(false);
 
   const toggleBan = async () => {
     if (!data) return;
@@ -196,6 +206,21 @@ function UserDetail({ userId, email, onClose, onDenied, onReload }: { userId: st
     } finally { setBanning(false); }
   };
 
+  const granted = !!data?.subscription?.granted;
+  const toggleGrant = async () => {
+    if (!data) return;
+    if (!confirm(granted ? '"제공(무제한)"을 해제할까요?' : '이 사용자에게 "제공(무제한)"을 부여할까요? 결제 없이 유료 혜택을 받습니다.')) return;
+    setGranting(true);
+    try {
+      const res = await authedFetch(`/api/admin/users/${userId}/grant`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ grant: !granted }),
+      });
+      if (!res.ok) { const e = await res.json().catch(() => ({})); alert(e.error || '실패'); }
+      else { reload(); onReload(); }
+    } finally { setGranting(false); }
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
       <div className="max-h-[85vh] w-[min(720px,100%)] overflow-y-auto rounded-2xl bg-background p-5 shadow-2xl" onClick={(e) => e.stopPropagation()}>
@@ -208,6 +233,22 @@ function UserDetail({ userId, email, onClose, onDenied, onReload }: { userId: st
             <MeetingViewer meetingId={meetingId} onBack={() => setMeetingId(null)} onDenied={onDenied} />
           ) : (
             <div className="space-y-4 text-sm">
+              {/* 요금 상태 + 관리 액션 */}
+              <div className="flex items-center justify-between rounded-lg border border-border p-2.5">
+                <div className="flex items-center gap-2 text-sm">
+                  <span className="text-muted-foreground">요금상태:</span>
+                  <PlanBadge plan={data.subscription?.plan ?? 'free'} subStatus={data.subscription?.status ?? null} granted={granted} />
+                  {data.user.banned && <Badge variant="destructive" className="text-[10px]">차단됨</Badge>}
+                </div>
+                <div className="flex gap-2">
+                  <Button size="sm" variant={granted ? 'outline' : 'default'} onClick={toggleGrant} disabled={granting}>
+                    {granting ? '처리중' : granted ? '제공 해제' : '제공 부여'}
+                  </Button>
+                  <Button size="sm" variant={data.user.banned ? 'outline' : 'destructive'} onClick={toggleBan} disabled={banning}>
+                    {banning ? '처리중' : data.user.banned ? '차단 해제' : '차단'}
+                  </Button>
+                </div>
+              </div>
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                 <MiniStat label="플랜" value={data.subscription?.plan ?? 'free'} />
                 <MiniStat label="구독상태" value={data.subscription?.status ?? '-'} />
@@ -225,12 +266,7 @@ function UserDetail({ userId, email, onClose, onDenied, onReload }: { userId: st
                 </div>
               )}
               <div>
-                <div className="mb-2 flex items-center justify-between">
-                  <span className="font-medium">회의 {data.meetings.length}개</span>
-                  <Button size="sm" variant={data.user.banned ? 'outline' : 'destructive'} onClick={toggleBan} disabled={banning}>
-                    {banning ? '처리중' : data.user.banned ? '차단 해제' : '차단'}
-                  </Button>
-                </div>
+                <div className="mb-2 font-medium">회의 {data.meetings.length}개</div>
                 <div className="space-y-1">
                   {data.meetings.map((m) => (
                     <button key={m.client_id} onClick={() => setMeetingId(m.client_id)}

@@ -1,8 +1,8 @@
 // 사용량 미터링: "월 회의 처리 건수" 카운팅/조회/한도. 서버 전용(supabaseAdmin 사용).
 // 결제 전 단계라 ENFORCE_LIMIT=false(기록만)가 기본. 결제 붙으면 true로 켠다.
 import { supabaseAdmin } from '@/lib/supabaseAdmin';
-import { getPlanLimit } from '@/lib/plans';
-import { getUserPlan } from '@/lib/subscriptionStore';
+import { getPlanLimit, GRANTED_LIMIT } from '@/lib/plans';
+import { getUserPlan, isGranted } from '@/lib/subscriptionStore';
 
 // 차단 스위치: 결제 붙는 순간 'true'로. 기본 꺼둠(지금은 숫자만 쌓음).
 export const ENFORCE_LIMIT = process.env.ENFORCE_LIMIT === 'true';
@@ -46,7 +46,9 @@ export async function countThisPeriod(userId: string, period: string): Promise<n
 }
 
 // 월 한도. 유저의 구독 플랜(subscriptions)을 읽어 plans.ts의 한도 반환. 구독 없으면 free.
+// 관리자 "제공(grant)" 계정은 사실상 무제한(GRANTED_LIMIT).
 export async function getMonthlyLimit(userId: string): Promise<number> {
+  if (await isGranted(userId)) return GRANTED_LIMIT;
   const plan = await getUserPlan(userId);
   return getPlanLimit(plan);
 }

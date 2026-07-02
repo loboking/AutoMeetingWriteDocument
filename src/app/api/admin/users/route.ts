@@ -29,13 +29,13 @@ export async function GET(request: NextRequest) {
   // 회의 수(유저별) + 구독을 한 번에 가져와 메모리 집계
   const [meetingsRes, subsRes] = await Promise.all([
     supabaseAdmin.from('meetings').select('user_id').in('user_id', ids.length ? ids : ['none']),
-    supabaseAdmin.from('subscriptions').select('user_id,plan,status').in('user_id', ids.length ? ids : ['none']),
+    supabaseAdmin.from('subscriptions').select('user_id,plan,status,granted').in('user_id', ids.length ? ids : ['none']),
   ]);
 
   const meetingCount: Record<string, number> = {};
   for (const m of meetingsRes.data ?? []) meetingCount[m.user_id] = (meetingCount[m.user_id] ?? 0) + 1;
-  const subByUser: Record<string, { plan: string; status: string }> = {};
-  for (const s of subsRes.data ?? []) subByUser[s.user_id] = { plan: s.plan, status: s.status };
+  const subByUser: Record<string, { plan: string; status: string; granted: boolean }> = {};
+  for (const s of subsRes.data ?? []) subByUser[s.user_id] = { plan: s.plan, status: s.status, granted: !!s.granted };
 
   const rows = users.map((u) => ({
     id: u.id,
@@ -46,6 +46,7 @@ export async function GET(request: NextRequest) {
     meetingCount: meetingCount[u.id] ?? 0,
     plan: subByUser[u.id]?.plan ?? 'free',
     subStatus: subByUser[u.id]?.status ?? null,
+    granted: subByUser[u.id]?.granted ?? false,
   }));
 
   return NextResponse.json({ users: rows, page, perPage, total: users.length });
