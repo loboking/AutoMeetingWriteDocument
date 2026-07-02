@@ -19,9 +19,14 @@ create table if not exists public.subscriptions (
   current_period_start timestamptz,
   current_period_end timestamptz,              -- 이 시각 지나면 cron이 재결제 시도
   cancel_at_period_end boolean not null default false, -- 취소 예약(기간 끝까지 유지)
+  granted boolean not null default false,      -- 관리자 "제공": 결제 없이 유료(무제한) 혜택
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+-- 기존 테이블이 이미 있던 경우를 위한 컬럼 보강(idempotent)
+alter table public.subscriptions
+  add column if not exists granted boolean not null default false;
 
 -- cron 재결제 대상 조회 가속(만료 임박 active 구독)
 create index if not exists subscriptions_renew_idx
