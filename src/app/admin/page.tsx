@@ -6,7 +6,9 @@ import { PageContainer } from '@/components/layout/PageContainer';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Loader2, Users, CreditCard, LayoutDashboard, ShieldAlert, RefreshCw } from 'lucide-react';
+import { Loader2, Users, CreditCard, LayoutDashboard, ShieldAlert, RefreshCw, ChevronLeft } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+import { DOCUMENTS, docTypeToField } from '@/lib/documentUtils';
 
 type Tab = 'dashboard' | 'users' | 'payments';
 
@@ -120,6 +122,7 @@ interface UserRow {
 
 function UsersTab({ onDenied }: { onDenied: () => void }) {
   const [q, setQ] = useState('');
+  const [selected, setSelected] = useState<{ id: string; email: string } | null>(null);
   const { data, loading, error, reload } = useAdminFetch<{ users: UserRow[] }>(
     `/api/admin/users?perPage=200${q ? `&q=${encodeURIComponent(q)}` : ''}`, onDenied);
 
@@ -145,8 +148,9 @@ function UsersTab({ onDenied }: { onDenied: () => void }) {
             </thead>
             <tbody>
               {(data?.users ?? []).map((u) => (
-                <tr key={u.id} className="border-t border-border">
-                  <td className="p-2">{u.email}</td>
+                <tr key={u.id} onClick={() => setSelected({ id: u.id, email: u.email })}
+                  className="cursor-pointer border-t border-border hover:bg-muted/40">
+                  <td className="p-2 text-primary underline-offset-2 hover:underline">{u.email}</td>
                   <td className="p-2"><Badge variant={u.plan==='free'?'secondary':'default'} className="text-[10px]">{u.plan}</Badge></td>
                   <td className="p-2 text-right">{u.meetingCount}</td>
                   <td className="p-2">{date(u.createdAt)}</td>
@@ -159,9 +163,179 @@ function UsersTab({ onDenied }: { onDenied: () => void }) {
           </table>
         </div>
       )}
+      {selected && <UserDetail userId={selected.id} email={selected.email} onClose={() => setSelected(null)} onDenied={onDenied} onReload={reload} />}
     </div>
   );
 }
+
+interface UserDetailData {
+  user: { id: string; email: string | null; createdAt: string; lastSignInAt: string | null; banned: boolean };
+  subscription: { plan: string; status: string } | null;
+  meetings: { client_id: string; title: string; created_at: string }[];
+  usageByPeriod: Record<string, number>;
+  tokens: { total: number; calls: number; byOp: Record<string, { calls: number; input: number; output: number }> };
+}
+
+// 사용자 상세 모달 — 구독/사용량/토큰 + 회의 목록. 회의 클릭 시 문서 뷰어.
+function UserDetail({ userId, email, onClose, onDenied, onReload }: { userId: string; email: string; onClose: () => void; onDenied: () => void; onReload: () => void }) {
+  const { data, loading, error } = useAdminFetch<UserDetailData>(`/api/admin/users/${userId}`, onDenied);
+  const [meetingId, setMeetingId] = useState<string | null>(null);
+  const [banning, setBanning] = useState(false);
+
+  const toggleBan = async () => {
+    if (!data) return;
+    if (!confirm(data.user.banned ? '차단을 해제할까요?' : '이 사용자를 차단할까요?')) return;
+    setBanning(true);
+    try {
+      const res = await authedFetch(`/api/admin/users/${userId}/ban`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ban: !data.user.banned }),
+      });
+      if (!res.ok) { const e = await res.json().catch(() => ({})); alert(e.error || '실패'); }
+      else { onReload(); onClose(); }
+    } finally { setBanning(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
+      <div className="max-h-[85vh] w-[min(720px,100%)] overflow-y-auto rounded-2xl bg-background p-5 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="text-sm font-semibold">{email}</h2>
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground">✕</button>
+        </div>
+        {loading ? <Spinner /> : error ? <ErrBox msg={error} onRetry={() => {}} /> : data ? (
+          meetingId ? (
+            <MeetingViewer meetingId={meetingId} onBack={() => setMeetingId(null)} onDenied={onDenied} />
+          ) : (
+            <div className="space-y-4 text-sm">
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                <MiniStat label="플랜" value={data.subscription?.plan ?? 'free'} />
+                <MiniStat label="구독상태" value={data.subscription?.status ?? '-'} />
+                <MiniStat label="토큰 호출" value={num(data.tokens.calls)} />
+                <MiniStat label="총 토큰" value={num(data.tokens.total)} />
+              </div>
+              {Object.keys(data.tokens.byOp).length > 0 && (
+                <div className="rounded-lg border border-border p-2 text-xs">
+                  <div className="mb-1 font-medium">작업별 토큰</div>
+                  {Object.entries(data.tokens.byOp).map(([op, v]) => (
+                    <div key={op} className="flex justify-between text-muted-foreground">
+                      <span>{op}</span><span>{v.calls}회 · 입력 {num(v.input)} / 출력 {num(v.output)}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div>
+                <div className="mb-2 flex items-center justify-between">
+                  <span className="font-medium">회의 {data.meetings.length}개</span>
+                  <Button size="sm" variant={data.user.banned ? 'outline' : 'destructive'} onClick={toggleBan} disabled={banning}>
+                    {banning ? '처리중' : data.user.banned ? '차단 해제' : '차단'}
+                  </Button>
+                </div>
+                <div className="space-y-1">
+                  {data.meetings.map((m) => (
+                    <button key={m.client_id} onClick={() => setMeetingId(m.client_id)}
+                      className="flex w-full items-center justify-between rounded-lg border border-border p-2 text-left hover:bg-muted/40">
+                      <span className="truncate">{m.title || '(제목 없음)'}</span>
+                      <span className="ml-2 shrink-0 text-xs text-muted-foreground">{date(m.created_at)}</span>
+                    </button>
+                  ))}
+                  {data.meetings.length === 0 && <p className="text-center text-xs text-muted-foreground">회의 없음</p>}
+                </div>
+              </div>
+            </div>
+          )
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+const MiniStat = ({ label, value }: { label: string; value: string }) => (
+  <div className="rounded-lg border border-border p-2">
+    <div className="text-[10px] text-muted-foreground">{label}</div>
+    <div className="mt-0.5 font-semibold">{value}</div>
+  </div>
+);
+
+interface MeetingData {
+  title: string;
+  createdAt: string; updatedAt: string;
+  data: Record<string, unknown>; // Meeting 본문 전체
+}
+
+// 회의 문서 뷰어 — 14종 문서 + 요약 + 전사록 + 원본 JSON. 테스트 단계라 전부 표시.
+function MeetingViewer({ meetingId, onBack, onDenied }: { meetingId: string; onBack: () => void; onDenied: () => void }) {
+  const { data, loading, error } = useAdminFetch<MeetingData>(`/api/admin/meetings/${meetingId}`, onDenied);
+  const [view, setView] = useState<string>('summary'); // summary | transcript | <docType> | raw
+
+  if (loading) return <Spinner />;
+  if (error) return <ErrBox msg={error} onRetry={() => {}} />;
+  if (!data) return null;
+  const d = data.data || {};
+
+  // 내용이 있는 문서만 탭으로
+  const docTabs = DOCUMENTS.filter((doc) => {
+    const v = d[docTypeToField(doc.key)];
+    return typeof v === 'string' && v.trim();
+  });
+  const summary = d.summary as Record<string, unknown> | undefined;
+  const transcript = (d.transcript as string) || '';
+
+  const activeContent = (): string => {
+    if (view === 'transcript') return transcript || '(전사록 없음)';
+    if (view === 'raw') return '```json\n' + JSON.stringify(d, null, 2) + '\n```';
+    if (view === 'summary') return '';
+    const v = d[docTypeToField(view)];
+    return typeof v === 'string' ? v : '(내용 없음)';
+  };
+
+  return (
+    <div className="space-y-3 text-sm">
+      <button onClick={onBack} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
+        <ChevronLeft className="h-3.5 w-3.5" /> 회의 목록으로
+      </button>
+      <div>
+        <div className="font-semibold">{data.title || '(제목 없음)'}</div>
+        <div className="text-xs text-muted-foreground">생성 {date(data.createdAt)} · 수정 {date(data.updatedAt)}</div>
+      </div>
+
+      {/* 탭: 요약 / 전사록 / 각 문서 / 원본 */}
+      <div className="flex flex-wrap gap-1 border-b border-border pb-2 text-xs">
+        <TabBtn active={view==='summary'} onClick={() => setView('summary')}>요약</TabBtn>
+        {transcript && <TabBtn active={view==='transcript'} onClick={() => setView('transcript')}>전사록</TabBtn>}
+        {docTabs.map((doc) => (
+          <TabBtn key={doc.key} active={view===doc.key} onClick={() => setView(doc.key)}>{doc.icon} {doc.title}</TabBtn>
+        ))}
+        <TabBtn active={view==='raw'} onClick={() => setView('raw')}>원본 JSON</TabBtn>
+      </div>
+
+      <div className="max-h-[50vh] overflow-y-auto rounded-lg border border-border bg-muted/20 p-3">
+        {view === 'summary' ? (
+          summary ? (
+            <div className="space-y-2 text-xs">
+              {Object.entries(summary).map(([k, v]) => (
+                <div key={k}>
+                  <div className="font-medium text-foreground">{k}</div>
+                  <div className="whitespace-pre-wrap text-muted-foreground">
+                    {Array.isArray(v) ? (v as unknown[]).map((x) => `• ${typeof x === 'string' ? x : JSON.stringify(x)}`).join('\n') : String(v)}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : <p className="text-xs text-muted-foreground">요약 없음</p>
+        ) : (
+          <div className="prose prose-sm dark:prose-invert max-w-none text-xs prose-pre:text-[10px]">
+            <ReactMarkdown>{activeContent()}</ReactMarkdown>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+const TabBtn = ({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) => (
+  <button onClick={onClick} className={`rounded px-2 py-1 ${active ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:text-foreground'}`}>{children}</button>
+);
 
 interface PaymentRow { email: string; paymentId: string; plan: string; amount: number; status: string; createdAt: string; }
 

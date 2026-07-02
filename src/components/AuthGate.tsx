@@ -115,7 +115,7 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
     await migrateLocalMeetings(sess.user.id, local, server);
     // 마이그레이션 후 최신 서버 상태로 다시 가져와 머지
     const serverAfter = await fetchMeetings();
-    const merged = mergeServer(local, serverAfter);
+    const merged = mergeServer(local, serverAfter, useMeetingStore.getState().deletedIds);
     store.setMeetings(merged);
 
     // 런타임 변경 → 디바운스 upsert 등록 (중복 등록 방지)

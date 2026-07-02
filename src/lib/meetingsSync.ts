@@ -73,15 +73,22 @@ export async function migrateLocalMeetings(
 
 // 로컬과 서버를 합침. 같은 회의(client_id)는 updatedAt(없으면 createdAt) 최신 쪽 채택(LWW).
 // 양쪽에 없던 건 그대로 포함. 동률/불명 시 서버 우선(서버가 진실 소스).
-export function mergeServer(local: Meeting[], server: Meeting[]): Meeting[] {
+// deletedIds: 로컬에서 삭제한 회의 id(tombstone). 서버 삭제가 지연/실패해 서버에
+// 아직 남아있어도, 이 목록에 있으면 병합 결과에서 제외한다(삭제 후 부활 방지).
+export function mergeServer(local: Meeting[], server: Meeting[], deletedIds: string[] = []): Meeting[] {
   const ts = (m: Meeting) => {
     const t = m.updatedAt ?? m.createdAt;
     return t ? new Date(t).getTime() : 0;
   };
+  const deleted = new Set(deletedIds);
   const byId = new Map<string, Meeting>();
 
-  for (const m of local) byId.set(m.id, m);
+  for (const m of local) {
+    if (deleted.has(m.id)) continue; // 로컬 삭제분은 애초에 제외
+    byId.set(m.id, m);
+  }
   for (const s of server) {
+    if (deleted.has(s.id)) continue; // ★서버에 남아있어도 삭제된 것은 부활 안 함
     const existing = byId.get(s.id);
     if (!existing || ts(s) >= ts(existing)) {
       byId.set(s.id, s); // 서버가 같거나 최신이면 서버 채택

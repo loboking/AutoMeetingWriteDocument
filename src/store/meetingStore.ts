@@ -386,6 +386,8 @@ interface MeetingStore {
   // 서버에서 최신 데이터를 다시 받아와 머지(수동 "동기화" 버튼용). 로그인 후 재조회 수단.
   isSyncing: boolean;
   syncFromServer: () => Promise<void>;
+  // 로컬에서 삭제한 회의 id(tombstone). 서버 삭제 지연/실패 시 동기화가 부활시키지 않도록.
+  deletedIds: string[];
   resetForSignOut: () => void; // 로그아웃 시 메모리 상태 전체 리셋 (이전 사용자 데이터 잔류 차단)
 
   // 학습 완료 관련 액션
@@ -427,6 +429,7 @@ export const useMeetingStore = create<MeetingStore>()(
       currentStep: 'idle',
       activeDocType: null,
       chatMessages: {},
+      deletedIds: [],
       docStatuses: {},
       docVersions: {},
       frozenDocs: {},
@@ -597,7 +600,7 @@ export const useMeetingStore = create<MeetingStore>()(
         set({ isSyncing: true });
         try {
           const server = await fetchMeetings();
-          const merged = mergeServer(get().meetings, server);
+          const merged = mergeServer(get().meetings, server, get().deletedIds);
           get().setMeetings(merged); // setMeetings가 currentMeeting도 최신본으로 갱신
         } catch (e) {
           console.error('[syncFromServer] 실패:', e instanceof Error ? e.message : e);
@@ -631,6 +634,7 @@ export const useMeetingStore = create<MeetingStore>()(
           currentMeeting: null,
           currentStep: 'idle',
           chatMessages: {},
+          deletedIds: [],
           docStatuses: {},
           docVersions: {},
           frozenDocs: {},
@@ -642,7 +646,11 @@ export const useMeetingStore = create<MeetingStore>()(
       },
 
       deleteMeeting: (id) => {
-        set({ meetings: get().meetings.filter((m) => m.id !== id) });
+        set({
+          meetings: get().meetings.filter((m) => m.id !== id),
+          // tombstone 기록: 동기화가 이 회의를 다시 살리지 못하게(부활 방지). 최근 200개만 유지.
+          deletedIds: [...get().deletedIds.filter((x) => x !== id), id].slice(-200),
+        });
         // 삭제된 회의의 DocHelper 대화도 정리(고아 데이터 방지)
         get().clearChatMessages(id);
         // 현재 열려있는 회의를 지우면 화면도 닫는다(잔상 방지)
@@ -952,6 +960,7 @@ export const useMeetingStore = create<MeetingStore>()(
         meetings: state.meetings,
         currentMeeting: state.currentMeeting,
         chatMessages: state.chatMessages,
+        deletedIds: state.deletedIds,
         docStatuses: state.docStatuses,
         docVersions: state.docVersions,
         frozenDocs: state.frozenDocs,
