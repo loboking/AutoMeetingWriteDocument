@@ -26,7 +26,7 @@ export interface ChatMsg {
 }
 
 // 실패사유 머신코드 (클라에서 한국어 라벨로 변환)
-export type GenErrorReason = 'timeout' | '429' | 'empty' | 'no-key' | 'network' | 'error';
+export type GenErrorReason = 'timeout' | '429' | 'empty' | 'no-key' | 'network' | 'limit' | 'error';
 
 // 실패사유 라벨 매핑 (클라 단일출처 — i18n 책임은 클라 몫)
 export const REASON_LABEL: Record<GenErrorReason, string> = {
@@ -35,6 +35,7 @@ export const REASON_LABEL: Record<GenErrorReason, string> = {
   empty: '빈 응답',
   'no-key': '생성 오류',  // 데모 한정, 실운영에서는 안 뜸
   network: '네트워크 오류',
+  limit: '이번 달 사용 한도 소진',  // ENFORCE_LIMIT on 시 402
   error: '생성 오류',
 };
 
@@ -42,6 +43,7 @@ export const REASON_LABEL: Record<GenErrorReason, string> = {
 export function classifyClientErr(err: unknown): GenErrorReason {
   if (!err) return 'error';
   const e = err as { status?: number; name?: string; message?: string };
+  if (e.status === 402) return 'limit';  // 사용량 한도 초과(재시도 무의미)
   if (e.status === 429) return '429';
   // AbortError + reason=TimeoutError → 클라 타임아웃
   if (e.name === 'AbortError' || e.name === 'TimeoutError') return 'timeout';
@@ -256,6 +258,8 @@ async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
         // 사용자 취소(cancel 버튼)만 즉시 중단. 타임아웃 abort(TimeoutError)·네트워크 끊김
         // (TypeError: Load failed) 등은 일시 실패로 보고 재시도로 흘려 복귀 후 자동 복구.
         if (genAbort.cancelled) { result = null; break; }
+        // 402(사용량 한도 초과)는 재시도해도 안 풀림 → 즉시 실패 처리(사유 'limit'으로 노출).
+        if ((e as { status?: number })?.status === 402) break;
         if (attempt < MAX_ATTEMPTS - 1) {
           const is429 = (e as { status?: number })?.status === 429;
           // 429: 5s,10s / 그 외: 2s,4s (지수 backoff)

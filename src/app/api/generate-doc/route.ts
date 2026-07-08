@@ -64,7 +64,7 @@ const KOREAN_OUTPUT_SYSTEM_PROMPT =
 // (LLM 클라이언트 생성/응답추출/파라미터 구성은 @/lib/llm 모듈로 이관됨)
 
 // 실패사유 머신코드 (클라 store의 GenErrorReason과 같은 값. 중복 선언이 허용됨 — 서버가 string을 내보낼 뿐)
-type GenErrorReason = 'timeout' | '429' | 'empty' | 'no-key' | 'network' | 'error';
+type GenErrorReason = 'timeout' | '429' | 'empty' | 'no-key' | 'network' | 'limit' | 'error';
 
 /** 에러 객체 → 실패사유 코드. 응답 body의 reason 필드로 클라에 전달된다. */
 function classifyGenError(error: unknown): GenErrorReason {
@@ -998,7 +998,7 @@ export async function POST(request: NextRequest) {
         ]);
         if (used >= limit) {
           return NextResponse.json(
-            { error: 'LIMIT_EXCEEDED', message: `이번 달 무료 한도(${limit}건)를 모두 사용했습니다.`, used, limit },
+            { error: 'LIMIT_EXCEEDED', reason: 'limit', message: `이번 달 무료 한도(${limit}건)를 모두 사용했습니다.`, used, limit },
             { status: 402 }
           );
         }
