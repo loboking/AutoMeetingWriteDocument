@@ -45,7 +45,8 @@ export interface ActiveGenerationJob {
   // completed/cancelled: 종료(재개 안 함).
   status: 'running' | 'completed' | 'cancelled' | 'error';
   updatedAt: number; // heartbeat
-  resumeAttempts?: number; // error 잡 자동 재개 횟수(무한 재개 방지용 상한 카운터)
+  resumeAttempts?: number; // 무진전 자동 재개 횟수(무한 재개 방지용 상한 카운터)
+  lastResumeCompletedCount?: number; // 직전 재개 시점의 완료 문서 수(진전 판정 기준)
   // full: 전체 14종 생성(기본). regen: 일부 문서만 일괄 재생성(영향배너 '모두 갱신').
   // undefined(구 persist 잡)는 'full'로 취급 → 하위호환.
   // regen에서만 docStatuses 전이훅(regenerating→latest/outdated)이 동작하고,
@@ -55,6 +56,9 @@ export interface ActiveGenerationJob {
 
 // error로 끝난 잡을 복귀 시 몇 번까지 자동 재개할지. 초과하면 사용자 수동 재생성에 위임.
 const MAX_RESUME_ATTEMPTS = 3;
+// heartbeat(updatedAt)가 이 시간 이상 끊긴 잡은 죽은 좀비로 보고 폐기(무한 재개 방지).
+// PRD 타임아웃(600s)+재시도 여유 위로. 정상 진행 잡은 문서 완료마다 updatedAt을 갱신하므로 안전.
+const STALE_JOB_MS = 20 * 60 * 1000; // 20분
 // 문서당 보관할 버전 수 상한 (localStorage/jsonb 비대 방지)
 const MAX_DOC_VERSIONS = 30;
 // 회의당 보관할 DocHelper 대화 수 상한
@@ -901,15 +905,22 @@ export const useMeetingStore = create<MeetingStore>()(
 
       // 미완성 잡 재개 (새로고침/재방문/화면 복귀).
       // status='running'(정상 진행 중 끊김) 또는 'error'(일부 실패 미완)인 잡을 이어서 생성.
-      // error 잡은 resumeAttempts 상한까지만 자동 재개(무한 재개 방지).
+      // ★ 무한 재개 방지: status와 무관하게 "진전 없는 재개"만 카운트한다. running 잡도
+      //   매번 끊기며(모바일 백그라운드/탭 종료 등) completedDocs가 안 늘면 상한에서 폐기.
+      //   (기존엔 error만 카운트해 running이 영원히 재개되는 무한 프로그레스 버그가 있었음.)
       resumeGeneration: async () => {
         if (get().isGenerating) return;
         const job = get().activeJob;
         if (!job) return;
-        const isResumable =
-          job.status === 'running' ||
-          (job.status === 'error' && (job.resumeAttempts ?? 0) < MAX_RESUME_ATTEMPTS);
-        if (!isResumable) return;
+        if (job.status !== 'running' && job.status !== 'error') return;
+        // 상한 초과 또는 heartbeat 끊긴 stale 잡 → 폐기(사용자 수동 재생성에 위임).
+        if (
+          (job.resumeAttempts ?? 0) >= MAX_RESUME_ATTEMPTS ||
+          (!!job.updatedAt && Date.now() - job.updatedAt > STALE_JOB_MS)
+        ) {
+          set({ activeJob: null });
+          return;
+        }
         // ★ job.meetingId로만 회의를 찾는다. currentMeeting fallback 금지
         //   (회의 삭제됐는데 currentMeeting이 다른 회의면 엉뚱한 곳에 문서 저장됨)
         const meeting = get().meetings.find((m) => m.id === job.meetingId);
@@ -933,11 +944,19 @@ export const useMeetingStore = create<MeetingStore>()(
           set({ activeJob: null }); // 이미 다 됨
           return;
         }
-        // error→running으로 되돌려 재개. error 재개면 시도 횟수 증가(상한 초과 시 다음엔 자동 재개 안 함).
-        const resumeAttempts =
-          job.status === 'error' ? (job.resumeAttempts ?? 0) + 1 : (job.resumeAttempts ?? 0);
+        // 진전 판정: 직전 재개 시점보다 완료 수가 늘었으면 정상 진행 → 카운터 리셋.
+        // 늘지 않았으면(같은 지점에서 또 끊김) 무진전 재개 → 카운터++ (상한서 폐기).
+        const madeProgress = completed.length > (job.lastResumeCompletedCount ?? -1);
+        const resumeAttempts = madeProgress ? 0 : (job.resumeAttempts ?? 0) + 1;
         set({
-          activeJob: { ...job, completedDocs: completed, status: 'running', resumeAttempts, updatedAt: Date.now() },
+          activeJob: {
+            ...job,
+            completedDocs: completed,
+            status: 'running',
+            resumeAttempts,
+            lastResumeCompletedCount: completed.length,
+            updatedAt: Date.now(),
+          },
         });
         await runGenerationWithLock(set, get);
       },
@@ -974,13 +993,17 @@ export const useMeetingStore = create<MeetingStore>()(
           state.isGenerating = false;
           state.generationProgress = null;
           state.generatingMeetingId = null;
-          // running: 재개. error: resumeAttempts 상한 내면 재개 보존, 초과면 정리.
-          // cancelled/completed: 정리.
+          // running/error: resumeAttempts 상한 내면 재개 보존, 초과면 정리.
+          // cancelled/completed: 정리. (running도 무진전 상한 초과 시 폐기 → 무한 재개 차단.)
+          // + stale 가드: heartbeat(updatedAt)가 STALE_JOB_MS 이상 끊긴 잡은 죽은 좀비로 폐기.
+          //   구버전에서 무제한 재개로 박제된 running 잡을 배포 후 재방문 1회에 즉시 정리.
           const job = state.activeJob;
           if (job) {
+            const isStale = !!job.updatedAt && Date.now() - job.updatedAt > STALE_JOB_MS;
             const keep =
-              job.status === 'running' ||
-              (job.status === 'error' && (job.resumeAttempts ?? 0) < MAX_RESUME_ATTEMPTS);
+              !isStale &&
+              (job.status === 'running' || job.status === 'error') &&
+              (job.resumeAttempts ?? 0) < MAX_RESUME_ATTEMPTS;
             if (!keep) state.activeJob = null;
           }
           // 죽은 'regenerating' 좀비 정리: 일괄갱신 중 탭 강제종료/크래시로 docStatuses에
