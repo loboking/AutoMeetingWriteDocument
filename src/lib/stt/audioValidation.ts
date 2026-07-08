@@ -2,12 +2,10 @@
 import { routeInputFile } from '@/lib/inputRouter';
 
 export const MAX_AUDIO_SIZE = 50 * 1024 * 1024; // 50MB (클라이언트 업로드 상한)
-export const WHISPER_API_MAX_SIZE = 25 * 1024 * 1024; // 25MB (Whisper API 한계 → 초과 시 청크 필요)
 
 export interface AudioValidationResult {
   ok: boolean;
   error?: string;
-  needsChunking?: boolean; // Whisper API 25MB 초과 시 true (P2 청크 분할 대상)
 }
 
 export function validateAudio(file: { name: string; type: string; size: number }): AudioValidationResult {
@@ -20,5 +18,5 @@ export function validateAudio(file: { name: string; type: string; size: number }
   if (file.size > MAX_AUDIO_SIZE) {
     return { ok: false, error: `오디오 파일은 ${MAX_AUDIO_SIZE / 1024 / 1024}MB 이하여야 합니다.` };
   }
-  return { ok: true, needsChunking: file.size > WHISPER_API_MAX_SIZE };
+  return { ok: true };
 }

@@ -6,12 +6,10 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import { useProgressSimulation } from '@/hooks/useProgressSimulation';
-import { handleApiError } from '@/lib/apiUtils';
 import { useMeetingStore } from '@/store/meetingStore';
-import { authedFetch } from '@/lib/authFetch';
 import { useBrowserSTT } from '@/hooks/useBrowserSTT';
-import { transcribeAudio } from '@/lib/transcribeAudio';
-import { routeInputFile, FILE_ACCEPT_TYPES } from '@/lib/inputRouter';
+import { ingestFile } from '@/lib/ingestFile';
+import { FILE_ACCEPT_TYPES } from '@/lib/inputRouter';
 
 interface FileUploaderProps {
   onTranscriptComplete?: (text: string) => void;
@@ -27,35 +25,34 @@ export function FileUploader({ onTranscriptComplete }: FileUploaderProps) {
   // 진행률 시뮬레이션 훅 사용 (오디오용)
   const { progress, startSimulation, stopSimulation, resetSimulation } = useProgressSimulation(200, 10, 90);
 
-  // 문서 처리용 별도 진행률 시뮬레이션
-  const { startSimulation: startDocSim, stopSimulation: stopDocSim, resetSimulation: resetDocSim } = useProgressSimulation(200, 15, 90);
-
-  // 클릭 선택·드래그앤드롭 공용 처리 경로
+// 클릭 선택·드래그앤드롭 공용 처리 경로
   const processFile = async (file: File) => {
-    // 입력 분류는 단일 출처(routeInputFile): MIME 우선 → 확장자 폴백 → unsupported.
-    // (m4a 등 MIME이 비어 있는 음성을 문서로 오분류하던 문제 방지.)
-    const kind = routeInputFile({ name: file.name, type: file.type });
-    if (kind === 'unsupported') {
-      alert('지원하지 않는 파일 형식입니다.\n음성(MP3·WAV·M4A·WebM·OGG·FLAC·AAC) 또는 문서(TXT·MD·PDF·DOCX·XLSX)를 올려주세요.\n(PPTX·구버전 DOC/XLS는 지원하지 않습니다.)');
-      return;
-    }
-
     setUploading(true);
     resetSimulation();
+    startSimulation();
 
     try {
-      if (kind === 'audio') {
-        await handleAudioFile(file);
-      } else {
-        await handleDocumentFile(file);
-      }
+      const result = await ingestFile(file, {
+        browserTranscribe: (b, lang) => browserSTT.transcribeBlob(b, lang),
+        browserError: browserSTT.error,
+      });
+      stopSimulation();
+
+      updateCurrentMeeting({
+        transcript: result.text,
+        ...(result.segments ? { transcriptSegments: result.segments } : {}),
+        ...(result.duration ? { duration: result.duration } : {}),
+        ...(result.audioObjectUrl ? { audioUrl: result.audioObjectUrl } : {}),
+      });
+
+      updateMeetingStep('transcribing');
+      onTranscriptComplete?.(result.text);
     } catch (error) {
       console.error('File upload error:', error);
       alert(error instanceof Error ? error.message : '파일 처리에 실패했습니다.');
     } finally {
       setUploading(false);
       stopSimulation();
-      stopDocSim();
       if (fileInputRef.current) {
         fileInputRef.current.value = '';
       }
@@ -75,60 +72,6 @@ export function FileUploader({ onTranscriptComplete }: FileUploaderProps) {
     const file = e.dataTransfer.files?.[0];
     if (!file) return;
     await processFile(file);
-  };
-
-  const handleAudioFile = async (file: File) => {
-    startSimulation();
-
-    // 저장소 업로드 → 서명URL → 서버 Whisper(키 없으면 브라우저 STT 폴백). 임시 사본은 헬퍼가 정리.
-    const result = await transcribeAudio(file, 'ko', {
-      browserTranscribe: (b, lang) => browserSTT.transcribeBlob(b, lang),
-      browserError: browserSTT.error,
-    });
-
-    stopSimulation();
-
-    updateCurrentMeeting({
-      transcript: result.text,
-      ...(result.segments ? { transcriptSegments: result.segments } : {}),
-      ...(result.duration ? { duration: result.duration } : {}),
-      audioUrl: URL.createObjectURL(file),
-    });
-
-    updateMeetingStep('transcribing');
-    onTranscriptComplete?.(result.text);
-  };
-
-  const handleDocumentFile = async (file: File) => {
-    // 문서 처리는 더 높은 증가분 사용
-    resetDocSim();
-    startDocSim();
-
-    const formData = new FormData();
-    formData.append('document', file);
-
-    const response = await authedFetch('/api/extract-text', {
-      method: 'POST',
-      body: formData,
-    });
-
-    stopDocSim();
-
-    if (!response.ok) {
-      await handleApiError(response, '텍스트 추출 실패');
-      return;
-    }
-
-    const { text } = await response.json();
-
-    if (!text || !text.trim()) throw new Error('추출된 텍스트가 비어 있습니다.');
-
-    updateCurrentMeeting({
-      transcript: text,
-    });
-
-    updateMeetingStep('transcribing');
-    onTranscriptComplete?.(text);
   };
 
   return (

@@ -17,7 +17,7 @@ import { getFlowchartPrompt } from '@/lib/flowchartTemplate';
 import { getStoryboardPrompt } from '@/lib/storyboardTemplate';
 import { getWBSPrompt } from '@/lib/wbsTemplate';
 import { getTestPlanPrompt } from '@/lib/testPlanTemplate';
-import { reviewDocument, type ReviewResult } from '@/lib/docReviewer';
+import { reviewDocument } from '@/lib/docReviewer';
 import type { MeetingSummary } from '@/types';
 import { llmComplete, resolveProvider } from '@/lib/llm';
 import type { LLMResult } from '@/lib/llm/types';
@@ -80,7 +80,6 @@ function classifyGenError(error: unknown): GenErrorReason {
   return 'error';
 }
 
-// 문서 의존 관계 (1뎁스 → 2뎁스 → 3뎁스...)
 type DocType =
   | 'prd'
   | 'feature-list'
@@ -96,52 +95,6 @@ type DocType =
   | 'database'
   | 'deployment'
   | 'test-plan';
-
-interface DocLevel {
-  level: number;
-  docTypes: DocType[];
-  dependsOn?: DocType[]; // 이전 레벨에서 생성된 문서들을 참조
-}
-
-const DOCUMENT_DEPENDENCIES: DocLevel[] = [
-  {
-    level: 1,
-    docTypes: ['prd'],
-  },
-  {
-    level: 2,
-    docTypes: ['feature-list', 'screen-list', 'ia', 'flowchart'],
-    dependsOn: ['prd'],
-  },
-  {
-    level: 3,
-    docTypes: ['wireframe', 'storyboard', 'user-story'],
-    dependsOn: ['feature-list', 'screen-list', 'ia'],
-  },
-  {
-    level: 4,
-    docTypes: ['wbs', 'api-spec', 'database'],
-    dependsOn: ['feature-list', 'user-story'],
-  },
-  {
-    level: 5,
-    docTypes: ['test-plan', 'test-case', 'deployment'],
-    dependsOn: ['wbs', 'api-spec', 'database'],
-  },
-];
-
-interface GenerationProgress {
-  currentLevel: number;
-  totalLevels: number;
-  currentDoc: string;
-  completedDocs: string[];
-  status: 'generating' | 'completed' | 'error';
-  error?: string;
-}
-
-interface GeneratedDocs {
-  [key: string]: string;
-}
 
 const DOCUMENT_TITLES: Record<DocType, string> = {
   prd: 'PRD (Product Requirements Document)',
@@ -231,143 +184,6 @@ async function generateDocument(
       throw error instanceof Error ? error : new Error('문서 생성 실패');
     }
     return getMockDoc(docType, summary, meetingInfo);
-  }
-}
-
-// 연계 문서 생성 함수
-async function generateAllDocuments(
-  summary: MeetingSummary,
-  transcript: string,
-  meetingInfo: { title: string; date: string },
-  onProgress?: (progress: GenerationProgress) => void,
-  onDocTokens?: (docType: DocType, r: LLMResult) => void
-): Promise<{ docs: GeneratedDocs; progress: GenerationProgress }> {
-  const docs: GeneratedDocs = {};
-  const completedDocs: string[] = [];
-
-  for (const levelConfig of DOCUMENT_DEPENDENCIES) {
-    // 현재 레벨 진행 상황 알림
-    onProgress?.({
-      currentLevel: levelConfig.level,
-      totalLevels: DOCUMENT_DEPENDENCIES.length,
-      currentDoc: '',
-      completedDocs,
-      status: 'generating',
-    });
-
-    // 현재 레벨의 모든 문서 생성
-    for (const docType of levelConfig.docTypes) {
-      onProgress?.({
-        currentLevel: levelConfig.level,
-        totalLevels: DOCUMENT_DEPENDENCIES.length,
-        currentDoc: docType,
-        completedDocs,
-        status: 'generating',
-      });
-
-      try {
-        // 이전 레벨에서 생성된 문서들을 컨텍스트로 전달
-        const contextDocs = getContextDocs(levelConfig.dependsOn || [], docs);
-
-        const content = await generateDocumentWithContext(
-          docType,
-          summary,
-          transcript,
-          meetingInfo,
-          contextDocs,
-          onDocTokens ? (r) => onDocTokens(docType, r) : undefined
-        );
-
-        docs[docType] = content;
-        completedDocs.push(docType);
-      } catch (error) {
-        console.error(`${docType} 생성 실패:`, error);
-        // 실패해도 계속 진행
-        docs[docType] = getMockDoc(docType, summary, meetingInfo);
-      }
-    }
-  }
-
-  return {
-    docs,
-    progress: {
-      currentLevel: DOCUMENT_DEPENDENCIES.length,
-      totalLevels: DOCUMENT_DEPENDENCIES.length,
-      currentDoc: '',
-      completedDocs,
-      status: 'completed',
-    },
-  };
-}
-
-// 의존하는 문서들을 컨텍스트로 정리
-function getContextDocs(dependsOn: DocType[], docs: GeneratedDocs): Record<string, string> {
-  const context: Record<string, string> = {};
-  for (const docType of dependsOn) {
-    if (docs[docType]) {
-      context[docType] = docs[docType];
-    }
-  }
-  return context;
-}
-
-// 컨텍스트(이전 문서)를 참조하여 문서 생성
-async function generateDocumentWithContext(
-  docType: DocType,
-  summary: MeetingSummary,
-  transcript: string,
-  meetingInfo: { title: string; date: string },
-  contextDocs: Record<string, string>,
-  onTokens?: (r: LLMResult) => void,
-  onPartial?: (missing: number) => void
-): Promise<string> {
-  // PRD는 병렬 섹션 청킹으로 생성 (단일 호출은 z.ai 5분 리밋 초과)
-  if (docType === 'prd') {
-    try {
-      const metadata = inferMetadata(summary, transcript);
-      metadata.coreMetrics = await resolveCoreMetrics(summary, transcript, metadata.coreMetrics);
-      const result = await generatePRDByChunks(summary, transcript, meetingInfo, undefined, metadata, onTokens);
-      const failed = Object.values(result.sections).filter((c) => c.includes('생성 실패')).length;
-      if (result.fullDocument.length <= 1000) {
-        // 내용이 너무 짧으면 단일 fallback
-      } else if (failed > 0) {
-        onPartial?.(failed);
-        return result.fullDocument;
-      } else {
-        return result.fullDocument;
-      }
-    } catch (error) {
-      console.error('[generate-doc] PRD 청킹 실패 → 단일 생성 fallback:', error);
-    }
-  }
-
-  const prompt = getPromptForDocType(docType, summary, transcript, meetingInfo, contextDocs);
-
-  const isGlm = resolveProvider().id === 'zai';
-
-  console.log('[generate-doc] 문서 생성', {
-    docType,
-    hasContextDocs: Object.keys(contextDocs).length > 0,
-    contextKeys: Object.keys(contextDocs),
-    transcriptLength: transcript.length,
-  });
-
-  // 최대 출력 토큰 (16k가 속도·안정성·상세도의 검증된 최적점)
-  const maxTokens = isGlm ? 16384 : 12288;
-
-  try {
-    const llmRes = await llmComplete({
-      prompt,
-      system: KOREAN_OUTPUT_SYSTEM_PROMPT,
-      maxTokens,
-      timeoutMs: 900000,
-      maxRetries: 0,
-    });
-    onTokens?.(llmRes);
-    return llmRes.text;
-  } catch (error) {
-    console.error('OpenAI API 오류:', error);
-    throw error;
   }
 }
 
@@ -944,7 +760,7 @@ export async function POST(request: NextRequest) {
     if (auth.response) return auth.response;
 
     const body = await request.json();
-    const { docType, summary, transcript, meetingInfo, mode, review = true, contextDocs = {}, meetingId } = body;
+    const { docType, summary, transcript, meetingInfo, review = true, contextDocs = {}, meetingId } = body;
 
     if (!summary || !meetingInfo) {
       return NextResponse.json(
@@ -953,32 +769,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 전체 문서 생성 모드
-    if (mode === 'all') {
-      const result = await generateAllDocuments(
-        summary,
-        transcript || '',
-        meetingInfo,
-        undefined,
-        (dt, r) => recordTokenUsage({ userId: auth.user.id, op: 'doc-generate', provider: r.provider, model: r.model, usage: r.usage, meetingId, docType: dt })
-      );
-
-      // 검토 수행
-      const reviews: Record<string, ReviewResult> = {};
-      if (review) {
-        for (const [key, content] of Object.entries(result.docs)) {
-          reviews[key] = reviewDocument(key as DocType, content);
-        }
-      }
-
-      return NextResponse.json({
-        docs: result.docs,
-        progress: result.progress,
-        reviews,
-      });
-    }
-
-    // 단일 문서 생성 모드
+    // 단일 문서 생성 모드 (mode=all은 제거됨 — 클라 store 루프가 문서별 개별 호출)
     if (!docType) {
       return NextResponse.json(
         { error: 'docType이 필요합니다 (단일 생성 모드).' },

@@ -25,10 +25,9 @@ import { useBeforeUnload } from '@/hooks/useBeforeUnload';
 import { useProgressSimulation } from '@/hooks/useProgressSimulation';
 import { useMeetingStore } from '@/store/meetingStore';
 import { MeetingStep } from '@/types';
-import { routeInputFile, FILE_ACCEPT_TYPES } from '@/lib/inputRouter';
-import { validateAudio } from '@/lib/stt/audioValidation';
+import { FILE_ACCEPT_TYPES } from '@/lib/inputRouter';
 import { useBrowserSTT } from '@/hooks/useBrowserSTT';
-import { transcribeAudio } from '@/lib/transcribeAudio';
+import { ingestFile } from '@/lib/ingestFile';
 import MeetingRecorder from '@/components/MeetingRecorder';
 import TranscriptViewer from '@/components/TranscriptViewer';
 import SummaryViewer from '@/components/SummaryViewer';
@@ -37,7 +36,6 @@ import DocAssistant from '@/components/DocAssistant';
 import { ProjectList } from '@/components/ProjectList';
 import { PageContainer } from '@/components/layout/PageContainer';
 import { DateFormat } from '@/components/DateFormat';
-import { authedFetch } from '@/lib/authFetch';
 
 export default function Home() {
   const currentMeeting = useMeetingStore(s => s.currentMeeting);
@@ -81,26 +79,6 @@ export default function Home() {
   const [showNewMeetingConfirm, setShowNewMeetingConfirm] = useState(false);
   const handleFileUpload = async (file: File) => {
     setUploadError('');
-
-    // 입력 종류 판정 (음성 vs 텍스트) — 음성 파일을 텍스트 추출로 보내던 버그 방지
-    const kind = routeInputFile({ name: file.name, type: file.type });
-    if (kind === 'unsupported') {
-      setUploadError('지원하지 않는 파일 형식입니다. (음성: mp3/wav/webm/m4a, 문서: txt/md/pdf/docx/xlsx) — pptx/doc/xls는 미지원');
-      return;
-    }
-
-    // 오디오는 별도 검증 (형식/크기/빈 파일)
-    if (kind === 'audio') {
-      const v = validateAudio({ name: file.name, type: file.type, size: file.size });
-      if (!v.ok) {
-        setUploadError(v.error || '오디오 파일을 처리할 수 없습니다.');
-        return;
-      }
-    } else if (file.size > 50 * 1024 * 1024) {
-      setUploadError('파일 크기는 50MB 이하여야 합니다.');
-      return;
-    }
-
     setUploading(true);
     resetSimulation();
     startSimulation();
@@ -108,44 +86,19 @@ export default function Home() {
     const title = meetingTitle.trim() || file.name.replace(/\.[^/.]+$/, '');
 
     try {
-      let text: string;
-      let transcriptSegments: import('@/types').TranscriptSegment[] | undefined;
-      let audioObjectUrl: string | undefined;
-      let audioDuration: number | undefined;
-
-      if (kind === 'audio') {
-        // 저장소 업로드 → 서명URL → 서버 Whisper(키 없으면 브라우저 STT 폴백). 임시 사본은 헬퍼가 정리.
-        const result = await transcribeAudio(file, 'ko', {
-          browserTranscribe: (b, lang) => browserSTT.transcribeBlob(b, lang),
-          browserError: browserSTT.error,
-        });
-        stopSimulation();
-        text = result.text;
-        transcriptSegments = result.segments;
-        audioDuration = result.duration;
-        audioObjectUrl = URL.createObjectURL(file); // 로컬 재생용(현재 세션). 서버 사본과 별개.
-      } else {
-        // 텍스트 → 추출
-        const formData = new FormData();
-        formData.append('document', file);
-        const response = await authedFetch('/api/extract-text', { method: 'POST', body: formData });
-        stopSimulation();
-        if (!response.ok) {
-          const err = await response.json().catch(() => ({ error: '파일 처리 실패' }));
-          throw new Error(err.error || '파일 처리 실패');
-        }
-        text = (await response.json()).text;
-      }
-
-      if (!text || !text.trim()) throw new Error('변환된 텍스트가 비어 있습니다.');
+      const result = await ingestFile(file, {
+        browserTranscribe: (b, lang) => browserSTT.transcribeBlob(b, lang),
+        browserError: browserSTT.error,
+      });
+      stopSimulation();
 
       createMeeting(title);
       setMeetingTitle('');
       updateCurrentMeeting({
-        transcript: text,
-        ...(transcriptSegments ? { transcriptSegments } : {}),
-        ...(audioDuration ? { duration: audioDuration } : {}),
-        ...(audioObjectUrl ? { audioUrl: audioObjectUrl } : {}),
+        transcript: result.text,
+        ...(result.segments ? { transcriptSegments: result.segments } : {}),
+        ...(result.duration ? { duration: result.duration } : {}),
+        ...(result.audioObjectUrl ? { audioUrl: result.audioObjectUrl } : {}),
       });
       updateMeetingStep('transcribing');
     } catch (error) {

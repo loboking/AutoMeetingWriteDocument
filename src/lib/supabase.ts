@@ -1,6 +1,10 @@
 import { createClient } from '@supabase/supabase-js';
 import type { Meeting } from '@/types';
 
+// Supabase DB 행 형태 (meetings 테이블 외 레거시 공유 테이블용 느슨한 shape).
+// 본 모듈의 meetingToRow/rowToMeeting은 MeetingRow로 강타입. 아래 두 함수만 레거시.
+type LegacyMeetingLike = Record<string, unknown>;
+
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 
@@ -14,8 +18,8 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   },
 });
 
-// Meeting 타입을 Supabase 형식으로 변환
-export function meetingToSupabase(meeting: any) {
+// Meeting 타입을 Supabase 형식으로 변환 (레거시 공유 테이블용)
+export function meetingToSupabase(meeting: LegacyMeetingLike) {
   return {
     title: meeting.title,
     content: { id: meeting.id, createdAt: meeting.createdAt },
@@ -40,8 +44,8 @@ export function meetingToSupabase(meeting: any) {
   };
 }
 
-// Supabase 데이터를 Meeting 형식으로 변환
-export function supabaseToMeeting(doc: any) {
+// Supabase 데이터를 Meeting 형식으로 변환 (레거시 공유 테이블용)
+export function supabaseToMeeting(doc: LegacyMeetingLike) {
   return {
     id: doc.id,
     title: doc.title,

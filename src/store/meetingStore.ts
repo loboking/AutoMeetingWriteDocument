@@ -480,6 +480,18 @@ interface MeetingStore {
   regenerateDocs: (meetingId: string, targets: DocType[]) => Promise<void>;
 }
 
+// persist 직전 blob: audioUrl 제거. blob URL은 새로고침 후 revoke되어 무효(fetch 실패)인데
+// localStorage에 박제되면 "변환 재생성"이 무효 URL로 fetch를 시도해 터진다(파일 업로드 경로).
+// https:// (Supabase Storage 서명URL 등) 영구 URL은 새로고침 후에도 유효하므로 보존한다.
+function stripBlobAudioUrl<T extends { audioUrl?: string } | null | undefined>(m: T): T {
+  if (m && typeof m.audioUrl === 'string' && m.audioUrl.startsWith('blob:')) {
+    const rest = { ...m };
+    delete rest.audioUrl;
+    return rest as T;
+  }
+  return m;
+}
+
 export const useMeetingStore = create<MeetingStore>()(
   persist(
     (set, get) => ({
@@ -1035,8 +1047,9 @@ export const useMeetingStore = create<MeetingStore>()(
     {
       name: 'meeting-storage',
       partialize: (state) => ({
-        meetings: state.meetings,
-        currentMeeting: state.currentMeeting,
+        // blob: audioUrl은 저장 제외(새로고침 후 무효). 그 외 필드는 그대로 보존.
+        meetings: state.meetings.map(stripBlobAudioUrl),
+        currentMeeting: stripBlobAudioUrl(state.currentMeeting),
         chatMessages: state.chatMessages,
         deletedIds: state.deletedIds,
         docStatuses: state.docStatuses,

@@ -184,6 +184,7 @@ export function TranscriptViewer() {
             disabled={isRegenerating || !currentMeeting?.audioUrl}
             variant="outline"
             size="sm"
+            title={!currentMeeting?.audioUrl ? '새로고침 후에는 원본 오디오가 없어 재변환할 수 없습니다 (transcript는 유지됨)' : undefined}
           >
             {isRegenerating ? (
               <>
@@ -198,6 +199,12 @@ export function TranscriptViewer() {
             )}
           </Button>
         </div>
+        {/* 새로고침 후 원본 오디오 소실: transcript는 있으나 재변환 불가 안내(파일 업로드 경로) */}
+        {currentMeeting?.transcript && !currentMeeting?.audioUrl && (
+          <p className="text-xs text-slate-500 mt-2">
+            새로고침 후에는 원본 오디오가 없어 재변환할 수 없습니다. 변환된 텍스트는 그대로 유지되며, 직접 수정할 수 있습니다.
+          </p>
+        )}
       </CardHeader>
       <CardContent className="space-y-4">
         <Textarea

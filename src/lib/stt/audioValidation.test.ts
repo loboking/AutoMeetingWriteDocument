@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { validateAudio, MAX_AUDIO_SIZE, WHISPER_API_MAX_SIZE } from './audioValidation';
+import { validateAudio, MAX_AUDIO_SIZE } from './audioValidation';
 
 describe('validateAudio', () => {
   it('허용 형식 + 정상 크기는 ok:true', () => {
@@ -23,15 +23,4 @@ describe('validateAudio', () => {
     expect(r.error).toMatch(/MB/);
   });
 
-  it('Whisper API 한계(25MB) 초과는 needsChunking 플래그', () => {
-    const r = validateAudio({ name: 'a.mp3', type: 'audio/mpeg', size: WHISPER_API_MAX_SIZE + 1 });
-    expect(r.ok).toBe(true);
-    expect(r.needsChunking).toBe(true);
-  });
-
-  it('25MB 이하 정상은 needsChunking false', () => {
-    const r = validateAudio({ name: 'a.mp3', type: 'audio/mpeg', size: 1_000_000 });
-    expect(r.ok).toBe(true);
-    expect(r.needsChunking).toBe(false);
-  });
 });
