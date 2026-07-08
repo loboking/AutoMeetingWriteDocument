@@ -25,6 +25,32 @@ export interface ChatMsg {
   text: string;
 }
 
+// 실패사유 머신코드 (클라에서 한국어 라벨로 변환)
+export type GenErrorReason = 'timeout' | '429' | 'empty' | 'no-key' | 'network' | 'error';
+
+// 실패사유 라벨 매핑 (클라 단일출처 — i18n 책임은 클라 몫)
+export const REASON_LABEL: Record<GenErrorReason, string> = {
+  timeout: '시간 초과',
+  '429': '요청 한도 초과(잠시 후 재시도)',
+  empty: '빈 응답',
+  'no-key': '생성 오류',  // 데모 한정, 실운영에서는 안 뜸
+  network: '네트워크 오류',
+  error: '생성 오류',
+};
+
+// 에러 → 사유 코드 분류 (클라측 err 기반. 서버 reason이 있으면 그걸 우선한다)
+export function classifyClientErr(err: unknown): GenErrorReason {
+  if (!err) return 'error';
+  const e = err as { status?: number; name?: string; message?: string };
+  if (e.status === 429) return '429';
+  // AbortError + reason=TimeoutError → 클라 타임아웃
+  if (e.name === 'AbortError' || e.name === 'TimeoutError') return 'timeout';
+  // 모바일 백그라운드 등 네트워크 끊김
+  if (e.name === 'TypeError' && (e.message?.includes('Load failed') || e.message?.includes('fetch'))) return 'network';
+  if (typeof e.message === 'string' && e.message.includes('빈 응답')) return 'empty';
+  return 'error';
+}
+
 // 전체 생성 진행 상태 (런타임 표시용, persist 제외)
 export interface GenerationProgress {
   currentLevel: number;
@@ -32,6 +58,7 @@ export interface GenerationProgress {
   currentDoc: string;
   completedDocs: DocType[];
   failedDocs: DocType[]; // 재시도 후에도 실패한 문서 (UI에 명시 → 사용자가 재생성 가능)
+  failedReasons?: Partial<Record<DocType, GenErrorReason>>; // 문서별 실패사유 (런타임, persist 제외)
   status: 'generating' | 'completed' | 'error' | 'cancelled';
 }
 
@@ -174,7 +201,9 @@ async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
       if (generated[dep]) contextDocs[dep] = generated[dep];
     }
 
-    const attemptOnce = async (): Promise<string> => {
+    // 서버 응답 body에서 추출된 부가정보(서버 reason, partial 여부)를 상위로 전달하기 위한 캐리어.
+    // throw 경로에서 err 객체에 실어 올린다.
+    const attemptOnce = async (): Promise<{ content: string; partial?: boolean }> => {
       const controller = new AbortController();
       genAbort.controllers.add(controller);
       // ★ 클라 타임아웃: 모바일 백그라운드 등으로 fetch가 영영 settle 안 되면 isGenerating이
@@ -191,13 +220,20 @@ async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
           signal: controller.signal,
         });
         if (!res.ok) {
-          const err = new Error((await res.text()) || `${docType} 생성 실패`) as Error & { status?: number };
+          // 서버에서 reason을 body에 실어줬으면 꺼내서 err에 실음
+          let bodyReason: GenErrorReason | undefined;
+          try {
+            const body = await res.json() as { reason?: GenErrorReason };
+            bodyReason = body.reason;
+          } catch { /* json 파싱 실패는 무시 */ }
+          const err = new Error(`${docType} 생성 실패`) as Error & { status?: number; serverReason?: GenErrorReason };
           err.status = res.status;
+          err.serverReason = bodyReason;
           throw err;
         }
-        const { content } = await res.json();
-        if (!content) throw new Error(`${docType} 빈 응답`);
-        return content;
+        const body = await res.json() as { content?: string; partial?: { missing: number } };
+        if (!body.content) throw new Error(`${docType} 빈 응답`);
+        return { content: body.content, partial: !!body.partial };
       } finally {
         clearTimeout(to);
         genAbort.controllers.delete(controller);
@@ -208,18 +244,18 @@ async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
     // 모바일에서 백그라운드 진입 시 in-flight fetch가 'TypeError: Load failed' 등으로 떨어질 수
     // 있어, 재시도 횟수를 늘려(총 3회) 복귀 후 자동 복구율을 높인다. 429는 더 길게 backoff.
     const MAX_ATTEMPTS = 3;
-    let content: string | null = null;
+    let result: { content: string; partial?: boolean } | null = null;
     let lastErr: unknown = null;
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
       if (genAbort.cancelled) break;
       try {
-        content = await attemptOnce();
+        result = await attemptOnce();
         break;
       } catch (e) {
         lastErr = e;
         // 사용자 취소(cancel 버튼)만 즉시 중단. 타임아웃 abort(TimeoutError)·네트워크 끊김
         // (TypeError: Load failed) 등은 일시 실패로 보고 재시도로 흘려 복귀 후 자동 복구.
-        if (genAbort.cancelled) { content = null; break; }
+        if (genAbort.cancelled) { result = null; break; }
         if (attempt < MAX_ATTEMPTS - 1) {
           const is429 = (e as { status?: number })?.status === 429;
           // 429: 5s,10s / 그 외: 2s,4s (지수 backoff)
@@ -230,7 +266,8 @@ async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
       }
     }
 
-    if (content) {
+    if (result) {
+      const { content, partial: isPartial } = result;
       generated[docType] = content;
       const field = docTypeToField(docType);
       // 덮어쓰기 직전 기존 내용을 버전 스냅샷으로 보존(재생성 이력). 최초 생성이면 기존 빈값이라 skip.
@@ -253,10 +290,16 @@ async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
         });
       }
       doneSet.add(docType);
-      // regen: 갱신 성공 → latest + 버전++. (frozen 제외.)
-      // markDependentsOutdated는 호출하지 않음 — 배치 내 하위가 이미 order에 포함돼 있어
-      // 위상순서대로 차례차례 latest가 되므로, 재전파하면 방금 푼 배지를 도로 outdated로 만든다.
-      if (isRegen && !get().isDocFrozen(meetingId, docType)) {
+      // partial: 청킹 일부 실패 → 문서는 저장하되 'partial' 배지.
+      // full 생성이 docStatuses를 일절 건드리지 않는 불변식의 유일한 예외.
+      // regen 성공 시에도 partial이면 latest 대신 partial(재생성해도 미완성임을 표시).
+      // partial 배지를 지우려면 재생성 성공 후 setDocStatus('latest')가 덮어쓴다.
+      if (isPartial && !get().isDocFrozen(meetingId, docType)) {
+        get().setDocStatus(meetingId, docType, 'partial');
+      } else if (isRegen && !get().isDocFrozen(meetingId, docType)) {
+        // regen: 갱신 성공(partial 아님) → latest + 버전++. (frozen 제외.)
+        // markDependentsOutdated는 호출하지 않음 — 배치 내 하위가 이미 order에 포함돼 있어
+        // 위상순서대로 차례차례 latest가 되므로, 재전파하면 방금 푼 배지를 도로 outdated로 만든다.
         get().setDocStatus(meetingId, docType, 'latest');
         get().incrementDocVersion(meetingId, docType);
       }
@@ -275,11 +318,19 @@ async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
       if (isRegen && !get().isDocFrozen(meetingId, docType)) {
         get().setDocStatus(meetingId, docType, 'outdated');
       }
-      set((st) => ({
-        generationProgress: st.generationProgress
-          ? { ...st.generationProgress, failedDocs: [...st.generationProgress.failedDocs, docType] }
-          : null,
-      }));
+      // 실패사유: 서버 reason 우선, 없으면 클라 err 분류
+      const err = lastErr as { serverReason?: GenErrorReason } | undefined;
+      const reason: GenErrorReason = err?.serverReason ?? classifyClientErr(lastErr);
+      set((st) => {
+        if (!st.generationProgress) return {};
+        return {
+          generationProgress: {
+            ...st.generationProgress,
+            failedDocs: [...st.generationProgress.failedDocs, docType],
+            failedReasons: { ...st.generationProgress.failedReasons, [docType]: reason },
+          },
+        };
+      });
       return false;
     }
   };
@@ -962,15 +1013,19 @@ export const useMeetingStore = create<MeetingStore>()(
       },
 
       cancelGeneration: () => {
-        if (!get().isGenerating) return;
+        // ★ isGenerating 여부와 무관하게 종료. 재방문 시 isGenerating=false인데도 activeJob이
+        //   살아있어 다음 재개(visibilitychange)에 부활하던 문제(종료 눌러도 안 멈춤)를 막는다.
+        //   잡·프로그레스를 즉시 완전 폐기해 부활 트리거를 제거한다.
         genAbort.cancelled = true;
         // 병렬 in-flight 전부 취소
         genAbort.controllers.forEach((c) => c.abort());
         genAbort.controllers.clear();
-        set((st) => ({
-          generationProgress: st.generationProgress ? { ...st.generationProgress, status: 'cancelled', currentDoc: '' } : null,
-          activeJob: st.activeJob ? { ...st.activeJob, status: 'cancelled', updatedAt: Date.now() } : null,
-        }));
+        set({
+          isGenerating: false,
+          generatingMeetingId: null,
+          generationProgress: null,
+          activeJob: null,
+        });
       },
     }),
     {

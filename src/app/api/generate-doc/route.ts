@@ -63,6 +63,23 @@ const KOREAN_OUTPUT_SYSTEM_PROMPT =
 
 // (LLM 클라이언트 생성/응답추출/파라미터 구성은 @/lib/llm 모듈로 이관됨)
 
+// 실패사유 머신코드 (클라 store의 GenErrorReason과 같은 값. 중복 선언이 허용됨 — 서버가 string을 내보낼 뿐)
+type GenErrorReason = 'timeout' | '429' | 'empty' | 'no-key' | 'network' | 'error';
+
+/** 에러 객체 → 실패사유 코드. 응답 body의 reason 필드로 클라에 전달된다. */
+function classifyGenError(error: unknown): GenErrorReason {
+  if (!error) return 'error';
+  const e = error as { status?: number; name?: string; message?: string; code?: string };
+  if (e.status === 429) return '429';
+  // AbortError 계열
+  if (e.name === 'AbortError' || e.name === 'TimeoutError') return 'timeout';
+  if (typeof e.message === 'string') {
+    if (e.message.includes('timeout') || e.message.includes('Timeout')) return 'timeout';
+    if (e.message === '빈 응답' || e.message.includes('empty')) return 'empty';
+  }
+  return 'error';
+}
+
 // 문서 의존 관계 (1뎁스 → 2뎁스 → 3뎁스...)
 type DocType =
   | 'prd'
@@ -150,7 +167,8 @@ async function generateDocument(
   transcript: string,
   meetingInfo: { title: string; date: string },
   contextDocs: Record<string, string> = {},
-  onTokens?: (r: LLMResult) => void
+  onTokens?: (r: LLMResult) => void,
+  onPartial?: (missing: number) => void  // 청킹 일부 실패 시 호출 (naru 설계: onTokens 선례 따름)
 ): Promise<string> {
   // PRD는 병렬 섹션 청킹으로 생성 (z.ai 5분 단일요청 리밋 회피 + 섹션별 상세 품질 유지)
   if (docType === 'prd') {
@@ -164,12 +182,19 @@ async function generateDocument(
         sections: Object.keys(result.sections).length,
         length: result.fullDocument.length,
       });
-      // 섹션 대부분이 실패했으면 단일 생성 fallback으로
       const failed = Object.values(result.sections).filter((c) => c.includes('생성 실패')).length;
-      if (failed <= 3 && result.fullDocument.length > 1000) {
+      if (result.fullDocument.length <= 1000) {
+        // 내용이 너무 짧으면 단일 fallback (청킹 자체가 거의 실패)
+        console.warn(`[generate-doc] 청킹 결과 너무 짧음(${result.fullDocument.length}) → 단일 생성 fallback`);
+      } else if (failed > 0) {
+        // 내용은 충분하지만 일부 섹션 실패 → partial 신호 후 그대로 반환 (조용한 성공 금지)
+        console.warn(`[generate-doc] PRD 청킹 섹션 ${failed}개 실패 → partial 저장`);
+        onPartial?.(failed);
+        return result.fullDocument;
+      } else {
+        // 완전 성공
         return result.fullDocument;
       }
-      console.warn(`[generate-doc] 청킹 실패 섹션 ${failed}개 → 단일 생성 fallback`);
     } catch (error) {
       console.error('[generate-doc] PRD 청킹 실패 → 단일 생성 fallback:', error);
     }
@@ -293,7 +318,8 @@ async function generateDocumentWithContext(
   transcript: string,
   meetingInfo: { title: string; date: string },
   contextDocs: Record<string, string>,
-  onTokens?: (r: LLMResult) => void
+  onTokens?: (r: LLMResult) => void,
+  onPartial?: (missing: number) => void
 ): Promise<string> {
   // PRD는 병렬 섹션 청킹으로 생성 (단일 호출은 z.ai 5분 리밋 초과)
   if (docType === 'prd') {
@@ -302,7 +328,12 @@ async function generateDocumentWithContext(
       metadata.coreMetrics = await resolveCoreMetrics(summary, transcript, metadata.coreMetrics);
       const result = await generatePRDByChunks(summary, transcript, meetingInfo, undefined, metadata, onTokens);
       const failed = Object.values(result.sections).filter((c) => c.includes('생성 실패')).length;
-      if (failed <= 3 && result.fullDocument.length > 1000) {
+      if (result.fullDocument.length <= 1000) {
+        // 내용이 너무 짧으면 단일 fallback
+      } else if (failed > 0) {
+        onPartial?.(failed);
+        return result.fullDocument;
+      } else {
         return result.fullDocument;
       }
     } catch (error) {
@@ -974,9 +1005,11 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    let partialMissing: number | undefined;
     const content = await generateDocument(
       docType, summary, transcript || '', meetingInfo, contextDocs,
-      (r) => recordTokenUsage({ userId: auth.user.id, op: 'doc-generate', provider: r.provider, model: r.model, usage: r.usage, meetingId, docType })
+      (r) => recordTokenUsage({ userId: auth.user.id, op: 'doc-generate', provider: r.provider, model: r.model, usage: r.usage, meetingId, docType }),
+      (missing) => { partialMissing = missing; }
     );
 
     // 첫 문서 생성 성공 시 1건 기록(멱등). 회의당 평생 1회. best-effort(응답 안 막음).
@@ -990,11 +1023,14 @@ export async function POST(request: NextRequest) {
       docReview = reviewDocument(docType, content);
     }
 
-    return NextResponse.json({ content, docType, review: docReview });
+    // partial: 청킹 섹션 일부 실패 시 신호 추가 (missing 개수는 내부 진단용, UI 미표시)
+    const partialPayload = partialMissing !== undefined ? { missing: partialMissing } : undefined;
+    return NextResponse.json({ content, docType, review: docReview, ...(partialPayload ? { partial: partialPayload } : {}) });
   } catch (error) {
     console.error('Generate doc API 오류:', error);
+    const reason = classifyGenError(error);
     return NextResponse.json(
-      { error: '문서 생성에 실패했습니다.' },
+      { error: '문서 생성에 실패했습니다.', reason },
       { status: 500 }
     );
   }

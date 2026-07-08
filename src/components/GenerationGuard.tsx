@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { useMeetingStore } from '@/store/meetingStore';
+import { useMeetingStore, REASON_LABEL } from '@/store/meetingStore';
 import { DOCUMENTS } from '@/lib/documentUtils';
 import { useBeforeUnload } from '@/hooks/useBeforeUnload';
 import { useGenerationRecovery } from '@/hooks/useGenerationRecovery';
@@ -48,8 +48,14 @@ export default function GenerationGuard() {
   const total = progress.totalLevels;
   const pct = total > 0 ? Math.round((done / total) * 100) : 0;
   const failed = progress.failedDocs || [];
+  const failedReasons = progress.failedReasons;
+  // "문서명(사유)" 형태로. 사유 없으면 문서명만.
   const failedNames = failed
-    .map((d) => DOCUMENTS.find((x) => x.key === d)?.title || d)
+    .map((d) => {
+      const title = DOCUMENTS.find((x) => x.key === d)?.title || d;
+      const reason = failedReasons?.[d];
+      return reason ? `${title}(${REASON_LABEL[reason]})` : title;
+    })
     .join(', ');
 
   // ── 완료/실패: 작은 토스트(딤 없음) ──────────────────────────────

@@ -5,7 +5,8 @@ export type { TranscriptSegment } from '@/lib/stt/types';
 export type MeetingStep = 'idle' | 'recording' | 'transcribing' | 'summarizing' | 'done';
 
 // 문서 상태 타입
-export type DocStatus = 'latest' | 'outdated' | 'frozen' | 'regenerating';
+// 'partial': 청킹 일부 섹션 생성 실패 — 내용은 있으나 미완성(재생성 권장)
+export type DocStatus = 'latest' | 'outdated' | 'frozen' | 'regenerating' | 'partial';
 
 // 문서 버전 정보
 export interface DocVersionInfo {

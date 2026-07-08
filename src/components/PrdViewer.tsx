@@ -1555,6 +1555,17 @@ export function PrdViewer() {
                             </span>
                           );
                         }
+                        if (status === 'partial') {
+                          return (
+                            <span
+                              className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-orange-50 text-orange-700 border border-orange-300 dark:bg-orange-900/30 dark:text-orange-300 dark:border-orange-700"
+                              title="일부 섹션이 생성되지 않았어요. 이 문서를 열어 '재생성'하면 다시 시도합니다."
+                            >
+                              <AlertTriangle className="w-2.5 h-2.5" />
+                              일부 미완성
+                            </span>
+                          );
+                        }
                         return null;
                       })()}
                       {hasDoc && !isCompleted && (
