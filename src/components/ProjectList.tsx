@@ -1,13 +1,15 @@
 'use client';
 
 import { useState, memo } from 'react';
-import { FolderOpen, Trash2, Clock, FileText, Check } from 'lucide-react';
+import { FolderOpen, Trash2, Clock, FileText, Check, Layers } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useMeetingStore } from '@/store/meetingStore';
 import type { Meeting } from '@/types';
 import { DateFormat } from '@/components/DateFormat';
+import { NoteAccumulator } from './NoteAccumulator';
 
 interface ProjectListProps {
   onClose: () => void;
@@ -83,6 +85,7 @@ export function ProjectList({ onClose }: ProjectListProps) {
   const currentMeeting = useMeetingStore(s => s.currentMeeting);
   const { deleteMeeting, setCurrentMeeting } = useMeetingStore();
   const [filter, setFilter] = useState<'all' | 'in-progress' | 'completed'>('all');
+  const [tab, setTab] = useState<'meetings' | 'composite'>('meetings');
 
   // 생성일 역순 정렬
   const sortedMeetings = [...meetings].sort(
@@ -144,58 +147,78 @@ export function ProjectList({ onClose }: ProjectListProps) {
         </Button>
       </div>
 
-      {/* 필터 */}
-      <div className="flex gap-2">
-        <Button
-          variant={filter === 'all' ? 'default' : 'outline'}
-          size="sm"
-          onClick={() => setFilter('all')}
-        >
-          전체
-        </Button>
-        <Button
-          variant={filter === 'in-progress' ? 'default' : 'outline'}
-          size="sm"
-          onClick={() => setFilter('in-progress')}
-        >
-          진행 중
-        </Button>
-        <Button
-          variant={filter === 'completed' ? 'default' : 'outline'}
-          size="sm"
-          onClick={() => setFilter('completed')}
-        >
-          완료됨
-        </Button>
-      </div>
+      {/* 단일회의 / 회의록 통합 탭 */}
+      <Tabs value={tab} onValueChange={(v) => setTab(v as 'meetings' | 'composite')}>
+        <TabsList className="grid w-full grid-cols-2">
+          <TabsTrigger value="meetings" className="gap-1.5">
+            <FileText className="w-4 h-4" aria-hidden="true" />
+            단일 회의
+          </TabsTrigger>
+          <TabsTrigger value="composite" className="gap-1.5">
+            <Layers className="w-4 h-4" aria-hidden="true" />
+            회의록 통합
+          </TabsTrigger>
+        </TabsList>
 
-      {/* 프로젝트 목록 */}
-      <div className="space-y-3 max-h-[500px] overflow-y-auto">
-        {displayMeetings.length === 0 ? (
-          <Card>
-            <CardContent className="py-12 text-center text-slate-500">
-              <FolderOpen className="w-12 h-12 mx-auto mb-3 opacity-50" />
-              <p>프로젝트가 없습니다.</p>
-            </CardContent>
-          </Card>
-        ) : (
-          displayMeetings.map((meeting) => {
-            const docCount = getDocumentCount(meeting);
-            const isCurrent = meeting.id === currentMeeting?.id;
+        <TabsContent value="meetings" className="mt-4 space-y-4">
+          {/* 필터 */}
+          <div className="flex gap-2">
+            <Button
+              variant={filter === 'all' ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => setFilter('all')}
+            >
+              전체
+            </Button>
+            <Button
+              variant={filter === 'in-progress' ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => setFilter('in-progress')}
+            >
+              진행 중
+            </Button>
+            <Button
+              variant={filter === 'completed' ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => setFilter('completed')}
+            >
+              완료됨
+            </Button>
+          </div>
 
-            return (
-              <MeetingCard
-                key={meeting.id}
-                meeting={meeting}
-                isCurrent={isCurrent}
-                docCount={docCount}
-                onLoad={handleLoad}
-                onDelete={handleDelete}
-              />
-            );
-          })
-        )}
-      </div>
+          {/* 프로젝트 목록 */}
+          <div className="space-y-3 max-h-[450px] overflow-y-auto">
+            {displayMeetings.length === 0 ? (
+              <Card>
+                <CardContent className="py-12 text-center text-slate-500">
+                  <FolderOpen className="w-12 h-12 mx-auto mb-3 opacity-50" />
+                  <p>프로젝트가 없습니다.</p>
+                </CardContent>
+              </Card>
+            ) : (
+              displayMeetings.map((meeting) => {
+                const docCount = getDocumentCount(meeting);
+                const isCurrent = meeting.id === currentMeeting?.id;
+
+                return (
+                  <MeetingCard
+                    key={meeting.id}
+                    meeting={meeting}
+                    isCurrent={isCurrent}
+                    docCount={docCount}
+                    onLoad={handleLoad}
+                    onDelete={handleDelete}
+                  />
+                );
+              })
+            )}
+          </div>
+        </TabsContent>
+
+        <TabsContent value="composite" className="mt-4">
+          <NoteAccumulator />
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

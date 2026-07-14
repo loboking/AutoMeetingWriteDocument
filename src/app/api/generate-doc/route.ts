@@ -19,13 +19,13 @@ import { getWBSPrompt } from '@/lib/wbsTemplate';
 import { getTestPlanPrompt } from '@/lib/testPlanTemplate';
 import { reviewDocument } from '@/lib/docReviewer';
 import type { MeetingSummary } from '@/types';
-import { llmComplete, resolveProvider } from '@/lib/llm';
+import { llmComplete } from '@/lib/llm';
 import type { LLMResult } from '@/lib/llm/types';
 import { recordTokenUsage } from '@/lib/tokenUsage';
 import {
   ENFORCE_LIMIT,
   getCurrentPeriod,
-  isMeetingCounted,
+  isProjectCounted,
   countThisPeriod,
   getMonthlyLimit,
   recordUsage,
@@ -45,9 +45,12 @@ const MAX_TOKENS_BY_TYPE: Partial<Record<DocType, number>> = {
   // list (축소)
   'feature-list': 8192, 'screen-list': 8192, ia: 8192, storyboard: 8192, 'test-case': 8192,
 };
-function maxTokensFor(docType: DocType, isGlm: boolean): number {
-  const base = MAX_TOKENS_BY_TYPE[docType] ?? 16384;
-  return isGlm ? base : Math.min(base, 8192); // 비-GLM(gpt-4o)은 보수적
+function maxTokensFor(docType: DocType): number {
+  // 과거엔 isGlm 플래그로 비-GLM(gpt-4o)에 Math.min(base, 8192) 캡을 씌웠다 —
+  // gpt-4o 시절 16384 출력을 안정적으로 못 받아내던 잔재. zai(현행)·gemini(전향)·anthropic
+  // 모두 고출력 maxTokens를 안정 처리하므로 provider 분기 자체를 제거하고 base를 그대로 쓴다.
+  // gpt-4o 경로가 살아있더라도 provider 자체 응답 상한에서 자연 잘림 — 8192 강제보다 손실이 적거나 같다.
+  return MAX_TOKENS_BY_TYPE[docType] ?? 16384;
 }
 
 // 한국어 출력 강제 시스템 프롬프트 (GLM-5는 한/영/중 혼합 출력 경향 있음)
@@ -156,14 +159,12 @@ async function generateDocument(
   // PRD 외 문서 또는 청킹 fallback: 단일 통합 프롬프트 (의존 문서를 컨텍스트로 전달)
   const prompt = getPromptForDocType(docType, summary, transcript, meetingInfo, contextDocs);
 
-  const isGlm = resolveProvider().id === 'zai';
-
   try {
     // 문서별 출력토큰 차등(목록류는 축소 → 생성 시간 절감, 긴 문서는 16384 유지)
     const llmRes = await llmComplete({
       prompt,
       system: KOREAN_OUTPUT_SYSTEM_PROMPT,
-      maxTokens: maxTokensFor(docType, isGlm),
+      maxTokens: maxTokensFor(docType),
       timeoutMs: 900000,
       maxRetries: 0,
     });
@@ -760,7 +761,7 @@ export async function POST(request: NextRequest) {
     if (auth.response) return auth.response;
 
     const body = await request.json();
-    const { docType, summary, transcript, meetingInfo, review = true, contextDocs = {}, meetingId } = body;
+    const { docType, summary, transcript, meetingInfo, review = true, contextDocs = {}, meetingId, projectId } = body;
 
     if (!summary || !meetingInfo) {
       return NextResponse.json(
@@ -777,11 +778,11 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 사용량 차단 가드(생성 전). meetingId 없으면 레거시 호출이라 스킵(하위호환).
-    // 진행 중 회의(이미 차감됨)의 나머지 문서는 무조건 통과. 신규 회의만 한도 검사.
+    // 사용량 차단 가드(생성 전). projectId 없으면 레거시 호출이라 스킵(하위호환).
+    // 진행 중 프로젝트(이미 차감됨)의 나머지 문서는 무조건 통과. 신규 프로젝트만 한도 검사.
     const period = getCurrentPeriod();
-    if (ENFORCE_LIMIT && meetingId) {
-      const counted = await isMeetingCounted(auth.user.id, meetingId);
+    if (ENFORCE_LIMIT && projectId) {
+      const counted = await isProjectCounted(auth.user.id, projectId);
       if (!counted) {
         const [used, limit] = await Promise.all([
           countThisPeriod(auth.user.id, period),
@@ -799,13 +800,13 @@ export async function POST(request: NextRequest) {
     let partialMissing: number | undefined;
     const content = await generateDocument(
       docType, summary, transcript || '', meetingInfo, contextDocs,
-      (r) => recordTokenUsage({ userId: auth.user.id, op: 'doc-generate', provider: r.provider, model: r.model, usage: r.usage, meetingId, docType }),
+      (r) => recordTokenUsage({ userId: auth.user.id, op: 'doc-generate', provider: r.provider, model: r.model, usage: r.usage, meetingId, docType, projectId }),
       (missing) => { partialMissing = missing; }
     );
 
-    // 첫 문서 생성 성공 시 1건 기록(멱등). 회의당 평생 1회. best-effort(응답 안 막음).
-    if (meetingId) {
-      await recordUsage(auth.user.id, meetingId, period, docType);
+    // 첫 문서 생성 성공 시 1건 기록(멱등). 프로젝트당 평생 1회. best-effort(응답 안 막음).
+    if (projectId) {
+      await recordUsage(auth.user.id, projectId, period, docType);
     }
 
     // 검토 수행

@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { Meeting, MeetingStep, DocType, DocStatus, DocVersion, DocVersionSource } from '@/types';
+import type { Meeting, MeetingStep, DocType, DocStatus, DocVersion, DocVersionSource, Project, ProjectMode, MeetingSummary } from '@/types';
 import { DOCUMENTS, DEPENDENCIES, docTypeToField, getAllDependents, topoSortLevels, levelsFor, topoSortDocs } from '@/lib/documentUtils';
 import { authedFetch } from '@/lib/authFetch';
 import { mapWithConcurrency } from '@/lib/concurrency';
@@ -65,9 +65,12 @@ export interface GenerationProgress {
 }
 
 // 진행 중 잡 체크포인트 (persist에 저장 → 새로고침/재방문 시 "남은 문서부터" 재개).
-// 완성된 문서 본문은 이미 meetings에 저장되므로 여기엔 메타만.
+// 완성된 문서 본문은 이미 meetings(단일) 또는 projects(합성)에 저장되므로 여기엔 메타만.
 export interface ActiveGenerationJob {
-  meetingId: string;
+  // 일반화: 기존 meetingId(단일회의) → projectId(단일/합성 공용).
+  // single 모드에선 Project.id === Meeting.id로 자동 래핑되므로 키값은 동일.
+  projectId: string;
+  sourceNoteIds: string[]; // single: [meetingId] / composite: 합성에 쓰인 meetingId들
   order: DocType[]; // 생성 순서 스냅샷
   completedDocs: DocType[]; // 완료된 문서
   // running: 진행/재개 대상. error: 일부 실패로 미완(복귀 시 자동 재개 대상, 단 횟수 상한).
@@ -81,6 +84,9 @@ export interface ActiveGenerationJob {
   // regen에서만 docStatuses 전이훅(regenerating→latest/outdated)이 동작하고,
   // 재개 시 본문 존재가 아닌 completedDocs 체크포인트로 완료를 판정한다.
   mode?: 'full' | 'regen';
+  // 회의록 모드: single(단일회의 자동래핑) / composite(다회의 합성).
+  // single은 기존 흐름 유지. composite은 masterSummary + 합성 meetingInfo 사용.
+  projectMode?: ProjectMode;
 }
 
 // error로 끝난 잡을 복귀 시 몇 번까지 자동 재개할지. 초과하면 사용자 수동 재생성에 위임.
@@ -108,12 +114,17 @@ const genAbort: GenAbort = __g.__genAbort ?? (__g.__genAbort = { controllers: ne
 type SetFn = (partial: Partial<MeetingStore> | ((s: MeetingStore) => Partial<MeetingStore>)) => void;
 type GetFn = () => MeetingStore;
 
-const GENERATION_LOCK = 'meeting-auto-docs:doc-generation';
+// 멀티탭 중복 생성 방지: navigator.locks로 한 탭(projectId별)만 루프 실행.
+// 직렬 정책: 한 projectId당 동시 잡 1개. 이름분리로 서로 다른 프로젝트는 병렬 생성 허용.
+const LOCK_PREFIX = 'meeting-auto-docs:doc-generation';
+function lockNameFor(projectId: string): string {
+  return `${LOCK_PREFIX}:${projectId}`;
+}
 
-// 멀티탭 중복 생성 방지: navigator.locks로 단일 탭만 루프 실행.
-// 다른 탭이 락을 쥐고 있으면(ifAvailable=false) 이 탭은 생성하지 않음(중복/덮어쓰기 방지).
-// Web Locks 미지원 환경은 락 없이 그대로 실행(graceful).
-async function runGenerationWithLock(set: SetFn, get: GetFn): Promise<void> {
+// 멀티탭 중복 생성 방지: navigator.locks로 projectId별 단일 탭만 루프 실행.
+// 다른 탭이 같은 projectId 락을 쥐고 있으면(ifAvailable=false) 이 탭은 생성하지 않음.
+// 서로 다른 projectId는 별도 락이므로 병렬 허용. Web Locks 미지원은 락 없이 실행(graceful).
+async function runGenerationWithLock(set: SetFn, get: GetFn, projectId: string): Promise<void> {
   const locks = (typeof navigator !== 'undefined' ? navigator.locks : undefined) as
     | { request: (name: string, opts: { ifAvailable: boolean }, cb: (lock: unknown) => Promise<void>) => Promise<void> }
     | undefined;
@@ -121,10 +132,10 @@ async function runGenerationWithLock(set: SetFn, get: GetFn): Promise<void> {
     await runGenerationLoop(set, get);
     return;
   }
-  await locks.request(GENERATION_LOCK, { ifAvailable: true }, async (lock) => {
+  await locks.request(lockNameFor(projectId), { ifAvailable: true }, async (lock) => {
     if (!lock) {
-      // 다른 탭이 이미 생성 중 → 이 탭은 진행하지 않음(폴링/표시는 persist 구독으로 자동 반영)
-      console.log('[generation] 다른 탭이 생성 중 — 이 탭은 대기(중복 방지)');
+      // 다른 탭이 같은 projectId 생성 중 → 이 탭은 대기(중복 방지)
+      console.log(`[generation] projectId=${projectId} 다른 탭이 생성 중 — 대기`);
       return;
     }
     await runGenerationLoop(set, get);
@@ -134,12 +145,30 @@ async function runGenerationWithLock(set: SetFn, get: GetFn): Promise<void> {
 async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
   const job = get().activeJob;
   if (!job) return;
-  const meetingId = job.meetingId;
-  // job.meetingId와 일치하는 회의만 사용. currentMeeting은 id가 같을 때만 fallback
-  // (새 회의가 meetings 배열에 아직 동기화 안 된 경우 대비). 다른 회의에 저장 방지.
-  const cur = get().currentMeeting;
-  const meeting = get().meetings.find((m) => m.id === meetingId) || (cur?.id === meetingId ? cur : undefined);
-  if (!meeting?.summary) {
+  const projectId = job.projectId;
+  const projectMode = job.projectMode ?? 'single';
+
+  // Project 단위 입력 일반화. single은 Meeting 자동 래핑(id 동일), composite는 masterSummary 사용.
+  const project = get().getProject(projectId);
+  // single 모드에서 Project가 없으면(레거시/구 persist) Meeting으로 폴백 래핑.
+  // composite는 Project가 반드시 있어야 함(없으면 잡 폐기).
+  if (!project) {
+    if (projectMode === 'composite') {
+      set({ activeJob: null });
+      return;
+    }
+    // single 레거시 폴백: Meeting으로부터 Project 즉석 래핑(getProject가 안 만들었으면 여기서 보정)
+  }
+
+  // summary: composite는 project.masterSummary, single은 project.masterSummary ?? meeting.summary.
+  // single + Project 없음(레거시) → meeting.summary.
+  const summary: MeetingSummary | undefined =
+    project?.masterSummary
+    ?? (projectMode === 'single'
+      ? (get().meetings.find((m) => m.id === projectId)?.summary
+        ?? (get().currentMeeting?.id === projectId ? get().currentMeeting?.summary : undefined))
+      : undefined);
+  if (!summary) {
     set({ activeJob: null });
     return;
   }
@@ -152,7 +181,7 @@ async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
 
   set({
     isGenerating: true,
-    generatingMeetingId: meetingId,
+    generatingMeetingId: projectId,
     generationProgress: {
       currentLevel: doneSet.size,
       totalLevels: order.length,
@@ -163,17 +192,60 @@ async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
     },
   });
 
-  // 컨텍스트 시드: 이미 생성된 문서 본문 수집
+  // 컨텍스트 시드: 이미 생성된 문서 본문 수집.
+  // composite는 project.documents(kebab 키), single은 Meeting flat 카멜 필드.
   const generated: Record<string, string> = {};
-  for (const doc of DOCUMENTS) {
-    const field = docTypeToField(doc.key) as keyof Meeting;
-    const val = meeting[field];
-    if (typeof val === 'string' && val) generated[doc.key] = val;
+  if (project && projectMode === 'composite') {
+    for (const doc of DOCUMENTS) {
+      const val = project.documents[doc.key];
+      if (typeof val === 'string' && val) generated[doc.key] = val;
+    }
+  } else {
+    // single: Meeting flat 필드에서 수집(레거시 호환)
+    const meeting = get().meetings.find((m) => m.id === projectId)
+      ?? (get().currentMeeting?.id === projectId ? get().currentMeeting : undefined);
+    if (meeting) {
+      for (const doc of DOCUMENTS) {
+        const field = docTypeToField(doc.key) as keyof Meeting;
+        const val = meeting[field];
+        if (typeof val === 'string' && val) generated[doc.key] = val;
+      }
+    }
   }
 
-  const summary = meeting.summary;
-  const transcript = meeting.transcript || '';
-  const meetingInfo = { title: meeting.title, date: new Date(meeting.createdAt).toLocaleDateString('ko-KR') };
+  // transcript: single은 meeting.transcript, composite는 합산(빈 문자열 허용).
+  let transcript = '';
+  if (projectMode === 'single') {
+    const meeting = get().meetings.find((m) => m.id === projectId)
+      ?? (get().currentMeeting?.id === projectId ? get().currentMeeting : undefined);
+    transcript = meeting?.transcript || '';
+  } else {
+    // composite: sourceNoteIds 회의들의 transcript를 결합
+    const parts: string[] = [];
+    for (const mid of job.sourceNoteIds) {
+      const m = get().meetings.find((x) => x.id === mid);
+      if (m?.transcript) parts.push(m.transcript);
+    }
+    transcript = parts.join('\n\n');
+  }
+
+  // meetingInfo: single은 회의 단일 정보, composite는 합성 표현.
+  let meetingInfo: { title: string; date: string };
+  if (projectMode === 'single') {
+    const meeting = get().meetings.find((m) => m.id === projectId)
+      ?? (get().currentMeeting?.id === projectId ? get().currentMeeting : undefined);
+    meetingInfo = {
+      title: project?.title ?? meeting?.title ?? '회의',
+      date: new Date((meeting ?? project)?.createdAt ?? Date.now()).toLocaleDateString('ko-KR'),
+    };
+  } else {
+    // composite: "${title} 외 N개 회의 통합"
+    const count = job.sourceNoteIds.length;
+    meetingInfo = {
+      title: count > 1 ? `${project?.title ?? '통합 프로젝트'} (외 ${count - 1}개 회의 통합)` : (project?.title ?? '통합 프로젝트'),
+      date: new Date(project?.createdAt ?? Date.now()).toLocaleDateString('ko-KR'),
+    };
+  }
 
   let failed = 0;
   // regen(일괄 재생성)에서만 docStatuses 상태배지를 전이시킨다(regenerating→latest/outdated).
@@ -194,8 +266,9 @@ async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
     );
 
     // regen: 이 문서를 '갱신 중'으로 표시(frozen은 제외 — getDocStatus가 frozen 우선반환).
-    if (isRegen && !get().isDocFrozen(meetingId, docType)) {
-      get().setDocStatus(meetingId, docType, 'regenerating');
+    // projectId 키 사용(single은 projectId===meetingId라 기존 상태와 호환).
+    if (isRegen && !get().isDocFrozen(projectId, docType)) {
+      get().setDocStatus(projectId, docType, 'regenerating');
     }
 
     const contextDocs: Record<string, string> = {};
@@ -218,7 +291,9 @@ async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
         const res = await authedFetch('/api/generate-doc', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ docType, summary, transcript, meetingInfo, contextDocs, review: false, meetingId }),
+          // projectId: 과금 카운팅 멱등키. single은 Meeting.id === projectId로 동일.
+          // meetingId: single 레거시 호환(서버 recordTokenUsage가 씀). composite는 projectId만 의미.
+          body: JSON.stringify({ docType, summary, transcript, meetingInfo, contextDocs, review: false, meetingId: projectId, projectId }),
           signal: controller.signal,
         });
         if (!res.ok) {
@@ -275,18 +350,27 @@ async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
       generated[docType] = content;
       const field = docTypeToField(docType);
       // 덮어쓰기 직전 기존 내용을 버전 스냅샷으로 보존(재생성 이력). 최초 생성이면 기존 빈값이라 skip.
-      const meetingForSnap = get().meetings.find((m) => m.id === meetingId)
-        ?? (get().currentMeeting?.id === meetingId ? get().currentMeeting : undefined);
-      const prevContent = (meetingForSnap?.[field as keyof Meeting] as string | undefined) ?? '';
-      if (prevContent.trim() && prevContent !== content) {
-        get().recordDocVersion(meetingId, docType, prevContent, 'generated', '재생성 전 버전');
+      // 저장 타겟 분기: composite는 project.documents, single은 Meeting flat 필드.
+      let prevContent = '';
+      if (projectMode === 'composite') {
+        prevContent = (project?.documents?.[docType] as string | undefined) ?? '';
+      } else {
+        const meetingForSnap = get().meetings.find((m) => m.id === projectId)
+          ?? (get().currentMeeting?.id === projectId ? get().currentMeeting : undefined);
+        prevContent = (meetingForSnap?.[field as keyof Meeting] as string | undefined) ?? '';
       }
-      // 저장은 함수형 set으로 — 병렬 worker 간 last-write 경쟁 방지
-      if (get().currentMeeting?.id === meetingId) {
+      if (prevContent.trim() && prevContent !== content) {
+        get().recordDocVersion(projectId, docType, prevContent, 'generated', '재생성 전 버전');
+      }
+      // 저장은 함수형 set으로 — 병렬 worker 간 last-write 경쟁 방지.
+      // composite: project.documents[docType]. single: 기존 Meeting flat 필드(무변경 경로).
+      if (projectMode === 'composite') {
+        get().updateProjectDocuments(projectId, docType, content);
+      } else if (get().currentMeeting?.id === projectId) {
         get().updateCurrentMeeting({ [field]: content });
       } else {
         set((st) => {
-          const idx = st.meetings.findIndex((m) => m.id === meetingId);
+          const idx = st.meetings.findIndex((m) => m.id === projectId);
           if (idx < 0) return {};
           const updated = [...st.meetings];
           updated[idx] = { ...updated[idx], [field]: content };
@@ -298,14 +382,14 @@ async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
       // full 생성이 docStatuses를 일절 건드리지 않는 불변식의 유일한 예외.
       // regen 성공 시에도 partial이면 latest 대신 partial(재생성해도 미완성임을 표시).
       // partial 배지를 지우려면 재생성 성공 후 setDocStatus('latest')가 덮어쓴다.
-      if (isPartial && !get().isDocFrozen(meetingId, docType)) {
-        get().setDocStatus(meetingId, docType, 'partial');
-      } else if (isRegen && !get().isDocFrozen(meetingId, docType)) {
+      if (isPartial && !get().isDocFrozen(projectId, docType)) {
+        get().setDocStatus(projectId, docType, 'partial');
+      } else if (isRegen && !get().isDocFrozen(projectId, docType)) {
         // regen: 갱신 성공(partial 아님) → latest + 버전++. (frozen 제외.)
         // markDependentsOutdated는 호출하지 않음 — 배치 내 하위가 이미 order에 포함돼 있어
         // 위상순서대로 차례차례 latest가 되므로, 재전파하면 방금 푼 배지를 도로 outdated로 만든다.
-        get().setDocStatus(meetingId, docType, 'latest');
-        get().incrementDocVersion(meetingId, docType);
+        get().setDocStatus(projectId, docType, 'latest');
+        get().incrementDocVersion(projectId, docType);
       }
       // ★ 체크포인트: 문서 완료마다 갱신(재개 정합). 함수형 set.
       set((st) => ({
@@ -319,8 +403,8 @@ async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
       failed++;
       console.error(`${docType} 생성 최종 실패 (계속 진행):`, lastErr);
       // regen: 최종 실패 → regenerating 좀비를 outdated로 복원(갱신 미완 = 여전히 오래됨).
-      if (isRegen && !get().isDocFrozen(meetingId, docType)) {
-        get().setDocStatus(meetingId, docType, 'outdated');
+      if (isRegen && !get().isDocFrozen(projectId, docType)) {
+        get().setDocStatus(projectId, docType, 'outdated');
       }
       // 실패사유: 서버 reason 우선, 없으면 클라 err 분류
       const err = lastErr as { serverReason?: GenErrorReason } | undefined;
@@ -428,10 +512,19 @@ interface MeetingStore {
   // 진행 중 잡 체크포인트 (persist 저장 → 새로고침 재개용)
   activeJob: ActiveGenerationJob | null;
 
-  // 문서 상태 관리 (meetingId -> docType -> status)
+  // 프로젝트(단일/합성) — composite 회의록 모드의 컨테이너.
+  // single 모드는 getProject가 Meeting을 자동 래핑해 반환하므로, 배열은 composite만 저장.
+  projects: Project[];
+  createProject: (init: { id: string; title: string; mode: ProjectMode; sourceNoteIds: string[]; masterSummary?: MeetingSummary }) => Project;
+  getProject: (projectId: string) => Project | undefined; // single은 Meeting 자동 래핑 반환
+  updateProjectDocuments: (projectId: string, docType: DocType, content: string) => void;
+  updateProjectMasterSummary: (projectId: string, summary: MeetingSummary) => void;
+
+  // 문서 상태 관리 (projectId -> docType -> status).
+  // single 모드는 projectId === meetingId라 기존 persist 데이터와 자연 호환.
   docStatuses: Record<string, Record<DocType, DocStatus>>;
   docVersions: Record<string, Record<DocType, number>>;
-  frozenDocs: Record<string, DocType[]>;  // meetingId -> frozen docTypes
+  frozenDocs: Record<string, DocType[]>;  // projectId -> frozen docTypes
 
   // 액션
   createMeeting: (title: string) => void;
@@ -473,10 +566,15 @@ interface MeetingStore {
 
   // 전체 문서 생성 (백그라운드 지속 + 캔슬 + 새로고침 재개)
   startGeneration: () => Promise<void>;
+  // 합성 모드 전체 생성: 여러 회의 요약을 합성한 Project에서 14종 생성.
+  startCompositeGeneration: (projectId: string) => Promise<void>;
+  // 회의록 합성 API 호출(/api/synthesize-notes). composite Project의 masterSummary 채움.
+  // sourceNoteIds 선택: project가 아직 없을 때(좀비 방지 — 합성 성공 후 createProject) 직접 전달.
+  synthesizeNotes: (projectId: string, sourceNoteIds?: string[]) => Promise<MeetingSummary | null>;
   cancelGeneration: () => void;
   resumeGeneration: () => Promise<void>; // 미완성 잡 재개 (새로고침/재방문)
   // 일부 문서만 의존 순서대로 일괄 재생성 (영향배너 '순서대로 모두 갱신').
-  // 전체생성과 같은 잡/락/재개 인프라(activeJob, GENERATION_LOCK, genAbort) 재사용.
+  // 전체생성과 같은 잡/락/재개 인프라(activeJob, lockNameFor, genAbort) 재사용.
   regenerateDocs: (meetingId: string, targets: DocType[]) => Promise<void>;
 }
 
@@ -501,6 +599,7 @@ export const useMeetingStore = create<MeetingStore>()(
       activeDocType: null,
       chatMessages: {},
       deletedIds: [],
+      projects: [], // composite 프로젝트만 저장. single은 getProject가 Meeting 자동 래핑.
       docStatuses: {},
       docVersions: {},
       frozenDocs: {},
@@ -665,6 +764,83 @@ export const useMeetingStore = create<MeetingStore>()(
         }
       },
 
+      // Project 액션 ------------------------------------------------------------
+      // composite 프로젝트 생성. single은 createProject 없이 getProject가 Meeting을 래핑.
+      createProject: (init) => {
+        const now = new Date();
+        const project: Project = {
+          id: init.id,
+          title: init.title,
+          mode: init.mode,
+          sourceNoteIds: init.sourceNoteIds,
+          masterSummary: init.masterSummary,
+          documents: {},
+          completedDocs: [],
+          docVersions: [],
+          createdAt: now,
+          updatedAt: now,
+        };
+        set({ projects: [...get().projects, project] });
+        return project;
+      },
+
+      // projectId → Project 조회. single 모드는 Meeting을 Project로 자동 래핑(메모리 only).
+      // composite는 projects 배열에서 찾는다.
+      getProject: (projectId) => {
+        // 1) composite 먼저
+        const composite = get().projects.find((p) => p.id === projectId);
+        if (composite) return composite;
+        // 2) single 자동 래핑: Meeting flat 필드를 documents 뷰로 노출.
+        const meeting = get().meetings.find((m) => m.id === projectId)
+          ?? (get().currentMeeting?.id === projectId ? get().currentMeeting : undefined);
+        if (!meeting) return undefined;
+        const documents: Partial<Record<DocType, string>> = {};
+        for (const doc of DOCUMENTS) {
+          const field = docTypeToField(doc.key) as keyof Meeting;
+          const val = meeting[field];
+          if (typeof val === 'string' && val) documents[doc.key] = val;
+        }
+        return {
+          id: meeting.id,
+          title: meeting.title,
+          mode: 'single',
+          sourceNoteIds: [meeting.id],
+          masterSummary: meeting.summary,
+          documents,
+          completedDocs: meeting.completedDocs ?? [],
+          docVersions: meeting.docVersions ?? [],
+          createdAt: meeting.createdAt,
+          updatedAt: meeting.updatedAt,
+        };
+      },
+
+      // composite project.documents[docType] 갱신. 함수형 set(병렬 worker 경쟁 방지).
+      updateProjectDocuments: (projectId, docType, content) => {
+        set((st) => {
+          const idx = st.projects.findIndex((p) => p.id === projectId);
+          if (idx < 0) return {}; // single은 Meeting 저장 경로 사용(여기 안 옴)
+          const updated = [...st.projects];
+          updated[idx] = {
+            ...updated[idx],
+            documents: { ...updated[idx].documents, [docType]: content },
+            completedDocs: Array.from(new Set([...(updated[idx].completedDocs ?? []), docType])),
+            updatedAt: new Date(),
+          };
+          return { projects: updated };
+        });
+      },
+
+      // composite project.masterSummary 갱신(synthesizeNotes 결과 반영).
+      updateProjectMasterSummary: (projectId, summary) => {
+        set((st) => {
+          const idx = st.projects.findIndex((p) => p.id === projectId);
+          if (idx < 0) return {};
+          const updated = [...st.projects];
+          updated[idx] = { ...updated[idx], masterSummary: summary, updatedAt: new Date() };
+          return { projects: updated };
+        });
+      },
+
       isSyncing: false,
       syncFromServer: async () => {
         if (get().isSyncing) return;
@@ -706,6 +882,7 @@ export const useMeetingStore = create<MeetingStore>()(
           currentStep: 'idle',
           chatMessages: {},
           deletedIds: [],
+          projects: [],
           docStatuses: {},
           docVersions: {},
           frozenDocs: {},
@@ -916,11 +1093,13 @@ export const useMeetingStore = create<MeetingStore>()(
       // 전체 문서 생성: 14개를 의존성 순서대로 1개씩 개별 API 호출.
       // 루프가 store(React 밖)에서 돌아 탭 이동에도 지속. 각 문서 완료 시 activeJob(persist)에
       // 체크포인트를 기록해, 새로고침/재방문 후에도 "남은 문서부터" 재개 가능.
+      // single 모드: currentMeeting 기준 Project 자동 래핑(projectId === meetingId).
       startGeneration: async () => {
         if (get().isGenerating) return; // 중복 방지
         const meeting = get().currentMeeting;
         if (!meeting?.summary) return;
 
+        const projectId = meeting.id; // single: Project.id === Meeting.id
         const order = topoSortDocs();
         // 이미 생성된(완료로 간주) 문서를 시작 시점 completedDocs에 반영
         const preCompleted = order.filter((dt) => {
@@ -929,28 +1108,105 @@ export const useMeetingStore = create<MeetingStore>()(
         });
 
         set({
-          activeJob: { meetingId: meeting.id, order, completedDocs: preCompleted, status: 'running', mode: 'full', updatedAt: Date.now() },
+          activeJob: {
+            projectId,
+            sourceNoteIds: [projectId],
+            order,
+            completedDocs: preCompleted,
+            status: 'running',
+            mode: 'full',
+            projectMode: 'single',
+            updatedAt: Date.now(),
+          },
         });
-        await runGenerationWithLock(set, get);
+        await runGenerationWithLock(set, get, projectId);
+      },
+
+      // 합성 모드 전체 생성: 여러 회의 요약을 합성한 Project에서 14종 생성.
+      // 호출 전 synthesizeNotes로 masterSummary가 채워져 있어야 한다.
+      startCompositeGeneration: async (projectId) => {
+        if (get().isGenerating) return;
+        const project = get().projects.find((p) => p.id === projectId);
+        if (!project?.masterSummary) return; // 합성 안 됨 → 폐기
+
+        const order = topoSortDocs();
+        const preCompleted = order.filter((dt) => {
+          const v = project.documents[dt];
+          return typeof v === 'string' && v;
+        });
+
+        set({
+          activeJob: {
+            projectId,
+            sourceNoteIds: project.sourceNoteIds,
+            order,
+            completedDocs: preCompleted,
+            status: 'running',
+            mode: 'full',
+            projectMode: 'composite',
+            updatedAt: Date.now(),
+          },
+        });
+        await runGenerationWithLock(set, get, projectId);
+      },
+
+      // 회의록 합성: /api/synthesize-notes 호출 → composite Project의 masterSummary 채움.
+      // 옵션 B: 클라가 summaries 배열 직송. 성공 시 masterSummary 반환, 실패 시 null.
+      // sourceNoteIds(선택): project가 없을 때(좀비 방지 — createProject를 합성 성공 후로 미룰 때) 직접 전달.
+      synthesizeNotes: async (projectId, sourceNoteIds) => {
+        const project = get().projects.find((p) => p.id === projectId);
+        const noteIds = project?.sourceNoteIds ?? sourceNoteIds ?? [];
+        // sourceNoteIds 회의들의 summary + metas 수집
+        const meetings = noteIds
+          .map((mid) => get().meetings.find((m) => m.id === mid))
+          .filter((m): m is Meeting => !!m?.summary);
+        if (meetings.length === 0) return null;
+
+        const summaries = meetings.map((m) => m.summary!);
+        const metas = meetings.map((m) => ({
+          title: m.title,
+          date: new Date(m.createdAt).toLocaleDateString('ko-KR'),
+        }));
+
+        try {
+          const res = await authedFetch('/api/synthesize-notes', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ projectId, summaries, metas }),
+          });
+          if (!res.ok) {
+            console.error('[synthesizeNotes] 합성 실패:', res.status);
+            return null;
+          }
+          const body = await res.json() as { masterSummary?: MeetingSummary };
+          if (!body.masterSummary) return null;
+          get().updateProjectMasterSummary(projectId, body.masterSummary);
+          return body.masterSummary;
+        } catch (e) {
+          console.error('[synthesizeNotes] 예외:', e);
+          return null;
+        }
       },
 
       // 일부 문서만 의존 순서대로 일괄 재생성.
       // targets는 호출처(영향배너)에서 이미 존재·outdated·frozen제외·위상정렬된 집합.
       // 여기서도 방어적으로 frozen/미존재를 한 번 더 걸러 안전한 부분집합만 잡으로 만든다.
+      // projectId는 single(composite 호환) — single에선 meetingId와 동일.
       regenerateDocs: async (meetingId, targets) => {
         // 단일 진입: 전체생성/다른 일괄갱신이 진행 중이면 무시(중복·동시 덮어쓰기 방지).
         if (get().isGenerating || get().activeJob?.status === 'running') return;
-        const meeting = get().meetings.find((m) => m.id === meetingId);
-        if (!meeting?.summary) return;
+        const projectId = meetingId; // single 호환: 외부 API 시그니처 유지
+        const project = get().getProject(projectId);
+        if (!project) return;
 
         const { isDocFrozen } = get();
         // 본문이 있고 frozen 아닌 targets만. 위상 평탄순서로 정렬(레벨 분해는 루프가 levelsFor로 수행).
         const valid = topoSortDocs().filter(
           (dt) =>
             targets.includes(dt) &&
-            !isDocFrozen(meetingId, dt) &&
+            !isDocFrozen(projectId, dt) &&
             (() => {
-              const v = meeting[docTypeToField(dt) as keyof Meeting];
+              const v = project.documents[dt];
               return typeof v === 'string' && v;
             })()
         );
@@ -958,16 +1214,18 @@ export const useMeetingStore = create<MeetingStore>()(
 
         set({
           activeJob: {
-            meetingId,
+            projectId,
+            sourceNoteIds: project.sourceNoteIds,
             order: valid,
             completedDocs: [],
             status: 'running',
             mode: 'regen',
+            projectMode: project.mode,
             resumeAttempts: 0,
             updatedAt: Date.now(),
           },
         });
-        await runGenerationWithLock(set, get);
+        await runGenerationWithLock(set, get, projectId);
       },
 
       // 미완성 잡 재개 (새로고침/재방문/화면 복귀).
@@ -988,15 +1246,17 @@ export const useMeetingStore = create<MeetingStore>()(
           set({ activeJob: null });
           return;
         }
-        // ★ job.meetingId로만 회의를 찾는다. currentMeeting fallback 금지
-        //   (회의 삭제됐는데 currentMeeting이 다른 회의면 엉뚱한 곳에 문서 저장됨)
-        const meeting = get().meetings.find((m) => m.id === job.meetingId);
-        if (!meeting?.summary) {
-          set({ activeJob: null }); // 회의 없음/요약 없음 → 잡 폐기
+        // ★ job.projectId로 Project를 찾는다(getProject가 single은 Meeting 자동 래핑).
+        //   composite는 projects 배열에서, single은 meetings에서.
+        const projectMode = job.projectMode ?? 'single'; // 구 persist 잡은 single로 간주
+        const project = get().getProject(job.projectId);
+        if (!project?.masterSummary) {
+          set({ activeJob: null }); // 프로젝트/요약 없음 → 잡 폐기
           return;
         }
         // completedDocs 재보정.
-        // - full/legacy: 실제 meetings에 저장된 본문 존재로 완료 판정(저장 누락 방지).
+        // - full/legacy: 실제 저장된 본문 존재로 완료 판정(저장 누락 방지).
+        //   composite는 project.documents에서, single은 Meeting flat 필드에서(getProject가 래핑).
         // - regen(일괄 재생성): 본문 존재로 판정 금지 — 갱신 대상은 이미 본문을 보유하므로
         //   첫 틱에 전부 완료로 오판→잡 폐기→0건 갱신 버그가 난다. 문서 완료마다 갱신되는
         //   activeJob.completedDocs 체크포인트만 단일 진실원으로 신뢰한다.
@@ -1004,7 +1264,7 @@ export const useMeetingStore = create<MeetingStore>()(
           job.mode === 'regen'
             ? job.completedDocs.filter((dt) => job.order.includes(dt))
             : job.order.filter((dt) => {
-                const v = meeting[docTypeToField(dt) as keyof Meeting];
+                const v = project.documents[dt];
                 return typeof v === 'string' && v;
               });
         if (completed.length >= job.order.length) {
@@ -1018,6 +1278,7 @@ export const useMeetingStore = create<MeetingStore>()(
         set({
           activeJob: {
             ...job,
+            projectMode,
             completedDocs: completed,
             status: 'running',
             resumeAttempts,
@@ -1025,7 +1286,7 @@ export const useMeetingStore = create<MeetingStore>()(
             updatedAt: Date.now(),
           },
         });
-        await runGenerationWithLock(set, get);
+        await runGenerationWithLock(set, get, job.projectId);
       },
 
       cancelGeneration: () => {
@@ -1052,6 +1313,8 @@ export const useMeetingStore = create<MeetingStore>()(
         currentMeeting: stripBlobAudioUrl(state.currentMeeting),
         chatMessages: state.chatMessages,
         deletedIds: state.deletedIds,
+        // composite 프로젝트 영속화. single은 Meeting에서 자동 래핑하므로 여기엔 없음.
+        projects: state.projects,
         docStatuses: state.docStatuses,
         docVersions: state.docVersions,
         frozenDocs: state.frozenDocs,
