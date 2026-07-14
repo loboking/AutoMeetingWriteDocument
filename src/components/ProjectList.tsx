@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, memo } from 'react';
-import { FolderOpen, Trash2, Clock, FileText, Check, Layers } from 'lucide-react';
+import { FolderOpen, Trash2, Clock, FileText, Check, Layers, Mic } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -85,7 +85,10 @@ export function ProjectList({ onClose }: ProjectListProps) {
   const currentMeeting = useMeetingStore(s => s.currentMeeting);
   const { deleteMeeting, setCurrentMeeting } = useMeetingStore();
   const [filter, setFilter] = useState<'all' | 'in-progress' | 'completed'>('all');
-  const [tab, setTab] = useState<'meetings' | 'composite'>('meetings');
+  // 3탭: ① 회의록(notes, 신규 — 도이 MeetingNote 타입 대기 중 placeholder) /
+  //       ② 기획서(meetings, 기존 단일회의 흐름 100% 유지) /
+  //       ③ 합성(composite, NoteAccumulator)
+  const [tab, setTab] = useState<'notes' | 'meetings' | 'composite'>('meetings');
 
   // 생성일 역순 정렬
   const sortedMeetings = [...meetings].sort(
@@ -147,18 +150,43 @@ export function ProjectList({ onClose }: ProjectListProps) {
         </Button>
       </div>
 
-      {/* 단일회의 / 회의록 통합 탭 */}
-      <Tabs value={tab} onValueChange={(v) => setTab(v as 'meetings' | 'composite')}>
-        <TabsList className="grid w-full grid-cols-2">
+      {/* 3탭: ① 회의록 / ② 기획서 / ③ 합성 */}
+      <Tabs value={tab} onValueChange={(v) => setTab(v as 'notes' | 'meetings' | 'composite')}>
+        <TabsList className="grid w-full grid-cols-3">
+          <TabsTrigger value="notes" className="gap-1.5">
+            <Mic className="w-4 h-4" aria-hidden="true" />
+            회의록
+          </TabsTrigger>
           <TabsTrigger value="meetings" className="gap-1.5">
             <FileText className="w-4 h-4" aria-hidden="true" />
-            단일 회의
+            기획서
           </TabsTrigger>
           <TabsTrigger value="composite" className="gap-1.5">
             <Layers className="w-4 h-4" aria-hidden="true" />
-            회의록 통합
+            합성
           </TabsTrigger>
         </TabsList>
+
+        {/* ① 회의록 탭 — 도이 MeetingNote 타입/스토어 액션 완료 전까지 placeholder.
+            MeetingNote(회의록)는 Meeting(기획서 단일회의)과 별개 엔티티 — 한 회의는 한 탭. */}
+        <TabsContent value="notes" className="mt-4">
+          <Card>
+            <CardContent className="py-12 text-center text-slate-500">
+              <Mic className="w-12 h-12 mx-auto mb-3 opacity-50" aria-hidden="true" />
+              <p className="font-medium text-slate-700 dark:text-slate-300">회의록을 녹음하거나 업로드해 시작하세요</p>
+              <p className="text-sm mt-2">
+                회의록은 화자별 전사와 요약을 자기완결적으로 저장합니다.
+                <br />
+                합성 탭에서 여러 회의록을 모아 기획서를 만들 수 있습니다.
+              </p>
+              <Button className="mt-4 gap-1.5" disabled>
+                <Mic className="w-4 h-4" aria-hidden="true" />
+                새 회의록
+              </Button>
+              <p className="text-xs mt-3 text-slate-400">곧 제공됩니다</p>
+            </CardContent>
+          </Card>
+        </TabsContent>
 
         <TabsContent value="meetings" className="mt-4 space-y-4">
           {/* 필터 */}
