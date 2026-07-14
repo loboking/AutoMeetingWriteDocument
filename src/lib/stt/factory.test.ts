@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
-import { getServerProvider, createProvider, WhisperApiProvider, DummyProvider } from './factory';
+import { getServerProvider, createProvider, WhisperApiProvider, DummyProvider, GeminiAudioProvider } from './factory';
 import { NO_STT_PROVIDER } from './types';
 
 // verbose_json 형태의 Whisper 응답 mock
@@ -34,13 +34,20 @@ function mockFetchError(status: number) {
 
 describe('getServerProvider', () => {
   const original = process.env.OPENAI_API_KEY;
+  const origSttProvider = process.env.STT_PROVIDER;
+  const origGeminiKey = process.env.GEMINI_API_KEY;
 
   afterEach(() => {
     if (original === undefined) delete process.env.OPENAI_API_KEY;
     else process.env.OPENAI_API_KEY = original;
+    if (origSttProvider === undefined) delete process.env.STT_PROVIDER;
+    else process.env.STT_PROVIDER = origSttProvider;
+    if (origGeminiKey === undefined) delete process.env.GEMINI_API_KEY;
+    else process.env.GEMINI_API_KEY = origGeminiKey;
   });
 
   it('OPENAI_API_KEY가 있으면 whisper-api provider를 반환한다', () => {
+    delete process.env.STT_PROVIDER;
     process.env.OPENAI_API_KEY = 'sk-test';
     const provider = getServerProvider();
     expect(provider.name).toBe('whisper-api');
@@ -48,15 +55,42 @@ describe('getServerProvider', () => {
   });
 
   it('OPENAI_API_KEY가 없으면 dummy provider를 반환한다', () => {
+    delete process.env.STT_PROVIDER;
     delete process.env.OPENAI_API_KEY;
     const provider = getServerProvider();
     expect(provider.name).toBe('dummy');
+  });
+
+  it('STT_PROVIDER=gemini-audio + GEMINI_API_KEY 있으면 gemini-audio를 반환한다', () => {
+    process.env.STT_PROVIDER = 'gemini-audio';
+    process.env.GEMINI_API_KEY = 'gemini-test';
+    const provider = getServerProvider();
+    expect(provider.name).toBe('gemini-audio');
+    expect(provider).toBeInstanceOf(GeminiAudioProvider);
+  });
+
+  it('STT_PROVIDER=gemini-audio지만 GEMINI_API_KEY 없으면 Whisper로 폴백한다', () => {
+    process.env.STT_PROVIDER = 'gemini-audio';
+    delete process.env.GEMINI_API_KEY;
+    process.env.OPENAI_API_KEY = 'sk-test';
+    const provider = getServerProvider();
+    expect(provider.name).toBe('whisper-api');
+  });
+
+  it('STT_PROVIDER=whisper(기본)면 OPENAI_API_KEY 있을 때 Whisper를 반환한다', () => {
+    process.env.STT_PROVIDER = 'whisper';
+    process.env.GEMINI_API_KEY = 'gemini-test'; // Gemini 키 있어도 STT는 Whisper
+    process.env.OPENAI_API_KEY = 'sk-test';
+    const provider = getServerProvider();
+    expect(provider.name).toBe('whisper-api');
   });
 });
 
 describe('createProvider', () => {
   it('이름으로 해당 provider 인스턴스를 반환한다', () => {
     expect(createProvider('whisper-api').name).toBe('whisper-api');
+    expect(createProvider('gemini-audio').name).toBe('gemini-audio');
+    expect(createProvider('gemini-audio')).toBeInstanceOf(GeminiAudioProvider);
     expect(createProvider('dummy').name).toBe('dummy');
   });
 });

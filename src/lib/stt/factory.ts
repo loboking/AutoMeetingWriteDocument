@@ -6,6 +6,8 @@ import {
   type TranscriptSegment,
   type TranscriptionResult,
 } from './types';
+import { GeminiAudioProvider } from './geminiAudioProvider';
+export { GeminiAudioProvider };
 
 // Whisper는 OpenAI 전용. z.ai BASE(ZAI_BASE_URL)는 STT 404이므로 절대 사용하지 않는다.
 const OPENAI_TRANSCRIPTIONS_ENDPOINT = 'https://api.openai.com/v1/audio/transcriptions';
@@ -115,10 +117,18 @@ export class DummyProvider implements STTProvider {
 }
 
 // 서버측 provider 선택.
-// OPENAI_API_KEY 있으면 Whisper API, 없으면 Dummy(NO_STT_PROVIDER 유도).
+// STT_PROVIDER 노브(gemini-audio|whisper, 기본 whisper) + isAvailable 폴백.
+//   - gemini-audio 명시: GEMINI_API_KEY 있으면 Gemini 오디오, 없으면 Whisper로 폴백.
+//   - whisper(기본): OPENAI_API_KEY 있으면 Whisper, 없으면 Dummy(NO_STT_PROVIDER 유도).
 // NOTE: 브라우저 전용 provider(transformers / web-speech)는 서버 factory에 포함하지 않는다.
 //       해당 provider는 클라이언트 훅에서 처리한다.
 export function getServerProvider(): STTProvider {
+  const preferred = (process.env.STT_PROVIDER || 'whisper').toLowerCase();
+  if (preferred === 'gemini-audio') {
+    const gemini = new GeminiAudioProvider();
+    if (gemini.isAvailable()) return gemini;
+    // GEMINI_API_KEY 없으면 Whisper로 폴백
+  }
   if (process.env.OPENAI_API_KEY) {
     return new WhisperApiProvider();
   }
@@ -131,6 +141,8 @@ export function createProvider(name: STTProviderName): STTProvider {
   switch (name) {
     case 'whisper-api':
       return new WhisperApiProvider();
+    case 'gemini-audio':
+      return new GeminiAudioProvider();
     case 'dummy':
     case 'transformers': // 브라우저 전용 — 서버에서는 미지원
     case 'web-speech': // 브라우저 전용 — 서버에서는 미지원

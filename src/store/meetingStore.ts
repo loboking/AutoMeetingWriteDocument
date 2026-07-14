@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { Meeting, MeetingStep, DocType, DocStatus, DocVersion, DocVersionSource, Project, ProjectMode, MeetingSummary } from '@/types';
+import type { Meeting, MeetingNote, MeetingStep, DocType, DocStatus, DocVersion, DocVersionSource, Project, ProjectMode, MeetingSummary } from '@/types';
 import { DOCUMENTS, DEPENDENCIES, docTypeToField, getAllDependents, topoSortLevels, levelsFor, topoSortDocs } from '@/lib/documentUtils';
 import { authedFetch } from '@/lib/authFetch';
 import { mapWithConcurrency } from '@/lib/concurrency';
@@ -520,6 +520,15 @@ interface MeetingStore {
   updateProjectDocuments: (projectId: string, docType: DocType, content: string) => void;
   updateProjectMasterSummary: (projectId: string, summary: MeetingSummary) => void;
 
+  // 회의록(① 회의록 모드 독립 산출) — 14문서/Project FK 없이 가벼운 저장.
+  // 합성(③) 시 Project(composite).sourceNoteIds가 MeetingNote.id들을 참조한다.
+  // 지금은 클라 state+persist(localStorage)만. DB 영속은 후속(notesSync.ts).
+  meetingNotes: MeetingNote[];
+  createMeetingNote: (init: { id: string; title: string; transcript: string; summary: MeetingSummary; transcriptSegments?: MeetingNote['transcriptSegments']; audioUrl?: string; duration?: number; source?: MeetingNote['source'] }) => MeetingNote;
+  getMeetingNote: (id: string) => MeetingNote | undefined;
+  updateMeetingNote: (id: string, updates: Partial<MeetingNote>) => void;
+  deleteMeetingNote: (id: string) => void;
+
   // 문서 상태 관리 (projectId -> docType -> status).
   // single 모드는 projectId === meetingId라 기존 persist 데이터와 자연 호환.
   docStatuses: Record<string, Record<DocType, DocStatus>>;
@@ -600,6 +609,7 @@ export const useMeetingStore = create<MeetingStore>()(
       chatMessages: {},
       deletedIds: [],
       projects: [], // composite 프로젝트만 저장. single은 getProject가 Meeting 자동 래핑.
+      meetingNotes: [], // 회의록 모드 독립 산출. DB 영속은 후속.
       docStatuses: {},
       docVersions: {},
       frozenDocs: {},
@@ -841,6 +851,42 @@ export const useMeetingStore = create<MeetingStore>()(
         });
       },
 
+      // MeetingNote(① 회의록 독립 산출) CRUD -----------------------------------
+      // 14문서/Project FK 없이 가벼운 저장. 합성(③) sourceNoteIds로 참조된다.
+      createMeetingNote: (init) => {
+        const now = new Date();
+        const note: MeetingNote = {
+          id: init.id,
+          title: init.title,
+          createdAt: now,
+          updatedAt: now,
+          transcript: init.transcript,
+          transcriptSegments: init.transcriptSegments,
+          summary: init.summary,
+          audioUrl: init.audioUrl,
+          duration: init.duration,
+          source: init.source,
+        };
+        set({ meetingNotes: [note, ...get().meetingNotes] });
+        return note;
+      },
+
+      getMeetingNote: (id) => get().meetingNotes.find((n) => n.id === id),
+
+      updateMeetingNote: (id, updates) => {
+        set((st) => {
+          const idx = st.meetingNotes.findIndex((n) => n.id === id);
+          if (idx < 0) return {};
+          const updated = [...st.meetingNotes];
+          updated[idx] = { ...updated[idx], ...updates, updatedAt: new Date() };
+          return { meetingNotes: updated };
+        });
+      },
+
+      deleteMeetingNote: (id) => {
+        set({ meetingNotes: get().meetingNotes.filter((n) => n.id !== id) });
+      },
+
       isSyncing: false,
       syncFromServer: async () => {
         if (get().isSyncing) return;
@@ -883,6 +929,7 @@ export const useMeetingStore = create<MeetingStore>()(
           chatMessages: {},
           deletedIds: [],
           projects: [],
+          meetingNotes: [],
           docStatuses: {},
           docVersions: {},
           frozenDocs: {},
@@ -1315,6 +1362,8 @@ export const useMeetingStore = create<MeetingStore>()(
         deletedIds: state.deletedIds,
         // composite 프로젝트 영속화. single은 Meeting에서 자동 래핑하므로 여기엔 없음.
         projects: state.projects,
+        // 회의록 모드 독립 산출 영속화. DB 영속은 후속.
+        meetingNotes: state.meetingNotes,
         docStatuses: state.docStatuses,
         docVersions: state.docVersions,
         frozenDocs: state.frozenDocs,

@@ -3,7 +3,7 @@
 // provider(Whisper API / transformers.js / Web Speech)를 갈아끼울 수 있게 한다.
 // 화자분리는 MVP에서 OFF(speaker='Unknown') — 스키마만 미리 도입.
 
-export type STTProviderName = 'whisper-api' | 'transformers' | 'web-speech' | 'dummy';
+export type STTProviderName = 'whisper-api' | 'gemini-audio' | 'transformers' | 'web-speech' | 'dummy';
 
 // 발화 한 토막. 화자분리 미지원 시 speaker='Unknown'.
 export interface TranscriptSegment {

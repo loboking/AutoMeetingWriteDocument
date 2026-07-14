@@ -60,10 +60,12 @@ ZAI_BASE_URL=https://open.bigmodel.cn/api/coding/paas/v4
 # OpenAI API — Whisper STT(음성→텍스트) fallback
 OPENAI_API_KEY=sk-your-openai-api-key-here
 
-# (옵션) STT/화자분리용 Gemini 오디오. 도이 작업 머징 후 활성화.
+# STT/화자분리용 Gemini 오디오 (활성화됨 — 도이 작업 머짍 완료).
 #        이 키를 쓰더라도 LLM_PROVIDER=ZAI 가 LLM을 고정하므로 PRD 절단 사고 방지됨.
-# GEMINI_API_KEY=your-gemini-api-key-here
-# STT_PROVIDER=whisper   # whisper | gemini-audio (기본 whisper)
+GEMINI_API_KEY=your-gemini-api-key-here
+# STT용 모델(기본 gemini-2.5-flash). LLM용 GEMINI_MODEL과 분리.
+# GEMINI_STT_MODEL=gemini-2.5-flash
+STT_PROVIDER=whisper   # whisper | gemini-audio (기본 whisper, gemini-audio 시 STT+화자분리 동시)
 ```
 
 **API 키 가져오기:**

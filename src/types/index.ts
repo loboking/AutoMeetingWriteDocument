@@ -60,13 +60,32 @@ export interface Project {
   id: string;
   title: string;
   mode: ProjectMode;
-  sourceNoteIds: string[]; // single: [meetingId] / composite: 합성에 쓰인 meetingId들
+  // single: [Meeting.id] / composite: 합성에 쓰인 MeetingNote.id들 (회의록 모드 독립 산출)
+  sourceNoteIds: string[];
   masterSummary?: MeetingSummary; // composite: 합성 요약 / single: meeting.summary와 동일
   documents: Partial<Record<DocType, string>>; // kebab-case DocType 키
   completedDocs: DocType[];
   docVersions: DocVersion[];
   createdAt: Date;
   updatedAt?: Date;
+}
+
+// 회의록(① 회의록 모드의 독립 산출).
+// Meeting(② 기획서 입력, Project 자동 래핑)과 분리 — 14문서 필드/Project FK 없이 가벼운 산출.
+// 합성(③) 시 Project(composite).sourceNoteIds가 MeetingNote.id들을 참조한다.
+// source: recording(녹음 STT) / text(직접 타이핑) / file(오디오 파일 업로드)
+export interface MeetingNote {
+  id: string;
+  title: string;
+  createdAt: Date;
+  updatedAt?: Date;
+  transcript: string;
+  transcriptSegments?: TranscriptSegment[]; // 화자 라벨(Gemini 오디오 STT)
+  summary: MeetingSummary;
+  audioUrl?: string;
+  duration?: number; // 초 단위
+  tags?: string[];
+  source?: 'recording' | 'text' | 'file';
 }
 
 // 회의 데이터 타입
