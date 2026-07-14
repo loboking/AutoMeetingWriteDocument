@@ -48,6 +48,27 @@ export type DocType =
   | 'database'
   | 'deployment';
 
+// 프로젝트 모드: single(단일회의 자동래핑) | composite(다회의 합성)
+export type ProjectMode = 'single' | 'composite';
+
+// Project: 회의(단일/합성) 단위의 문서 생성 컨테이너.
+// - single: 기존 회의 흐름 유지. Project.id === Meeting.id 자동 래핑.
+// - composite: 여러 회의 요약을 합성해 하나의 문서세트를 만든다.
+// documents는 kebab-case DocType 리터럴 키(docTypeToField로 flat 카멜과 호환).
+// 도현 확정 스키마 — 도이 DDL 완성 시 정합.
+export interface Project {
+  id: string;
+  title: string;
+  mode: ProjectMode;
+  sourceNoteIds: string[]; // single: [meetingId] / composite: 합성에 쓰인 meetingId들
+  masterSummary?: MeetingSummary; // composite: 합성 요약 / single: meeting.summary와 동일
+  documents: Partial<Record<DocType, string>>; // kebab-case DocType 키
+  completedDocs: DocType[];
+  docVersions: DocVersion[];
+  createdAt: Date;
+  updatedAt?: Date;
+}
+
 // 회의 데이터 타입
 export interface Meeting {
   id: string;

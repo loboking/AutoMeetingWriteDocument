@@ -21,10 +21,11 @@ export async function recordTokenUsage(params: {
   usage?: LLMUsage;
   meetingId?: string;
   docType?: string;
+  projectId?: string;
 }): Promise<void> {
   if (!supabaseAdmin) return;
   if (!params.usage) return; // provider가 토큰을 안 주면 기록 생략
-  const { userId, op, provider, model, usage, meetingId, docType } = params;
+  const { userId, op, provider, model, usage, meetingId, docType, projectId } = params;
   const { error } = await supabaseAdmin.from('token_usage').insert({
     user_id: userId,
     period: getCurrentPeriod(),
@@ -35,6 +36,7 @@ export async function recordTokenUsage(params: {
     output_tokens: usage.outputTokens,
     total_tokens: usage.totalTokens,
     meeting_id: meetingId ?? null,
+    project_id: projectId ?? null,
     doc_type: docType ?? null,
   });
   if (error) {

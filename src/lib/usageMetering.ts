@@ -1,5 +1,12 @@
-// 사용량 미터링: "월 회의 처리 건수" 카운팅/조회/한도. 서버 전용(supabaseAdmin 사용).
+// 사용량 미터링: "월 프로젝트 처리 건수" 카운팅/조회/한도. 서버 전용(supabaseAdmin 사용).
 // 결제 전 단계라 ENFORCE_LIMIT=false(기록만)가 기본. 결제 붙으면 true로 켠다.
+//
+// TODO(migration): 도이 Project 타입 확정 후 Meeting→Project(single) 1:1 마이그레이션 구현.
+//   2단계 플래그: mad:projects-migrated:${userId}
+//   - false면 기존 meeting_id → project_id 매핑 룩업 후 projectId 보정
+//   - true면 그대로 projectId 사용
+//   마이그레이션 대상: usage_events 기존 row의 meeting_id 값 → project_id로 이미 ALTER RENAME 완료됨.
+//   클라에서 projectId를 보내지 않는 레거시 호출 보정 필요.
 import { supabaseAdmin } from '@/lib/supabaseAdmin';
 import { getPlanLimit, GRANTED_LIMIT } from '@/lib/plans';
 import { getUserPlan, isGranted } from '@/lib/subscriptionStore';
@@ -13,18 +20,18 @@ export function getCurrentPeriod(): string {
   return `${kst.getUTCFullYear()}-${String(kst.getUTCMonth() + 1).padStart(2, '0')}`;
 }
 
-// 이 회의가 이미 차감됐는지(= 진행 중 회의의 나머지 문서인지). unique(user_id, meeting_id) 기준.
-export async function isMeetingCounted(userId: string, meetingId: string): Promise<boolean> {
+// 이 프로젝트가 이미 차감됐는지(= 진행 중 프로젝트의 나머지 문서인지). unique(user_id, project_id) 기준.
+export async function isProjectCounted(userId: string, projectId: string): Promise<boolean> {
   if (!supabaseAdmin) return false;
   const { data, error } = await supabaseAdmin
     .from('usage_events')
     .select('id')
     .eq('user_id', userId)
-    .eq('meeting_id', meetingId)
+    .eq('project_id', projectId)
     .limit(1)
     .maybeSingle();
   if (error) {
-    console.error('[usageMetering] isMeetingCounted error:', error.message);
+    console.error('[usageMetering] isProjectCounted error:', error.message);
     return false;
   }
   return !!data;
@@ -56,7 +63,7 @@ export async function getMonthlyLimit(userId: string): Promise<number> {
 // 첫 문서 생성 성공 시 1건 기록(멱등). best-effort — 실패해도 문서 응답은 막지 않음.
 export async function recordUsage(
   userId: string,
-  meetingId: string,
+  projectId: string,
   period: string,
   docType: string
 ): Promise<void> {
@@ -64,8 +71,8 @@ export async function recordUsage(
   const { error } = await supabaseAdmin
     .from('usage_events')
     .upsert(
-      { user_id: userId, meeting_id: meetingId, period, doc_type: docType },
-      { onConflict: 'user_id,meeting_id', ignoreDuplicates: true }
+      { user_id: userId, project_id: projectId, period, doc_type: docType },
+      { onConflict: 'user_id,project_id', ignoreDuplicates: true }
     );
   if (error) {
     console.error('[usageMetering] recordUsage error:', error.message);

@@ -17,8 +17,9 @@ create table if not exists public.token_usage (
   input_tokens integer not null default 0,
   output_tokens integer not null default 0,
   total_tokens integer not null default 0,
-  -- 연관 회의/문서(있으면). 분석용.
+  -- 연관 회의/문서/프로젝트(있으면). 분석용.
   meeting_id text,
+  project_id text,
   doc_type text,
   created_at timestamptz not null default now()
 );
@@ -42,3 +43,8 @@ create policy token_usage_select_own on public.token_usage
 
 -- INSERT/UPDATE/DELETE 정책 없음 → anon/authenticated는 쓰기 불가.
 -- service_role 키(supabaseAdmin)는 RLS 우회하므로 서버 기록은 정상 동작.
+
+-- ============================================================
+-- MIGRATION: project_id 컬럼 추가 (기존 환경에서만 실행)
+--   alter table public.token_usage add column project_id text;
+-- ============================================================

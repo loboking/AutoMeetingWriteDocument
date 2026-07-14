@@ -53,7 +53,8 @@ const mkMeeting = (id: string): Meeting => ({
 
 // 최소 ActiveGenerationJob 픽스처
 const mkJob = (overrides: Partial<ActiveGenerationJob> = {}): ActiveGenerationJob => ({
-  meetingId: 'm1',
+  projectId: 'm1', // 일반화: meetingId → projectId (single 모드에선 동일)
+  sourceNoteIds: ['m1'],
   order: ['prd', 'feature-list'],
   completedDocs: [],
   status: 'running',
@@ -61,6 +62,7 @@ const mkJob = (overrides: Partial<ActiveGenerationJob> = {}): ActiveGenerationJo
   resumeAttempts: 0,
   lastResumeCompletedCount: undefined,
   mode: 'full',
+  projectMode: 'single',
   ...overrides,
 });
 
