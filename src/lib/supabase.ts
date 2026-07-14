@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
-import type { Meeting } from '@/types';
+import type { Meeting, MeetingNote } from '@/types';
 
 // Supabase DB 행 형태 (meetings 테이블 외 레거시 공유 테이블용 느슨한 shape).
 // 본 모듈의 meetingToRow/rowToMeeting은 MeetingRow로 강타입. 아래 두 함수만 레거시.
@@ -89,6 +89,32 @@ export function meetingToRow(meeting: Meeting): { client_id: string; title: stri
 }
 
 export function rowToMeeting(row: Pick<MeetingRow, 'client_id' | 'data' | 'updated_at'>): Meeting {
+  return {
+    ...row.data,
+    id: row.data?.id ?? row.client_id,
+    updatedAt: new Date(row.updated_at),
+  };
+}
+
+// ── meeting_notes 테이블(로그인 사용자별 비공개) 전용 변환 ──
+export interface MeetingNoteRow {
+  id: string;
+  client_id: string;
+  title: string;
+  data: MeetingNote;
+  created_at: string;
+  updated_at: string;
+}
+
+export function meetingNoteToRow(note: MeetingNote): { client_id: string; title: string; data: MeetingNote } {
+  return {
+    client_id: note.id,
+    title: note.title || '',
+    data: note,
+  };
+}
+
+export function rowToMeetingNote(row: Pick<MeetingNoteRow, 'client_id' | 'data' | 'updated_at'>): MeetingNote {
   return {
     ...row.data,
     id: row.data?.id ?? row.client_id,

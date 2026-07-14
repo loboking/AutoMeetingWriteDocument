@@ -6,6 +6,7 @@ import type { Session } from '@supabase/supabase-js';
 import { supabase } from '@/lib/supabase';
 import { useMeetingStore } from '@/store/meetingStore';
 import { fetchMeetings, migrateLocalMeetings, mergeServer, upsertMeeting } from '@/lib/meetingsSync';
+import { fetchMeetingNotesFromServer, migrateLocalMeetingNotes } from '@/lib/notesMigrate';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -111,12 +112,18 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
     const store = useMeetingStore.getState();
     const local = store.meetings;
 
+    // Meeting 마이그레이션 (기존)
     const server = await fetchMeetings();
     await migrateLocalMeetings(sess.user.id, local, server);
     // 마이그레이션 후 최신 서버 상태로 다시 가져와 머지
     const serverAfter = await fetchMeetings();
     const merged = mergeServer(local, serverAfter, useMeetingStore.getState().deletedIds);
     store.setMeetings(merged);
+
+    // MeetingNote 마이그레이션 (localStorage → DB 1회 흡수, 멱등)
+    const localNotes = store.meetingNotes;
+    const serverNotes = await fetchMeetingNotesFromServer();
+    await migrateLocalMeetingNotes(sess.user.id, localNotes, serverNotes);
 
     // 런타임 변경 → 디바운스 upsert 등록 (중복 등록 방지)
     if (unsubscribeRef.current) unsubscribeRef.current();
