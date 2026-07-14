@@ -6,7 +6,12 @@ import type { Session } from '@supabase/supabase-js';
 import { supabase } from '@/lib/supabase';
 import { useMeetingStore } from '@/store/meetingStore';
 import { fetchMeetings, migrateLocalMeetings, mergeServer, upsertMeeting } from '@/lib/meetingsSync';
-import { fetchMeetingNotesFromServer, migrateLocalMeetingNotes } from '@/lib/notesMigrate';
+import {
+  fetchMeetingNotes,
+  migrateLocalMeetingNotes,
+  mergeMeetingNotes,
+  upsertMeetingNote,
+} from '@/lib/notesSync';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -23,9 +28,12 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [loadingSession, setLoadingSession] = useState(true);
 
-  // 런타임 동기화 구독/디바운스 정리용
+  // 런타임 동기화 구독/디바운스 정리용 (Meeting용)
   const unsubscribeRef = useRef<(() => void) | null>(null);
   const debounceTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  // MeetingNote용 독립 구독/디바운스 (meetings와 별개 생명주기 — 독립 타이머/구독)
+  const unsubscribeNotesRef = useRef<(() => void) | null>(null);
+  const debounceNoteTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   // onSignedIn 중복 실행 방지(같은 유저로 INITIAL_SESSION+SIGNED_IN 둘 다 올 수 있음)
   const syncedUserRef = useRef<string | null>(null);
 
@@ -45,6 +53,8 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
       if (now - last < 10_000) return; // 10초 내 중복 방지
       last = now;
       void useMeetingStore.getState().syncFromServer().catch(() => {});
+      // 회의록도 독립 재조회(다른 테이블/생명주기 — meetings 성공 여부와 무관).
+      void useMeetingStore.getState().syncMeetingNotesFromServer().catch(() => {});
     };
     document.addEventListener('visibilitychange', onVisible);
     window.addEventListener('focus', onVisible);
@@ -120,12 +130,20 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
     const merged = mergeServer(local, serverAfter, useMeetingStore.getState().deletedIds);
     store.setMeetings(merged);
 
-    // MeetingNote 마이그레이션 (localStorage → DB 1회 흡수, 멱등)
+    // MeetingNote 마이그레이션 (localStorage → DB 1회 흡수, 멱등) — meetings와 독립 경로
     const localNotes = store.meetingNotes;
-    const serverNotes = await fetchMeetingNotesFromServer();
+    const serverNotes = await fetchMeetingNotes();
     await migrateLocalMeetingNotes(sess.user.id, localNotes, serverNotes);
+    // 마이그레이션 후 최신 서버 상태로 다시 가져와 머지(meetings 패턴과 동일)
+    const serverNotesAfter = await fetchMeetingNotes();
+    const mergedNotes = mergeMeetingNotes(
+      localNotes,
+      serverNotesAfter,
+      useMeetingStore.getState().deletedNoteIds
+    );
+    store.setMeetingNotes(mergedNotes);
 
-    // 런타임 변경 → 디바운스 upsert 등록 (중복 등록 방지)
+    // Meeting 런타임 변경 → 디바운스 upsert 등록 (중복 등록 방지)
     if (unsubscribeRef.current) unsubscribeRef.current();
     let prev = useMeetingStore.getState().meetings;
     unsubscribeRef.current = useMeetingStore.subscribe((state) => {
@@ -138,6 +156,33 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
       }
       prev = next;
     });
+
+    // MeetingNote 런타임 변경 → 디바운스 upsert 등록 (독립 구독 — meetings와 별개)
+    if (unsubscribeNotesRef.current) unsubscribeNotesRef.current();
+    let prevNotes = useMeetingStore.getState().meetingNotes;
+    unsubscribeNotesRef.current = useMeetingStore.subscribe((state) => {
+      const next = state.meetingNotes;
+      if (next === prevNotes) return;
+      const prevById = new Map(prevNotes.map((n) => [n.id, n]));
+      for (const n of next) {
+        if (prevById.get(n.id) !== n) scheduleUpsertNote(n);
+      }
+      prevNotes = next;
+    });
+  };
+
+  const scheduleUpsertNote = (note: { id: string }) => {
+    const timers = debounceNoteTimers.current;
+    const existing = timers.get(note.id);
+    if (existing) clearTimeout(existing);
+    timers.set(
+      note.id,
+      setTimeout(() => {
+        timers.delete(note.id);
+        const fresh = useMeetingStore.getState().meetingNotes.find((x) => x.id === note.id);
+        if (fresh) void upsertMeetingNote(fresh);
+      }, SYNC_DEBOUNCE_MS)
+    );
   };
 
   const scheduleUpsert = (meeting: { id: string }) => {
@@ -165,6 +210,13 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
     }
     debounceTimers.current.forEach((t) => clearTimeout(t));
     debounceTimers.current.clear();
+    // MeetingNote 구독/타이머 정리 (독립 생명주기 — 별도 정리)
+    if (unsubscribeNotesRef.current) {
+      unsubscribeNotesRef.current();
+      unsubscribeNotesRef.current = null;
+    }
+    debounceNoteTimers.current.forEach((t) => clearTimeout(t));
+    debounceNoteTimers.current.clear();
 
     try {
       useMeetingStore.persist.clearStorage();

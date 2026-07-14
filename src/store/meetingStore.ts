@@ -5,6 +5,11 @@ import { DOCUMENTS, DEPENDENCIES, docTypeToField, getAllDependents, topoSortLeve
 import { authedFetch } from '@/lib/authFetch';
 import { mapWithConcurrency } from '@/lib/concurrency';
 import { deleteMeetingRow, fetchMeetings, mergeServer } from '@/lib/meetingsSync';
+import {
+  deleteMeetingNoteRow,
+  fetchMeetingNotes,
+  mergeMeetingNotes,
+} from '@/lib/notesSync';
 
 // UUID 생성 유틸 (브라우저 호환성)
 function generateId(): string {
@@ -522,12 +527,18 @@ interface MeetingStore {
 
   // 회의록(① 회의록 모드 독립 산출) — 14문서/Project FK 없이 가벼운 저장.
   // 합성(③) 시 Project(composite).sourceNoteIds가 MeetingNote.id들을 참조한다.
-  // 지금은 클라 state+persist(localStorage)만. DB 영속은 후속(notesSync.ts).
+  // meetings 동기화와 독립 경로(meeting_notes 테이블, 별개 생명주기 — 회의록은 무료 영속).
   meetingNotes: MeetingNote[];
+  // 회의록 삭제 tombstone — 서버 삭제 지연/실패 시 부활 방지(deletedIds와 별개).
+  deletedNoteIds: string[];
   createMeetingNote: (init: { id: string; title: string; transcript: string; summary: MeetingSummary; transcriptSegments?: MeetingNote['transcriptSegments']; audioUrl?: string; duration?: number; source?: MeetingNote['source'] }) => MeetingNote;
   getMeetingNote: (id: string) => MeetingNote | undefined;
   updateMeetingNote: (id: string, updates: Partial<MeetingNote>) => void;
   deleteMeetingNote: (id: string) => void;
+  // 회의록 DB 영속 — meetings 동기화와 독립(syncFromServer 무변경).
+  setMeetingNotes: (notes: MeetingNote[]) => void;
+  isSyncingNotes: boolean;
+  syncMeetingNotesFromServer: () => Promise<void>;
 
   // 문서 상태 관리 (projectId -> docType -> status).
   // single 모드는 projectId === meetingId라 기존 persist 데이터와 자연 호환.
@@ -608,8 +619,9 @@ export const useMeetingStore = create<MeetingStore>()(
       activeDocType: null,
       chatMessages: {},
       deletedIds: [],
+      deletedNoteIds: [], // 회의록 삭제 tombstone (deletedIds와 별개 — 독립 생명주기)
       projects: [], // composite 프로젝트만 저장. single은 getProject가 Meeting 자동 래핑.
-      meetingNotes: [], // 회의록 모드 독립 산출. DB 영속은 후속.
+      meetingNotes: [], // 회의록 모드 독립 산출. DB 영속은 notesSync로 독립 경로.
       docStatuses: {},
       docVersions: {},
       frozenDocs: {},
@@ -884,7 +896,35 @@ export const useMeetingStore = create<MeetingStore>()(
       },
 
       deleteMeetingNote: (id) => {
-        set({ meetingNotes: get().meetingNotes.filter((n) => n.id !== id) });
+        set({
+          meetingNotes: get().meetingNotes.filter((n) => n.id !== id),
+          // tombstone: 동기화가 이 회의록을 다시 살리지 못하게(부활 방지). 최근 200개만 유지.
+          deletedNoteIds: [...get().deletedNoteIds.filter((x) => x !== id), id].slice(-200),
+        });
+        // 서버에서도 삭제 — 안 하면 다음 동기화에 부활. best-effort(비로그인/실패 무시).
+        void deleteMeetingNoteRow(id);
+      },
+
+      setMeetingNotes: (notes) => {
+        // 서버 동기화 결과로 교체. MeetingNote엔 currentNote 개념이 없어 meetings의
+        // currentMeeting 갱신 로직은 불필요 — 배열만 교체.
+        set({ meetingNotes: notes });
+      },
+
+      isSyncingNotes: false,
+      syncMeetingNotesFromServer: async () => {
+        if (get().isSyncingNotes) return;
+        set({ isSyncingNotes: true });
+        try {
+          const server = await fetchMeetingNotes();
+          const merged = mergeMeetingNotes(get().meetingNotes, server, get().deletedNoteIds);
+          get().setMeetingNotes(merged);
+        } catch (e) {
+          console.error('[syncMeetingNotesFromServer] 실패:', e instanceof Error ? e.message : e);
+          throw e;
+        } finally {
+          set({ isSyncingNotes: false });
+        }
       },
 
       isSyncing: false,
@@ -928,6 +968,7 @@ export const useMeetingStore = create<MeetingStore>()(
           currentStep: 'idle',
           chatMessages: {},
           deletedIds: [],
+          deletedNoteIds: [],
           projects: [],
           meetingNotes: [],
           docStatuses: {},
@@ -1361,9 +1402,11 @@ export const useMeetingStore = create<MeetingStore>()(
         currentMeeting: stripBlobAudioUrl(state.currentMeeting),
         chatMessages: state.chatMessages,
         deletedIds: state.deletedIds,
+        // 회의록 삭제 tombstone 영속화(부활 방지).
+        deletedNoteIds: state.deletedNoteIds,
         // composite 프로젝트 영속화. single은 Meeting에서 자동 래핑하므로 여기엔 없음.
         projects: state.projects,
-        // 회의록 모드 독립 산출 영속화. DB 영속은 후속.
+        // 회의록 모드 독립 산출 영속화. DB 영속은 notesSync로 meetings와 독립 경로.
         meetingNotes: state.meetingNotes,
         docStatuses: state.docStatuses,
         docVersions: state.docVersions,
