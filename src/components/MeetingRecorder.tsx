@@ -17,8 +17,15 @@ import { useBrowserSTT } from '@/hooks/useBrowserSTT';
 import { transcribeAudio } from '@/lib/transcribeAudio';
 import { FileUploader } from './FileUploader';
 import { TextInput } from './TextInput';
+import type { TranscriptPayload } from './transcriptPayload';
 
-function VoiceRecorder() {
+interface VoiceRecorderProps {
+  // ② 회의록 모드: onResult 전달 시 Meeting store를 건드리지 않고 결과만 부모로 위로.
+  // 미전달(① 기존 흐름) 시 updateCurrentMeeting + updateMeetingStep 기존 동작 100% 유지.
+  onResult?: (payload: TranscriptPayload) => void;
+}
+
+function VoiceRecorder({ onResult }: VoiceRecorderProps = {}) {
   const {
     isRecording,
     isPaused,
@@ -55,7 +62,8 @@ function VoiceRecorder() {
 
   const handleStopRecording = async () => {
     stopRecording();
-    updateCurrentMeeting({ duration });
+    // 회의록 모드(② onResult 전달 시)는 Meeting store를 건드리지 않는다.
+    if (!onResult) updateCurrentMeeting({ duration });
     hasAutoTranscribed.current = false;
   };
 
@@ -66,7 +74,7 @@ function VoiceRecorder() {
     setIsUploading(true);
     resetSimulation();
     startSimulation();
-    updateMeetingStep('transcribing');
+    if (!onResult) updateMeetingStep('transcribing');
 
     try {
       // 저장소 업로드 → 서명URL → 서버 Whisper(키 없으면 브라우저 STT 폴백). 임시 사본은 헬퍼가 정리.
@@ -76,6 +84,17 @@ function VoiceRecorder() {
       });
 
       stopSimulation();
+
+      // 회의록 모드(② onResult 전달 시)는 Meeting store를 건드리지 않고 결과만 부모로 위로.
+      if (onResult) {
+        onResult({
+          text: result.text,
+          ...(result.segments ? { segments: result.segments } : {}),
+          duration: result.duration || duration,
+          ...(audioUrl ? { audioUrl } : {}),
+        });
+        return;
+      }
 
       updateCurrentMeeting({
         transcript: result.text,
@@ -88,7 +107,7 @@ function VoiceRecorder() {
     } catch (error) {
       console.error('Transcribe error:', error);
       alert(error instanceof Error ? error.message : '음성 변환에 실패했습니다.');
-      updateMeetingStep('recording');
+      if (!onResult) updateMeetingStep('recording');
     } finally {
       stopSimulation();
       setIsUploading(false);
@@ -253,8 +272,19 @@ function VoiceRecorder() {
   );
 }
 
-export function MeetingRecorder() {
+interface MeetingRecorderProps {
+  // mode='note'(② 회의록 모드): 자식 입력 컴포넌트들이 Meeting store를 건드리지 않고
+  //   전사 결과를 onTranscriptReady로 부모에게 위로 올려보낸다. 부모가 /api/summarize → createMeetingNote.
+  // mode='meeting'(기본, ① 기획서 흐름): 기존 동작 100% 보존(updateCurrentMeeting + updateMeetingStep).
+  mode?: 'meeting' | 'note';
+  // mode='note'일 때만 의미. 전사 완료 페이로드.
+  onTranscriptReady?: (payload: TranscriptPayload) => void;
+}
+
+export function MeetingRecorder({ mode = 'meeting', onTranscriptReady }: MeetingRecorderProps = {}) {
   const [activeTab, setActiveTab] = useState('voice');
+  // 회의록 모드에서만 자식에게 onResult를 넘긴다. meeting 모드는 undefined → 자식 기존 동작.
+  const onResult = mode === 'note' ? onTranscriptReady : undefined;
 
   return (
     <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
@@ -274,15 +304,15 @@ export function MeetingRecorder() {
       </TabsList>
 
       <TabsContent value="voice">
-        <VoiceRecorder />
+        <VoiceRecorder onResult={onResult} />
       </TabsContent>
 
       <TabsContent value="file">
-        <FileUploader />
+        <FileUploader onResult={onResult} />
       </TabsContent>
 
       <TabsContent value="text">
-        <TextInput />
+        <TextInput onResult={onResult} />
       </TabsContent>
     </Tabs>
   );

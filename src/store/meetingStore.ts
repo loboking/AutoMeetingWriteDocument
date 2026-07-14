@@ -220,11 +220,11 @@ async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
       ?? (get().currentMeeting?.id === projectId ? get().currentMeeting : undefined);
     transcript = meeting?.transcript || '';
   } else {
-    // composite: sourceNoteIds 회의들의 transcript를 결합
+    // composite: sourceNoteIds 회의록(MeetingNote)들의 transcript를 결합 (③ MeetingNote 전환)
     const parts: string[] = [];
-    for (const mid of job.sourceNoteIds) {
-      const m = get().meetings.find((x) => x.id === mid);
-      if (m?.transcript) parts.push(m.transcript);
+    for (const nid of job.sourceNoteIds) {
+      const n = get().meetingNotes.find((x) => x.id === nid);
+      if (n?.transcript) parts.push(n.transcript);
     }
     transcript = parts.join('\n\n');
   }
@@ -1200,19 +1200,20 @@ export const useMeetingStore = create<MeetingStore>()(
       // 회의록 합성: /api/synthesize-notes 호출 → composite Project의 masterSummary 채움.
       // 옵션 B: 클라가 summaries 배열 직송. 성공 시 masterSummary 반환, 실패 시 null.
       // sourceNoteIds(선택): project가 없을 때(좀비 방지 — createProject를 합성 성공 후로 미룰 때) 직접 전달.
+      // ③ 합성 모드 전환: 입력 소스 Meeting → MeetingNote로 단일화(회의록 모드가 유일한 입력).
       synthesizeNotes: async (projectId, sourceNoteIds) => {
         const project = get().projects.find((p) => p.id === projectId);
         const noteIds = project?.sourceNoteIds ?? sourceNoteIds ?? [];
-        // sourceNoteIds 회의들의 summary + metas 수집
-        const meetings = noteIds
-          .map((mid) => get().meetings.find((m) => m.id === mid))
-          .filter((m): m is Meeting => !!m?.summary);
-        if (meetings.length === 0) return null;
+        // sourceNoteIds 회의록(MeetingNote)들의 summary + metas 수집
+        const notes = noteIds
+          .map((nid) => get().meetingNotes.find((n) => n.id === nid))
+          .filter((n): n is MeetingNote => !!n?.summary);
+        if (notes.length === 0) return null;
 
-        const summaries = meetings.map((m) => m.summary!);
-        const metas = meetings.map((m) => ({
-          title: m.title,
-          date: new Date(m.createdAt).toLocaleDateString('ko-KR'),
+        const summaries = notes.map((n) => n.summary);
+        const metas = notes.map((n) => ({
+          title: n.title,
+          date: new Date(n.createdAt).toLocaleDateString('ko-KR'),
         }));
 
         try {

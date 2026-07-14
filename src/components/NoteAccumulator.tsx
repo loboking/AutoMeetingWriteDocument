@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useMemo } from 'react';
-import { Layers, Sparkles, AlertCircle, CheckCircle2, FileText } from 'lucide-react';
+import { Layers, Sparkles, AlertCircle, CheckCircle2, FileText, Users } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -9,7 +9,9 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Input } from '@/components/ui/input';
 import { useMeetingStore } from '@/store/meetingStore';
 import { DateFormat } from '@/components/DateFormat';
+import { formatTime } from '@/lib/timeUtils';
 import { cn } from '@/lib/utils';
+import type { MeetingNote } from '@/types';
 
 // 브라우저 환경 UUID 생성(store의 generateId와 동일 패턴. 컴포넌트 로컬 사용).
 function generateId(): string {
@@ -28,7 +30,8 @@ function generateId(): string {
 type SynthState = 'idle' | 'synthesizing' | 'done' | 'error';
 
 export function NoteAccumulator({ onClose }: { onClose?: () => void }) {
-  const meetings = useMeetingStore((s) => s.meetings);
+  // ③ 합성 모드: 입력 소스 Meeting → MeetingNote 전환. 회의록(① 회의록 탭 산출)만 선택 가능.
+  const meetingNotes = useMeetingStore((s) => s.meetingNotes);
   const projects = useMeetingStore((s) => s.projects);
   const createProject = useMeetingStore((s) => s.createProject);
   const synthesizeNotes = useMeetingStore((s) => s.synthesizeNotes);
@@ -42,11 +45,27 @@ export function NoteAccumulator({ onClose }: { onClose?: () => void }) {
   const [synthState, setSynthState] = useState<SynthState>('idle');
   const [errorMsg, setErrorMsg] = useState('');
 
-  // summary가 있는 회의만 선택 가능
-  const eligibleMeetings = useMemo(
-    () => meetings.filter((m) => !!m.summary),
-    [meetings]
+  // 회의록은 항상 summary를 가짐(생성 시 summary 필수). 전부 선택 가능.
+  const eligibleNotes = useMemo(
+    () => meetingNotes.filter((n) => !!n.summary),
+    [meetingNotes]
   );
+
+  // 선택된 회의록 — 예상 토큰(대략치) = summary 문자열 길이 합 / 3 (한글 1자 ≈ 1~2토큰 보수추정)
+  const selectedNotes = useMemo(
+    () => selectedIds
+      .map((id) => meetingNotes.find((n) => n.id === id))
+      .filter((n): n is MeetingNote => !!n),
+    [selectedIds, meetingNotes]
+  );
+  const estimatedTokens = selectedNotes.reduce((sum, n) => {
+    const s = n.summary;
+    const len = (s.overview?.length ?? 0)
+      + s.keyPoints.join('').length
+      + s.decisions.join('').length
+      + s.actionItems.map((a) => a.task).join('').length;
+    return sum + len;
+  }, 0);
 
   // 이미 합성된 프로젝트(완료된 것도 표시)
   const compositeProjects = projects.filter((p) => p.mode === 'composite');
@@ -117,10 +136,10 @@ export function NoteAccumulator({ onClose }: { onClose?: () => void }) {
         <div>
           <h2 className="text-xl font-bold flex items-center gap-2">
             <Layers className="w-5 h-5" aria-hidden="true" />
-            회의록 통합
+            회의록 합성
           </h2>
           <p className="text-sm text-slate-500">
-            여러 회의 요약을 하나로 합성해 단일 문서세트를 생성합니다.
+            여러 회의록 요약을 하나로 합성해 단일 문서세트를 생성합니다.
           </p>
         </div>
         {onClose && (
@@ -144,25 +163,36 @@ export function NoteAccumulator({ onClose }: { onClose?: () => void }) {
             />
           </div>
 
-          <div className="text-sm text-slate-600 dark:text-slate-400">
-            합성할 회의를 2개 이상 선택하세요 ({selectedIds.length}개 선택)
+          <div className="flex items-center justify-between text-sm text-slate-600 dark:text-slate-400">
+            <span>
+              합성할 회의록을 2개 이상 선택하세요 ({selectedIds.length}개 선택)
+            </span>
+            {selectedIds.length > 0 && (
+              <span className="text-xs text-slate-500">
+                예상 입력 약 {estimatedTokens.toLocaleString()}자
+              </span>
+            )}
           </div>
 
           <div className="space-y-2 max-h-[400px] overflow-y-auto">
-            {eligibleMeetings.length === 0 ? (
+            {eligibleNotes.length === 0 ? (
               <Card>
                 <CardContent className="py-10 text-center text-slate-500">
                   <FileText className="w-10 h-10 mx-auto mb-2 opacity-50" aria-hidden="true" />
-                  <p>요약이 완료된 회의가 없습니다.</p>
-                  <p className="text-xs mt-1">먼저 회의를 녹음/업로드해 요약을 생성하세요.</p>
+                  <p>회의록이 없습니다.</p>
+                  <p className="text-xs mt-1">먼저 회의록 탭에서 회의록을 만드세요.</p>
                 </CardContent>
               </Card>
             ) : (
-              eligibleMeetings.map((m) => {
-                const checked = selectedIds.includes(m.id);
+              eligibleNotes.map((n) => {
+                const checked = selectedIds.includes(n.id);
+                // 화자 수: transcriptSegments의 speaker 종류 수, 없으면 1
+                const speakers = n.transcriptSegments && n.transcriptSegments.length > 0
+                  ? new Set(n.transcriptSegments.map((s) => s.speaker)).size
+                  : 1;
                 return (
                   <label
-                    key={m.id}
+                    key={n.id}
                     className={cn(
                       'flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors',
                       checked
@@ -173,18 +203,32 @@ export function NoteAccumulator({ onClose }: { onClose?: () => void }) {
                     <input
                       type="checkbox"
                       checked={checked}
-                      onChange={() => toggleSelect(m.id)}
+                      onChange={() => toggleSelect(n.id)}
                       className="mt-1 w-4 h-4 accent-blue-500"
-                      aria-label={`${m.title} 선택`}
+                      aria-label={`${n.title} 선택`}
                     />
                     <div className="flex-1 min-w-0">
-                      <div className="font-medium truncate">{m.title || '제목 없음'}</div>
-                      <div className="text-xs text-slate-500 mt-0.5">
-                        <DateFormat date={m.createdAt} format="datetime" />
+                      <div className="font-medium truncate flex items-center gap-2">
+                        <span className="truncate">{n.title || '제목 없음'}</span>
                       </div>
-                      {m.summary?.overview && (
+                      <div className="flex items-center gap-2 text-xs text-slate-500 mt-0.5 flex-wrap">
+                        <DateFormat date={n.createdAt} format="datetime" />
+                        <span className="flex items-center gap-0.5">
+                          <Users className="w-3 h-3" aria-hidden="true" />
+                          {speakers}명
+                        </span>
+                        {typeof n.duration === 'number' && n.duration > 0 && (
+                          <span>{formatTime(n.duration)}</span>
+                        )}
+                        {n.source && (
+                          <Badge variant="outline" className="text-[10px] py-0 px-1.5 h-4">
+                            {n.source === 'recording' ? '녹음' : n.source === 'file' ? '업로드' : '텍스트'}
+                          </Badge>
+                        )}
+                      </div>
+                      {n.summary?.overview && (
                         <p className="text-sm text-slate-600 dark:text-slate-400 mt-1 line-clamp-2">
-                          {m.summary.overview}
+                          {n.summary.overview}
                         </p>
                       )}
                     </div>
@@ -203,7 +247,7 @@ export function NoteAccumulator({ onClose }: { onClose?: () => void }) {
               <Sparkles className="w-4 h-4" aria-hidden="true" />
               {selectedIds.length < 2
                 ? '2개 이상 선택하세요'
-                : `${selectedIds.length}개 회의 통합 합성`}
+                : `${selectedIds.length}개 회의록 통합 합성`}
             </Button>
           </div>
         </>
@@ -214,7 +258,7 @@ export function NoteAccumulator({ onClose }: { onClose?: () => void }) {
           <CardContent className="py-10 text-center space-y-3">
             <div className="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto" />
             <p className="text-sm text-slate-600 dark:text-slate-400">
-              AI가 {selectedIds.length}개 회의를 하나의 요약으로 합성하는 중...
+              AI가 {selectedIds.length}개 회의록을 하나의 요약으로 합성하는 중...
             </p>
             <p className="text-xs text-slate-400">최대 30초 소요될 수 있습니다.</p>
           </CardContent>

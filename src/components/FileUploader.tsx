@@ -10,12 +10,15 @@ import { useMeetingStore } from '@/store/meetingStore';
 import { useBrowserSTT } from '@/hooks/useBrowserSTT';
 import { ingestFile } from '@/lib/ingestFile';
 import { FILE_ACCEPT_TYPES } from '@/lib/inputRouter';
+import type { TranscriptPayload } from './transcriptPayload';
 
 interface FileUploaderProps {
-  onTranscriptComplete?: (text: string) => void;
+  // ② 회의록 모드: onResult 전달 시 Meeting store를 건드리지 않고 결과만 부모로 위로.
+  // 미전달(① 기존 흐름) 시 updateCurrentMeeting + updateMeetingStep 기존 동작 100% 유지.
+  onResult?: (payload: TranscriptPayload) => void;
 }
 
-export function FileUploader({ onTranscriptComplete }: FileUploaderProps) {
+export function FileUploader({ onResult }: FileUploaderProps) {
   const { updateCurrentMeeting, updateMeetingStep } = useMeetingStore();
   const browserSTT = useBrowserSTT();
   const [uploading, setUploading] = useState(false);
@@ -38,6 +41,17 @@ export function FileUploader({ onTranscriptComplete }: FileUploaderProps) {
       });
       stopSimulation();
 
+      // 회의록 모드(② onResult 전달 시)는 Meeting store를 건드리지 않고 결과만 부모로 위로.
+      if (onResult) {
+        onResult({
+          text: result.text,
+          ...(result.segments ? { segments: result.segments } : {}),
+          ...(result.duration ? { duration: result.duration } : {}),
+          ...(result.audioObjectUrl ? { audioUrl: result.audioObjectUrl } : {}),
+        });
+        return;
+      }
+
       updateCurrentMeeting({
         transcript: result.text,
         ...(result.segments ? { transcriptSegments: result.segments } : {}),
@@ -46,7 +60,6 @@ export function FileUploader({ onTranscriptComplete }: FileUploaderProps) {
       });
 
       updateMeetingStep('transcribing');
-      onTranscriptComplete?.(result.text);
     } catch (error) {
       console.error('File upload error:', error);
       alert(error instanceof Error ? error.message : '파일 처리에 실패했습니다.');

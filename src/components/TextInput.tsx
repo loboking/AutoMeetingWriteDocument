@@ -6,14 +6,17 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Textarea } from '@/components/ui/textarea';
 import { useMeetingStore } from '@/store/meetingStore';
+import type { TranscriptPayload } from './transcriptPayload';
 
 interface TextInputProps {
-  onTranscriptComplete?: (text: string) => void;
+  // ② 회의록 모드: onResult 전달 시 Meeting store를 건드리지 않고 결과만 부모로 위로.
+  // 미전달(① 기존 흐름) 시 updateCurrentMeeting + updateMeetingStep 기존 동작 100% 유지.
+  onResult?: (payload: TranscriptPayload) => void;
 }
 
 const MIN_CHARS = 10; // 너무 짧으면 요약/문서생성이 의미 없음 — 빈 입력 방지
 
-export function TextInput({ onTranscriptComplete }: TextInputProps) {
+export function TextInput({ onResult }: TextInputProps) {
   const { updateCurrentMeeting, updateMeetingStep } = useMeetingStore();
   const [text, setText] = useState('');
   const [error, setError] = useState('');
@@ -27,10 +30,14 @@ export function TextInput({ onTranscriptComplete }: TextInputProps) {
       return;
     }
     setError('');
-    // STT 없이 입력 텍스트를 그대로 회의록으로 저장 → 요약/문서생성 파이프라인으로 진행
+    // 회의록 모드(② onResult 전달 시)는 Meeting store를 건드리지 않고 결과만 부모로 위로.
+    if (onResult) {
+      onResult({ text: trimmed });
+      return;
+    }
+    // ① 기존 흐름: STT 없이 입력 텍스트를 그대로 회의록으로 저장 → 요약/문서생성 파이프라인.
     updateCurrentMeeting({ transcript: trimmed });
     updateMeetingStep('transcribing');
-    onTranscriptComplete?.(trimmed);
   };
 
   return (

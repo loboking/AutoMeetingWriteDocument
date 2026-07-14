@@ -10,6 +10,7 @@ import { useMeetingStore } from '@/store/meetingStore';
 import type { Meeting } from '@/types';
 import { DateFormat } from '@/components/DateFormat';
 import { NoteAccumulator } from './NoteAccumulator';
+import { MeetingNotePanel } from './MeetingNotePanel';
 
 interface ProjectListProps {
   onClose: () => void;
@@ -167,25 +168,10 @@ export function ProjectList({ onClose }: ProjectListProps) {
           </TabsTrigger>
         </TabsList>
 
-        {/* ① 회의록 탭 — 도이 MeetingNote 타입/스토어 액션 완료 전까지 placeholder.
-            MeetingNote(회의록)는 Meeting(기획서 단일회의)과 별개 엔티티 — 한 회의는 한 탭. */}
+        {/* ① 회의록 탭 — MeetingNote(회의록)는 Meeting(② 기획서 단일회의)과 별개 엔티티.
+            한 회의는 한 탭. MeetingNotePanel이 3入口(녹음/업로드/텍스트) → 요약 → 저장까지 자기완결. */}
         <TabsContent value="notes" className="mt-4">
-          <Card>
-            <CardContent className="py-12 text-center text-slate-500">
-              <Mic className="w-12 h-12 mx-auto mb-3 opacity-50" aria-hidden="true" />
-              <p className="font-medium text-slate-700 dark:text-slate-300">회의록을 녹음하거나 업로드해 시작하세요</p>
-              <p className="text-sm mt-2">
-                회의록은 화자별 전사와 요약을 자기완결적으로 저장합니다.
-                <br />
-                합성 탭에서 여러 회의록을 모아 기획서를 만들 수 있습니다.
-              </p>
-              <Button className="mt-4 gap-1.5" disabled>
-                <Mic className="w-4 h-4" aria-hidden="true" />
-                새 회의록
-              </Button>
-              <p className="text-xs mt-3 text-slate-400">곧 제공됩니다</p>
-            </CardContent>
-          </Card>
+          <MeetingNotePanel onGoToSynthesize={() => setTab('composite')} />
         </TabsContent>
 
         <TabsContent value="meetings" className="mt-4 space-y-4">
