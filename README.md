@@ -42,25 +42,43 @@ pnpm install
 
 ### 3. 환경 변수 설정
 
-`.env.local` 파일을 프로젝트 루트에 생성하고 다음 내용을 추가하세요:
+`.env.local` 파일을 프로젝트 루트에 생성하고 다음 내용을 추가하세요.
+(아래 예시 전체는 `.env.example` 파일에 들어있습니다 — `cp .env.example .env.local` 후 키만 채우면 됩니다.)
 
 ```bash
 # .env.local
 
-# Z.ai 코딩 플랜 (Coding Plan) API
+# ⚠️ 필수: LLM 문서생성은 ZAI(GLM)로 강제.
+# GEMINI_API_KEY(STT/화자용)를 깔면 LLM이 Gemini로 빼앗겨 PRD 섹션이 8192로 잘리는
+# 치명적 품질 사고가 납니다. 반드시 한 줄 명시.
+LLM_PROVIDER=ZAI
+
+# Z.ai 코딩 플랜 (Coding Plan) API — LLM 문서생성(GLM)
 ZAI_API_KEY=your-zai-api-key-here
 ZAI_BASE_URL=https://open.bigmodel.cn/api/coding/paas/v4
 
-# 또는 OpenAI API (대안 - Whisper STT)
+# OpenAI API — Whisper STT(음성→텍스트) fallback
 OPENAI_API_KEY=sk-your-openai-api-key-here
+
+# (옵션) STT/화자분리용 Gemini 오디오. 도이 작업 머징 후 활성화.
+#        이 키를 쓰더라도 LLM_PROVIDER=ZAI 가 LLM을 고정하므로 PRD 절단 사고 방지됨.
+# GEMINI_API_KEY=your-gemini-api-key-here
+# STT_PROVIDER=whisper   # whisper | gemini-audio (기본 whisper)
 ```
 
 **API 키 가져오기:**
 - **Z.ai 코딩 플랜**: [https://z.ai/chat](https://z.ai/chat) - 추천 (코딩 플랜 구독 필요)
 - **OpenAI**: [https://platform.openai.com/api-keys](https://platform.openai.com/api-keys) - Whisper STT용
+- **Google AI Studio**: [https://aistudio.google.com/apikey](https://aistudio.google.com/apikey) - STT/화자분리용 Gemini 오디오 (옵션)
 
 > 💡 **참고**: 코딩 플랜 구독 시 잔액 기반이 아닌 구독 기반으로 GLM 모델을 무제한 사용할 수 있습니다.
 > 지원 모델: glm-5, glm-5.1, glm-5-turbo, glm-4.7 (현재 glm-5 사용)
+
+> ⚠️ **치명적 함정 — `LLM_PROVIDER=ZAI` 생략 금지**:
+> `GEMINI_API_KEY`는 STT/화자분리용이지만, 같은 키가 LLM provider 후보에도 Gemini로 추가됩니다.
+> 기본 우선순위가 `ANTHROPIC > GEMINI > OPENAI > ZAI`라 `LLM_PROVIDER`를 안 정하면 LLM이 Gemini로 잡힙니다.
+> 그러면 PRD 섹션 생성 토큰이 16384가 아닌 **8192로 절반 잘려서** 품질 사고가 납니다.
+> STT용으로 Gemini 키를 쓰더라도 **반드시 `LLM_PROVIDER=ZAI`** 한 줄을 넣어 LLM을 고정하세요.
 
 ### 4. 개발 서버 실행
 
@@ -201,7 +219,7 @@ meeting-auto-docs/
 │   └── types/                # TypeScript 타입 정의
 │       └── index.ts
 ├── public/                   # 정적 리소스
-├── .env.local.example        # 환경 변수 예시
+├── .env.example              # 환경 변수 예시 (cp .env.example .env.local)
 └── package.json
 ```
 
@@ -316,11 +334,16 @@ npm run lint
 
 | 변수 | 설명 | 필수 |
 |------|------|------|
-| `ZAI_API_KEY` | Z.ai 코딩 플랜 API 키 | 선택* |
+| `LLM_PROVIDER` | LLM provider 강제 지정. **ZAI 권장/사실상 필수** — `GEMINI_API_KEY` 깔면 LLM이 Gemini로 빼앗겨 PRD 섹션이 8192로 잘림 | **필수** ⚠️ |
+| `ZAI_API_KEY` | Z.ai 코딩 플랜 API 키 (LLM 문서생성 GLM) | 선택* |
 | `ZAI_BASE_URL` | 코딩 플랜 API 베이스 URL (/api/coding/paas/v4) | 선택 |
-| `OPENAI_API_KEY` | OpenAI API 키 (Whisper용) | 선택* |
+| `OPENAI_API_KEY` | OpenAI API 키 (Whisper STT fallback) | 선택* |
+| `GEMINI_API_KEY` | Google AI 키 (STT/화자분리용 Gemini 오디오, 옵션). 같은 키가 LLM 후보에도 추가되므로 `LLM_PROVIDER=ZAI` 필수 | 선택 |
+| `STT_PROVIDER` | STT provider 노브 (`whisper` \| `gemini-audio`, 기본 `whisper`) | 선택 |
 
 *선택사항이지만, 실제 AI 기능을 사용하려면 필요합니다. 없으면 모의 응답이 반환됩니다. 코딩 플랜 구독을 추천합니다.*
+
+> ⚠️ **`LLM_PROVIDER=ZAI` 를 반드시 넣으세요.** STT용 `GEMINI_API_KEY`만 깔고 이 줄을 빼면, LLM이 Gemini로 잡혀 PRD 섹션이 8192 토큰으로 잘리는 품질 사고가 납니다. 자세한 이유는 위 '환경 변수 설정' 섹션의 치명적 함정 박스를 보세요.
 
 ## 🎯 향후 계획
 
