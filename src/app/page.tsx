@@ -32,6 +32,7 @@ import MeetingRecorder from '@/components/MeetingRecorder';
 import TranscriptViewer from '@/components/TranscriptViewer';
 import SummaryViewer from '@/components/SummaryViewer';
 import PrdViewer from '@/components/PrdViewer';
+import { TextInput } from '@/components/TextInput';
 import DocAssistant from '@/components/DocAssistant';
 import { MeetingNotePanel } from '@/components/MeetingNotePanel';
 import { PageContainer } from '@/components/layout/PageContainer';
@@ -80,6 +81,17 @@ export default function Home() {
     const title = meetingTitle.trim() || `회의 #${Date.now()}`;
     createMeeting(title);
     setMeetingTitle('');
+  };
+
+  // 텍스트 입력 탭 제출 핸들러 — record/upload 패턴과 대칭.
+  // TextInput onResult로 텍스트만 위로 받아, createMeeting(title) 선행 후 updateCurrentMeeting.
+  // currentMeeting 없이 TextInput이 updateCurrentMeeting을 직접 부르면 빈 회의가 만들어지지 않는 함정 방어.
+  const handleTextSubmit = (payload: { text: string }) => {
+    const title = meetingTitle.trim() || `회의 #${Date.now()}`;
+    createMeeting(title);
+    setMeetingTitle('');
+    updateCurrentMeeting({ transcript: payload.text });
+    updateMeetingStep('transcribing');
   };
 
   const [uploadError, setUploadError] = useState('');
@@ -323,7 +335,7 @@ export default function Home() {
               </div>
 
               <Tabs defaultValue="record" className="w-full">
-                <TabsList className="grid w-full grid-cols-2 h-auto p-1">
+                <TabsList className="grid w-full grid-cols-3 h-auto p-1">
                   <TabsTrigger value="record" className="gap-2">
                     <Mic className="w-4 h-4" />
                     녹음 시작
@@ -331,6 +343,10 @@ export default function Home() {
                   <TabsTrigger value="upload" className="gap-2">
                     <FileUp className="w-4 h-4" />
                     파일 업로드
+                  </TabsTrigger>
+                  <TabsTrigger value="text" className="gap-2">
+                    <FileText className="w-4 h-4" />
+                    텍스트 입력
                   </TabsTrigger>
                 </TabsList>
 
@@ -397,6 +413,12 @@ export default function Home() {
                       <AlertDescription>{uploadError}</AlertDescription>
                     </Alert>
                   )}
+                </TabsContent>
+
+                <TabsContent value="text" className="mt-6">
+                  {/* ③ 텍스트 입력 — TextInput 재사용(onResult로 텍스트만 위로).
+                      도현 좌표: record/upload 패턴과 대칭. handleTextSubmit가 createMeeting 선후 update. */}
+                  <TextInput onResult={handleTextSubmit} />
                 </TabsContent>
               </Tabs>
             </CardContent>

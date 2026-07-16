@@ -3,6 +3,14 @@
 
 export type InputKind = 'audio' | 'text' | 'unsupported';
 
+// Gemini File API 한도. 준의 File API 전환(inlineData 16MB 한계 극복) 머지 후에만 의미 있음.
+// 현재 main은 inlineData-only(약 16MB 상한) — 아래 한도로 사용자에게 안내하면 거짓말이 됨.
+// SHOW_FILE_LIMIT_HINT 플래그로 UI 안내 노출을 제어한다. 준이 File API 머지하면 true로.
+// TODO(taeo→jun): File API 전환 머지 시 SHOW_FILE_LIMIT_HINT = true 로 전환.
+export const MAX_FILE_SIZE_BYTES = 2 * 1024 * 1024 * 1024; // 2GB (Gemini File API 한도)
+export const MAX_DURATION_HOURS = 9.5; // Gemini File API 오디오 상한
+export const SHOW_FILE_LIMIT_HINT = false; // File API 전환 전 숨김(inlineData 16MB 한계와 모순)
+
 // <input accept> 힌트(파일 선택창 필터용). 실제 분류는 routeInputFile이 담당하므로
 // 이 문자열은 UX 편의일 뿐 보안/정합성 기준이 아니다. 업로드 입력창 전체가 공유.
 export const FILE_ACCEPT_TYPES =
