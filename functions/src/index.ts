@@ -12,6 +12,16 @@
 //   4. 클라에 { text, segments, duration, language, provider, hasSpeakerDiarization } 반환
 //
 // Vercel /api/transcribe 는 폴백으로 유지됨 — Function 장애/작은 파일/Whisper 선호 시.
+
+// Node 20 폴리필 — supabase-js v2 createClient가 무조건 RealtimeClient(WebSocket)를 초기화.
+// Node 20엔 native WebSocket이 없음(Node 22+ 필요). STT 프록시는 Realtime 불필요하지만
+// 생성자가 강제 초기화(직검: _initRealtimeClient → new RealtimeClient)하므로 ws 폴리필로 회피.
+// supabase-js import보다 먼저 실행되어야 함.
+import { WebSocket as WS } from 'ws';
+if (typeof globalThis.WebSocket === 'undefined') {
+  globalThis.WebSocket = WS as unknown as typeof globalThis.WebSocket;
+}
+
 import { onRequest } from 'firebase-functions/v2/https';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { loadGeminiEnv, transcribeWithGemini } from './gemini';
