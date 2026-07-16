@@ -260,8 +260,13 @@ export async function transcribeWithGemini(
     | { inlineData: { mimeType: string; data: string } }
     | { fileData: { fileUri: string; mimeType: string } };
   if (useFileApi) {
+    console.log('[gemini] File API 경로(15MB+)', { byteLength: audio.byteLength });
+    const uploadStart = Date.now();
     const uploaded = await uploadGeminiFile(audio, mimeType, apiKey);
+    console.log('[gemini] uploadGeminiFile 완료', { elapsedMs: Date.now() - uploadStart, uri: uploaded.uri });
+    const pollStart = Date.now();
     await pollGeminiFileActive(uploaded.name, apiKey);
+    console.log('[gemini] pollGeminiFileActive 완료', { elapsedMs: Date.now() - pollStart });
     audioPart = { fileData: { fileUri: uploaded.uri, mimeType: uploaded.mimeType } };
   } else {
     const base64Audio = arrayBufferToBase64(audio);
@@ -279,11 +284,14 @@ export async function transcribeWithGemini(
   };
 
   const url = `${GEMINI_GENERATE_CONTENT_ENDPOINT}/${model}:generateContent?key=${apiKey}`;
+  console.log('[gemini] generateContent 호출 시작', { model });
+  const genStart = Date.now();
   const response = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
+  console.log('[gemini] generateContent 응답', { status: response.status, ok: response.ok, elapsedMs: Date.now() - genStart });
 
   if (!response.ok) {
     const detail = await response.text().catch(() => '');

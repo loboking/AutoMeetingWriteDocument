@@ -196,18 +196,28 @@ export const sttProxy = onRequest(
     }
 
     try {
+      // [DEBUG 35MB] POST 진입 — 단계별 로그. 원인 확정 후 제거.
+      console.log('[sttProxy] POST 진입', { signedUrlPrefix: signedUrl.slice(0, 60), language });
+
       // 오디오 fetch — Supabase Storage 서명 URL에서만.
+      console.log('[sttProxy] fetch(signedUrl) 시작');
       const audioRes = await fetch(signedUrl);
+      console.log('[sttProxy] fetch(signedUrl) 응답', { status: audioRes.status, ok: audioRes.ok });
       if (!audioRes.ok) {
+        console.error('[sttProxy] 오디오 fetch 실패', { status: audioRes.status });
         res.status(502).json({ error: '오디오를 가져오지 못했습니다.' });
         return;
       }
+      console.log('[sttProxy] arrayBuffer() 시작');
       const audio = await audioRes.arrayBuffer();
       const contentType = audioRes.headers.get('content-type') || undefined;
+      console.log('[sttProxy] arrayBuffer 완료', { byteLength: audio.byteLength, contentType });
 
       // Gemini STT. 폴링 3s×15=45s 캡 내부적으로 적용됨.
       const env = loadGeminiEnv();
+      console.log('[sttProxy] transcribeWithGemini 시작', { model: env.GEMINI_STT_MODEL || env.GEMINI_MODEL || '(default)' });
       const result = await transcribeWithGemini(audio, env, { language, contentType });
+      console.log('[sttProxy] transcribeWithGemini 완료', { textLength: result.text.length, segmentCount: result.segments.length });
 
       res.status(200).json({
         text: result.text,
@@ -218,8 +228,9 @@ export const sttProxy = onRequest(
         hasSpeakerDiarization: result.hasSpeakerDiarization,
       });
     } catch (error) {
-      // Gemini File API ACTIVE 대기 시간 초과 (폴링 45s 캡)
+      // [DEBUG] catch에서 error.message 로그 — 원인 가려짐 해소.
       const message = error instanceof Error ? error.message : String(error);
+      console.error('[sttProxy] POST 처리 에러', { message, stack: error instanceof Error ? error.stack : undefined });
       const isTimeout = message.includes('ACTIVE 대기 시간 초과');
       // GEMINI_GEO_BLOCKED: Function egress IP가 Gemini API에서 geo-block 당함(us-central1 배포 시 발생 안 함).
       //   발생 시 Vercel /api/transcribe 폴백으로 가야 함 — 503 + 명시적 reason.
