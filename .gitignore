@@ -15,3 +15,7 @@ node_modules/
 .env*.local
 .vercel
 next-env.d.ts
+.gstack/
+
+# 검증 산물(도현/준 일시 프로브 — 커밋 대상 아님)
+tmp/
