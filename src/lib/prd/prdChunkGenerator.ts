@@ -78,7 +78,9 @@ async function generateSection(
           system: PRD_SECTION_SYSTEM,
           maxTokens,
           temperature: 0.7,
-          timeoutMs: 180000, // 4분→3분. 300s 리밋 내 retry 마진 확보.
+          timeoutMs: 300000, // Vercel maxDuration 300s 한계까지 대기. z.ai 단일 heavy(280s+) 정상 응답 기다림.
+          // 이전 180s는 z.ai 단일 heavy 280s+를 잘라 throw→재시도 루프 발생(오너 지적).
+          // 500(진짜 z.ai 실패)만 withRetry가 잡고, timeout은 정상 응답 대기.
         }),
       { retries: 2, baseDelayMs: 2000 }
     );
