@@ -98,6 +98,13 @@ async function uploadGeminiFile(
   });
   if (!startRes.ok) {
     const detail = await startRes.text().catch(() => '');
+    // Gemini File API는 Workers egress IP(한국/HKG 인근 colo)에서
+    // "User location is not supported for the API use" 400으로 geo-block 함.
+    // 이 경우 코드 fix 불가 — Workers 인프라(리전/egress) 또는 Vertex AI 전환 필요.
+    // index.ts catch에서 GEMINI_GEO_BLOCKED → 503으로 클라이언트에 Vercel 폴백 안내.
+    if (startRes.status === 400 && detail.includes('User location is not supported')) {
+      throw new Error('GEMINI_GEO_BLOCKED: Workers 리전에서 Gemini API 차단됨');
+    }
     throw new Error(`Gemini File API resumable 시작 실패 (${startRes.status}): ${detail}`.trim());
   }
   const sessionUri = startRes.headers.get('location');
@@ -274,6 +281,11 @@ export async function transcribeWithGemini(
 
   if (!response.ok) {
     const detail = await response.text().catch(() => '');
+    // generateContent도 File API와 동일한 geo-block 당함(5MB inlineData 경로에서도 재현).
+    // GEMINI_GEO_BLOCKED로 통일 — index.ts catch에서 503 + 안내.
+    if (response.status === 400 && detail.includes('User location is not supported')) {
+      throw new Error('GEMINI_GEO_BLOCKED: Workers 리전에서 Gemini API 차단됨');
+    }
     throw new Error(`Gemini Audio API error (${response.status}): ${detail}`.trim());
   }
 

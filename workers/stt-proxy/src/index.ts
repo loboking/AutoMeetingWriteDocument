@@ -70,14 +70,43 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
 
-    // /health — 오너 배포 후 점검용
+    // /health — 오너 배포 후 점검용. ?probe=1 추가 시 실제 Gemini API 접근성(geo-block) 검사.
     if (request.method === 'GET' && url.pathname === '/health') {
-      return Response.json({
+      const base = {
         ok: true,
         service: 'stt-proxy',
-        gemini: !!env.GEMINI_API_KEY,
+        geminiKey: !!env.GEMINI_API_KEY,
         supabase: !!env.SUPABASE_URL && !!env.SUPABASE_ANON_KEY,
-      });
+      };
+      if (!env.GEMINI_API_KEY || url.searchParams.get('probe') !== '1') {
+        return Response.json(base);
+      }
+      // Gemini File API resumable 시작 경로(GET 대신 가벼운 POST metadata)로 geo-block 검사.
+      // 400 "User location is not supported" = Workers egress가 Gemini에서 차단.
+      try {
+        const probeRes = await fetch(
+          `${'https://generativelanguage.googleapis.com/upload/v1beta/files'}?uploadType=resumable&key=${env.GEMINI_API_KEY}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ file: { displayName: 'health-probe' } }),
+          }
+        );
+        const detail = await probeRes.text().catch(() => '');
+        return Response.json({
+          ...base,
+          geminiProbe: {
+            status: probeRes.status,
+            geoBlocked: probeRes.status === 400 && detail.includes('User location is not supported'),
+            ok: probeRes.ok,
+          },
+        });
+      } catch (e) {
+        return Response.json({
+          ...base,
+          geminiProbe: { error: e instanceof Error ? e.message : 'unknown', ok: false },
+        });
+      }
     }
 
     // CORS — 메인 앱 도메인에서만 호출. PROD_ORIGIN 환경변수(운영 도메인) + dev localhost 허용.
@@ -171,11 +200,25 @@ export default {
       // Gemini File API ACTIVE 대기 시간 초과 (Workers 폴링 45s 캡)
       const message = error instanceof Error ? error.message : String(error);
       const isTimeout = message.includes('ACTIVE 대기 시간 초과');
-      const status = message === 'NO_STT_PROVIDER' ? 503 : isTimeout ? 504 : 502;
+      // GEMINI_GEO_BLOCKED: Workers egress IP가 Gemini API에서 geo-block 당함.
+      //   이 경우 Vercel /api/transcribe 폴백으로 가야 함 — 503 + 명시적 reason.
+      const isGeoBlocked = message.startsWith('GEMINI_GEO_BLOCKED');
+      const status = isGeoBlocked
+        ? 503
+        : message === 'NO_STT_PROVIDER'
+          ? 503
+          : isTimeout
+            ? 504
+            : 502;
 
       // message만 노출 — 스택/키/환경변수 절대 포함 금지 (원본 transcribe/route.ts와 동일 원칙).
+      const reason = isGeoBlocked
+        ? 'GEMINI_GEO_BLOCKED'
+        : message === 'NO_STT_PROVIDER'
+          ? 'NO_STT_PROVIDER'
+          : undefined;
       return Response.json(
-        { error: '음성 변환에 실패했습니다.', detail: message },
+        { error: '음성 변환에 실패했습니다.', detail: message, ...(reason ? { reason } : {}) },
         { status, headers: corsHeaders }
       );
     }
