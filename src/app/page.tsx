@@ -48,6 +48,8 @@ export default function Home() {
   // (zustand 기본 selector가 Object.is 비교 — 인라인 filter는 무한 리렌더 위험).
   const projects = useMeetingStore(s => s.projects);
   const { createMeeting, updateCurrentMeeting, updateMeetingStep, setCurrentMeeting } = useMeetingStore();
+  // C안 어댑터 — composite Project를 currentMeeting으로 주입(PrdViewer 회귀 0).
+  const openCompositeProject = useMeetingStore((s) => s.openCompositeProject);
   const [meetingTitle, setMeetingTitle] = useState('');
   const [mounted, setMounted] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -242,9 +244,14 @@ export default function Home() {
           </TabsList>
 
           {/* ① 회의록 탭 — MeetingNote(회의록) 전용 패널. 다중 선택 합성 흡수.
-              합성 완료 시 onSynthesisComplete → ② 기획서 탭으로. */}
+              B안: 합성 완료 시 자동 탭 전환 X — 녹색 완료 카드에서 "기획서 탭에서 보기"로 이동. */}
           <TabsContent value="notes">
-            <MeetingNotePanel onSynthesisComplete={() => setTopTab('meetings')} />
+            <MeetingNotePanel
+              onViewComposite={(projectId) => {
+                openCompositeProject(projectId);
+                setTopTab('meetings');
+              }}
+            />
           </TabsContent>
 
           {/* ② 기획서 탭 — 기존 단일회의 진행 흐름 100% 보존 (회귀 0) */}
@@ -443,8 +450,7 @@ export default function Home() {
         )}
 
           {/* 합성 결과(composite Project) 진입점 — ① 회의록 탭에서 합성한 기획서 세트.
-              ② 기획서 회귀 0: currentMeeting을 건드리지 않는 읽기 전용 카드.
-              클릭 동작은 TODO(PrdViewer가 currentMeeting 기반이라 composite Project 연결하려면 리팩터 필요 — 도현 판단). */}
+              C안: 클릭 시 openCompositeProject가 currentMeeting에 composite Project를 평탄화 주입(PrdViewer 회귀 0). */}
           {projects.filter(p => p.mode === 'composite').length > 0 && (
             <div className="mt-8 pt-6 border-t border-slate-200 dark:border-slate-700">
               <div className="flex items-center gap-2 mb-3">
@@ -455,7 +461,7 @@ export default function Home() {
               </div>
               <div className="space-y-2">
                 {projects.filter(p => p.mode === 'composite').map((p) => (
-                  <Card key={p.id} className="border-slate-200 dark:border-slate-700">
+                  <Card key={p.id} className="border-slate-200 dark:border-slate-700 hover:shadow-md transition-shadow">
                     <CardContent className="p-3 flex items-center justify-between gap-2">
                       <div className="flex-1 min-w-0">
                         <div className="font-medium truncate text-sm">{p.title}</div>
@@ -470,11 +476,12 @@ export default function Home() {
                       <Button
                         variant="outline"
                         size="sm"
-                        disabled
-                        title="composite Project 뷰는 추후 제공 예정"
-                        className="flex-shrink-0 text-xs"
+                        onClick={() => openCompositeProject(p.id)}
+                        className="flex-shrink-0 text-xs gap-1.5"
+                        aria-label={`${p.title} 기획서 보기`}
                       >
-                        보기 (추가 예정)
+                        <Layers className="w-3.5 h-3.5" aria-hidden="true" />
+                        보기
                       </Button>
                     </CardContent>
                   </Card>

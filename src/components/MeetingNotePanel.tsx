@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import {
   Mic, Plus, Trash2, Clock, Users, FileText, ArrowLeft, Sparkles,
   CheckCircle2, Loader2, AlertCircle,
@@ -44,11 +44,13 @@ type ViewState = 'list' | 'new' | 'detail';
 type SynthState = 'idle' | 'synthesizing' | 'done' | 'error';
 
 interface MeetingNotePanelProps {
-  // 합성 완료 시 호출 → 부모(page.tsx 최상위 2탭)가 ② 기획서 탭으로 전환.
-  onSynthesisComplete?: () => void;
+  // 합성 완료 후 "기획서 탭에서 보기" 클릭 시 호출.
+  // 부모(page.tsx)가 ② 기획서 탭으로 전환 + openCompositeProject(방금 만든 composite) 호출.
+  // B안: 합성 완료 시 자동 탭 전환 X — 사용자가 녹색 완료 카드에서 명시적으로 이동.
+  onViewComposite?: (projectId: string) => void;
 }
 
-export function MeetingNotePanel({ onSynthesisComplete }: MeetingNotePanelProps) {
+export function MeetingNotePanel({ onViewComposite }: MeetingNotePanelProps) {
   const meetingNotes = useMeetingStore((s) => s.meetingNotes);
   const createMeetingNote = useMeetingStore((s) => s.createMeetingNote);
   const deleteMeetingNote = useMeetingStore((s) => s.deleteMeetingNote);
@@ -67,6 +69,19 @@ export function MeetingNotePanel({ onSynthesisComplete }: MeetingNotePanelProps)
   const [projectTitle, setProjectTitle] = useState('');
   const [synthState, setSynthState] = useState<SynthState>('idle');
   const [synthError, setSynthError] = useState('');
+  // 방금 합성 완료된 composite projectId — 녹색 완료 카드(B안) 표시용. 완료 카드 dismiss 시 null.
+  const [lastSynthProjectId, setLastSynthProjectId] = useState<string | null>(null);
+
+  // 서연 P0 2-4: 회의록 삭제 시 selectedIds에 죽은 id가 남는 함정 방어.
+  // deleteMeetingNote 후 meetingNotes가 갱신되면 selectedIds를 살아있는 id만으로 필터.
+  useEffect(() => {
+    if (selectedIds.length === 0) return;
+    const liveIds = new Set(meetingNotes.map((n) => n.id));
+    const pruned = selectedIds.filter((id) => liveIds.has(id));
+    if (pruned.length !== selectedIds.length) {
+      setSelectedIds(pruned);
+    }
+  }, [meetingNotes, selectedIds]);
 
   const sortedNotes = useMemo(
     () => [...meetingNotes].sort(
@@ -194,10 +209,10 @@ export function MeetingNotePanel({ onSynthesisComplete }: MeetingNotePanelProps)
       });
       // 14종 문서 생성 시작(composite project). runGenerationLoop가 store(React 밖)에서 돈다.
       await startCompositeGeneration(id);
-      // 합성(생성) 시작 완료 → 부모에게 알려 ② 기획서 탭으로 전환.
-      // 사용자는 ② 탭에서 생성 진행을 보게 된다(진입점은 ② 탭 composite 영역 — 도현 설계).
+      // B안: 합성(생성) 착수 완료 → 자동 탭 전환 X. 녹색 완료 카드로 결과 알림.
+      // 사용자가 "기획서 탭에서 보기" 클릭 시 부모가 ② 탭으로 이동 + openCompositeProject 호출.
+      setLastSynthProjectId(id);
       resetSelection();
-      onSynthesisComplete?.();
     } catch (e) {
       console.error('[MeetingNotePanel] 합성 예외:', e);
       setSynthState('error');
@@ -212,7 +227,11 @@ export function MeetingNotePanel({ onSynthesisComplete }: MeetingNotePanelProps)
     setSynthError('');
   };
 
-  const canSynth = selectedIds.length >= 1 && synthState !== 'synthesizing';
+  // 도현 결정: ① 회의록 탭 합성은 최소 2개 선택. 1개는 "② 기획서 탭에서 단일 회의로" 안내.
+  // 단일 회의록→PRD는 ② 탭 흐름과 동일 산출(기능 중복 혼란). 서연 권고 채택.
+  // 오너가 1개 허용 고집하면 아래 상수 2→1로 1줄 복귀.
+  const MIN_SYNTH_SELECTION = 2;
+  const canSynth = selectedIds.length >= MIN_SYNTH_SELECTION && synthState !== 'synthesizing';
 
   // === 새 회의록 입력 뷰 ===
   if (view === 'new') {
@@ -315,13 +334,52 @@ export function MeetingNotePanel({ onSynthesisComplete }: MeetingNotePanelProps)
         </Card>
       ) : (
         <>
-          {/* 다중 선택 합성 바 — 1개 이상 선택 시 sticky 노출 */}
-          {selectedIds.length > 0 && synthState !== 'synthesizing' && (
-            <div className="sticky top-0 z-10 bg-background/95 backdrop-blur border rounded-lg p-3 space-y-3 shadow-sm">
-              <div className="flex items-center justify-between gap-2 flex-wrap">
+          {/* B안: 합성 완료 녹색 카드 — 자동 탭 전환 대신 명시적 이동 유도.
+              합성 직후 lastSynthProjectId 세팅. "기획서 탭에서 보기" 클릭 시 부모가 이동. */}
+          {lastSynthProjectId && synthState !== 'synthesizing' && (
+            <Alert className="border-green-200 bg-green-50 dark:bg-green-950/20 dark:border-green-900">
+              <CheckCircle2 className="w-4 h-4 text-green-600 dark:text-green-400" aria-hidden="true" />
+              <AlertDescription className="flex items-center justify-between gap-2 flex-wrap">
                 <div className="text-sm">
-                  <span className="font-medium">{selectedIds.length}개 선택됨</span>
-                  <span className="text-slate-500 ml-2">예상 입력 약 {estimatedTokens.toLocaleString()}자</span>
+                  <span className="font-medium text-green-800 dark:text-green-300">합성을 시작했어요.</span>
+                  <span className="text-green-700 dark:text-green-400 ml-1">14종 기획서가 백그라운드에서 생성 중입니다.</span>
+                </div>
+                <div className="flex gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="border-green-300 text-green-700 hover:bg-green-100 dark:text-green-300 dark:border-green-800 dark:hover:bg-green-950"
+                    onClick={() => {
+                      const id = lastSynthProjectId;
+                      setLastSynthProjectId(null);
+                      onViewComposite?.(id);
+                    }}
+                  >
+                    기획서 탭에서 보기
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="text-green-700 hover:bg-green-100 dark:text-green-300 dark:hover:bg-green-950"
+                    onClick={() => setLastSynthProjectId(null)}
+                  >
+                    닫기
+                  </Button>
+                </div>
+              </AlertDescription>
+            </Alert>
+          )}
+
+          {/* 다중 선택 합성 바 — 1개 이상 선택 시 sticky 노출.
+              서연 P0 2-1: "기획서 만들기 모드" 명시 — 카드 클릭(상세) vs 체크(합성 선택) 헷갈림 방지.
+              선택 강조 톤(border-blue-500/bg-blue-50)은 NoteAccumulator 기존 패턴 이식(신규 톤 X). */}
+          {selectedIds.length > 0 && synthState !== 'synthesizing' && (
+            <div className="sticky top-0 z-10 bg-background/95 backdrop-blur border border-blue-200 dark:border-blue-900 rounded-lg p-3 space-y-3 shadow-sm">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div className="text-sm flex items-center gap-2">
+                  <Sparkles className="w-3.5 h-3.5 text-blue-500" aria-hidden="true" />
+                  <span className="font-medium">기획서 만들기 모드</span>
+                  <span className="text-slate-500">· {selectedIds.length}개 선택 · 약 {estimatedTokens.toLocaleString()}자</span>
                 </div>
                 <div className="flex gap-2">
                   <Button variant="ghost" size="sm" onClick={resetSelection}>선택 해제</Button>
@@ -336,6 +394,12 @@ export function MeetingNotePanel({ onSynthesisComplete }: MeetingNotePanelProps)
                   </Button>
                 </div>
               </div>
+              {/* 단일 선택 안내 — 도현 결정(최소 2개). 1개일 때 버튼은 이미 비활성. */}
+              {selectedIds.length < MIN_SYNTH_SELECTION && (
+                <p className="text-xs text-amber-600 dark:text-amber-400">
+                  합성은 2개 이상 선택해야 해요. 단일 회의록은 ② 기획서 탭에서 바로 진행할 수 있어요.
+                </p>
+              )}
               <Input
                 type="text"
                 placeholder="합성 프로젝트 제목 (선택)"
@@ -374,7 +438,7 @@ export function MeetingNotePanel({ onSynthesisComplete }: MeetingNotePanelProps)
                         />
                         <div className="flex-1 min-w-0">
                           <h4 className="font-medium truncate">{note.title || '제목 없음'}</h4>
-                          <div className="flex items-center gap-3 mt-1 text-sm text-slate-500 flex-wrap">
+                          <div className="flex items-center gap-3 mt-1 text-xs text-slate-500 flex-wrap">
                             <span className="flex items-center gap-1">
                               <Clock className="w-3 h-3" aria-hidden="true" />
                               <DateFormat date={note.createdAt} format="date" />
@@ -392,8 +456,9 @@ export function MeetingNotePanel({ onSynthesisComplete }: MeetingNotePanelProps)
                               </Badge>
                             )}
                           </div>
+                          {/* 서연 P0 2-2: 요약은 한 단계 진하게(font-medium text-slate-700), 메타는 보조화 위에 이미 적용(text-xs). */}
                           {note.summary?.overview && (
-                            <p className="text-sm text-slate-600 dark:text-slate-400 mt-2 line-clamp-2">
+                            <p className="text-sm font-medium text-slate-700 dark:text-slate-300 mt-2 line-clamp-2">
                               {note.summary.overview}
                             </p>
                           )}

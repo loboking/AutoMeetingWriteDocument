@@ -588,6 +588,11 @@ interface MeetingStore {
   startGeneration: () => Promise<void>;
   // 합성 모드 전체 생성: 여러 회의 요약을 합성한 Project에서 14종 생성.
   startCompositeGeneration: (projectId: string) => Promise<void>;
+  // C안 어댑터 — composite Project를 Meeting 형태로 평탄화해 currentMeeting에 주입.
+  // PrdViewer가 100% currentMeeting 기반이기 때문에(회귀 0 불변식), composite 결과를
+  // 보여주려면 Meeting으로 평탄화해서 currentMeeting을 채운다. 도현 결정(C안).
+  // 단일회의(single) 경로는 기존 자동 래핑(getProject) 유지 — 이 액션은 composite 전용.
+  openCompositeProject: (projectId: string) => void;
   // 회의록 합성 API 호출(/api/synthesize-notes). composite Project의 masterSummary 채움.
   // sourceNoteIds 선택: project가 아직 없을 때(좀비 방지 — 합성 성공 후 createProject) 직접 전달.
   synthesizeNotes: (projectId: string, sourceNoteIds?: string[]) => Promise<MeetingSummary | null>;
@@ -1236,6 +1241,48 @@ export const useMeetingStore = create<MeetingStore>()(
           },
         });
         await runGenerationWithLock(set, get, projectId);
+      },
+
+      // C안 어댑터 — composite Project를 currentMeeting(Meeting flat)으로 평탄화 주입.
+      // PrdViewer는 currentMeeting flat 필드만 읽는다(getProject 기반이 아님 — 회귀 0 불변식).
+      // composite Project.documents(kebab 키) → Meeting flat 카멜 필드(docTypeToField 역변환 재사용).
+      // transcript는 sourceNoteIds 회의록 transcript 이어붙임(빈 문자열 최소 — YAGNI, PrdViewer가 직접 표시 안 함).
+      // currentStep='done'으로 설정 — PrdViewer가 ② 탭 done 단계에서 렌더되도록.
+      // 의미 애매하지만 단일/합성 경로를 ② 회귀 0으로 통합하는 최소 경로(도현 결정).
+      openCompositeProject: (projectId) => {
+        const project = get().projects.find((p) => p.id === projectId && p.mode === 'composite');
+        if (!project) return;
+
+        // Project.documents(kebab) → Meeting flat 카멜. docTypeToField로 역변환 매핑 재사용.
+        const flatDocs: Partial<Record<string, string>> = {};
+        for (const [docType, content] of Object.entries(project.documents)) {
+          if (typeof content === 'string' && content) {
+            flatDocs[docTypeToField(docType)] = content;
+          }
+        }
+
+        // transcript: sourceNoteIds 회의록 transcript 이어붙임(빈 값이면 빈 문자열).
+        const transcript = project.sourceNoteIds
+          .map((nid) => get().meetingNotes.find((n) => n.id === nid)?.transcript ?? '')
+          .filter((t) => t.trim())
+          .join('\n\n---\n\n');
+
+        const now = new Date();
+        const meeting: Meeting = {
+          id: project.id,
+          title: project.title,
+          createdAt: project.createdAt,
+          updatedAt: project.updatedAt ?? now,
+          transcript: transcript || undefined,
+          summary: project.masterSummary,
+          step: 'done',
+          completedDocs: project.completedDocs,
+          isCompleted: project.completedDocs.length > 0,
+          docVersions: project.docVersions,
+          ...flatDocs,
+        };
+
+        set({ currentMeeting: meeting, currentStep: 'done' });
       },
 
       // 회의록 합성: /api/synthesize-notes 호출 → composite Project의 masterSummary 채움.
