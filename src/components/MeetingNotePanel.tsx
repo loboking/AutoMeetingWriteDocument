@@ -227,10 +227,9 @@ export function MeetingNotePanel({ onViewComposite }: MeetingNotePanelProps) {
     setSynthError('');
   };
 
-  // 도현 결정: ① 회의록 탭 합성은 최소 2개 선택. 1개는 "② 기획서 탭에서 단일 회의로" 안내.
-  // 단일 회의록→PRD는 ② 탭 흐름과 동일 산출(기능 중복 혼란). 서연 권고 채택.
-  // 오너가 1개 허용 고집하면 아래 상수 2→1로 1줄 복귀.
-  const MIN_SYNTH_SELECTION = 2;
+  // 오너 결정: 단일 회의록(1개) 합성 허용. 이전 도현 결정(최소 2개) 번복 —
+  // 오너가 1개도 ① 회의록 탭에서 합성 허용을 원함(② 기획서 탭과 기능 중복 수용).
+  const MIN_SYNTH_SELECTION = 1;
   const canSynth = selectedIds.length >= MIN_SYNTH_SELECTION && synthState !== 'synthesizing';
 
   // === 새 회의록 입력 뷰 ===
@@ -394,12 +393,6 @@ export function MeetingNotePanel({ onViewComposite }: MeetingNotePanelProps) {
                   </Button>
                 </div>
               </div>
-              {/* 단일 선택 안내 — 도현 결정(최소 2개). 1개일 때 버튼은 이미 비활성. */}
-              {selectedIds.length < MIN_SYNTH_SELECTION && (
-                <p className="text-xs text-amber-600 dark:text-amber-400">
-                  합성은 2개 이상 선택해야 해요. 단일 회의록은 ② 기획서 탭에서 바로 진행할 수 있어요.
-                </p>
-              )}
               <Input
                 type="text"
                 placeholder="합성 프로젝트 제목 (선택)"
