@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // 디버그 산물(준/도현 일시 프로브 — ESLint/tsc 잡지 않게)
+    "tmp/**",
   ]),
 ]);
 

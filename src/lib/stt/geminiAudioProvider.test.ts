@@ -88,7 +88,7 @@ function mockFetchFileApiFlow(opts: {
             name: 'files/test-file-1',
             uri: 'https://generativelanguage.googleapis.com/v1beta/files/test-file-1',
             mimeType: 'audio/mpeg',
-            state: 'FILE_STATE_PROCESSING',
+            state: 'PROCESSING',
             displayName: 'stt-audio',
           },
         }),
@@ -262,7 +262,7 @@ describe('GeminiAudioProvider', () => {
       // 16MB 버퍼 — inlineData 한계(15MB) 초과 → File API 분기.
       const big = Buffer.alloc(16 * 1024 * 1024, 0);
       const { mock, calls } = mockFetchFileApiFlow({
-        pollState: 'FILE_STATE_ACTIVE',
+        pollState: 'ACTIVE',
         generateText: '화자 1: 큰 파일 테스트',
       });
       vi.stubGlobal('fetch', mock);
@@ -315,7 +315,7 @@ describe('GeminiAudioProvider', () => {
     it('File API 폴링이 FAILED 상태면 에러를 throw한다', async () => {
       const big = Buffer.alloc(16 * 1024 * 1024, 0);
       const { mock } = mockFetchFileApiFlow({
-        pollState: 'FILE_STATE_FAILED',
+        pollState: 'FAILED',
       });
       vi.stubGlobal('fetch', mock);
 
