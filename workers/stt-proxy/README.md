@@ -1,5 +1,11 @@
 # stt-proxy (Cloudflare Workers)
 
+> **⚠️ 보류(2026-07-17)** — Firebase Cloud Functions(us-central1) 전환으로 인해 폐기 후보.
+> colo 강제 불가(3차 시도 전부 HKG 유지 → Gemini 400 geo-block)로 실사용 불가 판정.
+> 신규 코드는 `/functions` 디렉토리의 Firebase Function(`sttProxy`)을 사용한다.
+> 클라이언트 분기도 `NEXT_PUBLIC_WORKERS_STT_URL` → `NEXT_PUBLIC_STT_FUNCTION_URL`로 이관.
+> **삭제는 Firebase 검증(35MB 회귀 + geo-block 해제 probe) 완료 후 결정.**
+
 Gemini 오디오 STT 프록시. Vercel 함수 300s 한계를 우회해 59분 회의록 처리(301s+).
 
 ## 목적

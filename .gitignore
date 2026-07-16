@@ -24,3 +24,11 @@ tmp/
 workers/*/node_modules/
 workers/*/wrangler.toml.bak
 .dev.vars
+
+# Firebase Functions — 별도 npm 설치. 메인 프로젝트와 분리.
+functions/node_modules/
+functions/lib/
+.firebase/
+firebase-debug.log
+firebase-debug.*.log
+*.local

@@ -1,0 +1,24 @@
+{
+  "name": "stt-functions",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Firebase Cloud Functions — Gemini STT proxy. us-central1 고정(geo-block 회피). Vercel 300s 한계 우회.",
+  "main": "lib/index.js",
+  "scripts": {
+    "build": "tsc",
+    "serve": "firebase emulators:start --only functions",
+    "deploy": "firebase deploy --only functions",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": "20"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.106.2",
+    "firebase-functions": "^5.1.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.39",
+    "typescript": "^5"
+  }
+}

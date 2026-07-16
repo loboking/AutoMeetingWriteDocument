@@ -16,6 +16,8 @@ const eslintConfig = defineConfig([
     "tmp/**",
     // Cloudflare Workers — 별도 tsconfig/package.json 사용. Next 프로젝트에서 분리.
     "workers/**",
+    // Firebase Functions — 별도 tsconfig/package.json 사용. Next 프로젝트에서 분리.
+    "functions/**",
   ]),
 ]);
 
