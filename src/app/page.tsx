@@ -85,6 +85,21 @@ export default function Home() {
   const [uploadError, setUploadError] = useState('');
 
   const [showNewMeetingConfirm, setShowNewMeetingConfirm] = useState(false);
+  // composite Project 진입 완화 다이얼로그 — ② 진행 중(currentMeeting 미완료) 단일회의 작업이 있을 때,
+  // openCompositeProject가 currentMeeting을 덮어쓰기 전에 사용자 확인.
+  // 돌이킬 수 없는 건 아님: persist partialize로 저장된 데이터는 유지(화면만 전환).
+  const [pendingCompositeId, setPendingCompositeId] = useState<string | null>(null);
+  // composite Project 보기 진입 래퍼 — currentMeeting이 진행 중(미완료)이면 다이얼로그로 확인,
+  // 아니면(null/완료) 바로 openCompositeProject + ② 기획서 탭으로.
+  const handleViewComposite = (projectId: string) => {
+    const inProgress = !!currentMeeting && currentStep !== 'done';
+    if (inProgress) {
+      setPendingCompositeId(projectId);
+      return;
+    }
+    openCompositeProject(projectId);
+    setTopTab('meetings');
+  };
   const handleFileUpload = async (file: File) => {
     setUploadError('');
     setUploading(true);
@@ -247,10 +262,7 @@ export default function Home() {
               B안: 합성 완료 시 자동 탭 전환 X — 녹색 완료 카드에서 "기획서 탭에서 보기"로 이동. */}
           <TabsContent value="notes">
             <MeetingNotePanel
-              onViewComposite={(projectId) => {
-                openCompositeProject(projectId);
-                setTopTab('meetings');
-              }}
+              onViewComposite={(projectId) => handleViewComposite(projectId)}
             />
           </TabsContent>
 
@@ -476,7 +488,7 @@ export default function Home() {
                       <Button
                         variant="outline"
                         size="sm"
-                        onClick={() => openCompositeProject(p.id)}
+                        onClick={() => handleViewComposite(p.id)}
                         className="flex-shrink-0 text-xs gap-1.5"
                         aria-label={`${p.title} 기획서 보기`}
                       >
@@ -520,6 +532,41 @@ export default function Home() {
           </AlertDialogContent>
         </AlertDialog>
       )}
+
+      {/* composite Project 보기 진입 확인 다이얼로그 — ② 진행 중 단일회의 작업이 있을 때.
+          openCompositeProject가 currentMeeting을 덮어쓰므로 화면에서 사라지지만,
+          persist로 저장된 데이터는 유지됨(화면만 전환). */}
+      <AlertDialog
+        open={pendingCompositeId !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingCompositeId(null);
+        }}
+      >
+        <AlertDialogContent role="alertdialog" aria-describedby="composite-view-desc">
+          <AlertDialogHeader>
+            <AlertDialogTitle>진행 중인 회의 작업이 있어요</AlertDialogTitle>
+            <AlertDialogDescription id="composite-view-desc">
+              지금 <span className="font-semibold">진행 중</span>인 회의 작업이 있어요.
+              합성 결과를 보면 해당 작업 내용이 화면에서 사라집니다.
+              <span className="text-slate-500"> 저장된 데이터는 유지됩니다.</span> 계속할까요?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>취소</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (pendingCompositeId) {
+                  openCompositeProject(pendingCompositeId);
+                  setTopTab('meetings');
+                }
+                setPendingCompositeId(null);
+              }}
+            >
+              계속
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
