@@ -34,7 +34,6 @@ import SummaryViewer from '@/components/SummaryViewer';
 import PrdViewer from '@/components/PrdViewer';
 import DocAssistant from '@/components/DocAssistant';
 import { MeetingNotePanel } from '@/components/MeetingNotePanel';
-import { NoteAccumulator } from '@/components/NoteAccumulator';
 import { PageContainer } from '@/components/layout/PageContainer';
 import { DateFormat } from '@/components/DateFormat';
 
@@ -43,14 +42,18 @@ export default function Home() {
   const currentStep = useMeetingStore(s => s.currentStep);
   const syncFromServer = useMeetingStore(s => s.syncFromServer);
   const isSyncing = useMeetingStore(s => s.isSyncing);
+  // composite Project 진입점(② 기획서 탭 하단). 합성 결과 기획서 세트 목록.
+  // 회귀 0: currentMeeting을 건드리지 않는 읽기 전용 카드. 클릭 동작은 TODO(PrdViewer 연결).
+  // selector에서 filter(새 배열 반환)하지 않고 projects 통째로 받아 컴포넌트 본문에서 filter
+  // (zustand 기본 selector가 Object.is 비교 — 인라인 filter는 무한 리렌더 위험).
+  const projects = useMeetingStore(s => s.projects);
   const { createMeeting, updateCurrentMeeting, updateMeetingStep, setCurrentMeeting } = useMeetingStore();
   const [meetingTitle, setMeetingTitle] = useState('');
   const [mounted, setMounted] = useState(false);
   const [uploading, setUploading] = useState(false);
-  // 홈 최상위 3탭 — 기본 notes(① 회의록). 신규 사용자 첫인상에 상품 3가치(회의록/기획서/합성)가
-  // 다 드러나게(서연 UX 검증 권고, 오너 "①이 ②③에 종속되면 안 된다" 정합). 기존 단일회의
-  // 사용자는 ② 기획서 탭 클릭 1번으로 동일 흐름(회귀 0). 도현 결정(오너 판단 시 되돌림 가능).
-  const [topTab, setTopTab] = useState<'notes' | 'meetings' | 'composite'>('notes');
+  // 홈 최상위 2탭 — 기본 notes(① 회의록). 오너 확정: 합성 탭 제거, 2탭(① 회의록 / ② 기획서).
+  // 합성은 ① 회의록 안 흡수(MeetingNotePanel). 합성 완료 시 onSynthesisComplete → ② 기획서로.
+  const [topTab, setTopTab] = useState<'notes' | 'meetings'>('notes');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // 진행률 시뮬레이션 훅 사용
@@ -224,10 +227,10 @@ export default function Home() {
           </div>
         </header>
 
-        {/* 홈 최상위 3탭 — 도현 결정: 기본 meetings(② 기획서)로 회귀 우선.
-            ① 회의록(MeetingNotePanel) / ② 기획서(기존 단일회의 흐름 100% 보존) / ③ 합성(NoteAccumulator) */}
-        <Tabs value={topTab} onValueChange={(v) => setTopTab(v as 'notes' | 'meetings' | 'composite')} className="w-full">
-          <TabsList className="grid w-full grid-cols-3 h-auto p-1 mb-6">
+        {/* 홈 최상위 2탭 — 오너 확정(합성 탭 제거). 합성은 ① 회의록 안에서 자체 완결 후 ② 기획서로.
+            ① 회의록(MeetingNotePanel + 다중 선택 합성) / ② 기획서(기존 단일회의 흐름 100% 보존) */}
+        <Tabs value={topTab} onValueChange={(v) => setTopTab(v as 'notes' | 'meetings')} className="w-full">
+          <TabsList className="grid w-full grid-cols-2 h-auto p-1 mb-6">
             <TabsTrigger value="notes" className="gap-1.5">
               <Mic className="w-4 h-4" aria-hidden="true" />
               회의록
@@ -236,15 +239,12 @@ export default function Home() {
               <FileText className="w-4 h-4" aria-hidden="true" />
               기획서
             </TabsTrigger>
-            <TabsTrigger value="composite" className="gap-1.5">
-              <Layers className="w-4 h-4" aria-hidden="true" />
-              합성
-            </TabsTrigger>
           </TabsList>
 
-          {/* ① 회의록 탭 — MeetingNote(회의록) 전용 패널. Meeting(② 기획서 단일회의)과 별개 엔티티. */}
+          {/* ① 회의록 탭 — MeetingNote(회의록) 전용 패널. 다중 선택 합성 흡수.
+              합성 완료 시 onSynthesisComplete → ② 기획서 탭으로. */}
           <TabsContent value="notes">
-            <MeetingNotePanel onGoToSynthesize={() => setTopTab('composite')} />
+            <MeetingNotePanel onSynthesisComplete={() => setTopTab('meetings')} />
           </TabsContent>
 
           {/* ② 기획서 탭 — 기존 단일회의 진행 흐름 100% 보존 (회귀 0) */}
@@ -441,11 +441,47 @@ export default function Home() {
             </Tabs>
           </div>
         )}
-          </TabsContent>
 
-          {/* ③ 합성 탭 — 다중 회의록 합성(composite). NoteAccumulator가 자기완결. */}
-          <TabsContent value="composite">
-            <NoteAccumulator />
+          {/* 합성 결과(composite Project) 진입점 — ① 회의록 탭에서 합성한 기획서 세트.
+              ② 기획서 회귀 0: currentMeeting을 건드리지 않는 읽기 전용 카드.
+              클릭 동작은 TODO(PrdViewer가 currentMeeting 기반이라 composite Project 연결하려면 리팩터 필요 — 도현 판단). */}
+          {projects.filter(p => p.mode === 'composite').length > 0 && (
+            <div className="mt-8 pt-6 border-t border-slate-200 dark:border-slate-700">
+              <div className="flex items-center gap-2 mb-3">
+                <Layers className="w-4 h-4 text-blue-600 dark:text-blue-400" aria-hidden="true" />
+                <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-300">
+                  합성으로 만든 기획서 ({projects.filter(p => p.mode === 'composite').length})
+                </h3>
+              </div>
+              <div className="space-y-2">
+                {projects.filter(p => p.mode === 'composite').map((p) => (
+                  <Card key={p.id} className="border-slate-200 dark:border-slate-700">
+                    <CardContent className="p-3 flex items-center justify-between gap-2">
+                      <div className="flex-1 min-w-0">
+                        <div className="font-medium truncate text-sm">{p.title}</div>
+                        <div className="text-xs text-slate-500 mt-0.5 flex items-center gap-2 flex-wrap">
+                          <DateFormat date={p.createdAt} format="datetime" />
+                          <span>· {p.sourceNoteIds.length}개 회의록 통합</span>
+                          <Badge variant="secondary" className="text-[10px] py-0 px-1.5 h-4">
+                            {p.completedDocs.length}/14 문서
+                          </Badge>
+                        </div>
+                      </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled
+                        title="composite Project 뷰는 추후 제공 예정"
+                        className="flex-shrink-0 text-xs"
+                      >
+                        보기 (추가 예정)
+                      </Button>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            </div>
+          )}
           </TabsContent>
         </Tabs>
       </PageContainer>
