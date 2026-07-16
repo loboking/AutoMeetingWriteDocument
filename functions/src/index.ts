@@ -87,6 +87,14 @@ export const sttProxy = onRequest(
     timeoutSeconds: 540, // Blaze 플랜 한계. 301s 처리 OK.
     memory: '1GiB', // 35MB 오디오 처리용.
     // cors: true 대신 명시적 CORS 헤더로 PROD_ORIGINS 잠금(Workers 원본 패턴 보존).
+    // 2nd gen secrets binding — functions:secrets:set으로 저장한 값이 process.env로 주입되려면
+    // 명시적 binding 필수(binding 없으면 geminiKey:false/supabase:false probe로 나타남).
+    secrets: [
+      'GEMINI_API_KEY',
+      'SUPABASE_URL',
+      'SUPABASE_ANON_KEY',
+      'PROD_ORIGINS',
+    ],
   },
   async (req: Request, res: Response) => {
     setCorsHeaders(req, res);
