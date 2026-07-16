@@ -4,6 +4,7 @@ import "./globals.css";
 import GenerationGuard from "@/components/GenerationGuard";
 import AuthGate from "@/components/AuthGate";
 import InstallPrompt from "@/components/InstallPrompt";
+import RegisterSW from "@/components/RegisterSW";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -49,6 +50,7 @@ export default function RootLayout({
         <AuthGate>{children}</AuthGate>
         <GenerationGuard />
         <InstallPrompt />
+        <RegisterSW />
       </body>
     </html>
   );

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { Mic, Square, Pause, Play, FileUp, AlertCircle, FileText } from 'lucide-react';
+import { Mic, Square, Pause, Play, FileUp, AlertCircle, FileText, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
@@ -10,6 +10,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useRecorder } from '@/hooks/useRecorder';
 import { useBeforeUnload } from '@/hooks/useBeforeUnload';
 import { useWakeLock } from '@/hooks/useWakeLock';
+import { useRecordingBackgroundWarning } from '@/hooks/useRecordingBackgroundWarning';
 import { useProgressSimulation } from '@/hooks/useProgressSimulation';
 import { formatTime } from '@/lib/timeUtils';
 import { useMeetingStore } from '@/store/meetingStore';
@@ -59,6 +60,10 @@ function VoiceRecorder({ onResult }: VoiceRecorderProps = {}) {
   // 녹음·변환 중 화면 자동 꺼짐 방지(모바일 백그라운드 동결 완화). 단, 화면 자동 꺼짐만 막고
   // 사용자가 직접 잠그거나 다른 앱으로 전환하는 것은 브라우저 한계상 못 막는다(아래 경고 배너로 보완).
   useWakeLock(isUploadingOrRecording);
+
+  // 백그라운드 진입 감지 — 녹음 중(hidden) → 복귀(visible) 시 동적 경고 배너.
+  // 정적 안내 박스(아래 L225-235)와 역할 다름: 동적 배너는 "실제로 백그라운드 다녀온 경우"만.
+  const [bgWarning, dismissBgWarning] = useRecordingBackgroundWarning(isUploadingOrRecording);
 
   const handleStopRecording = async () => {
     stopRecording();
@@ -231,6 +236,25 @@ function VoiceRecorder({ onResult }: VoiceRecorderProps = {}) {
                 ? '변환이 끝날 때까지 화면을 켜 두세요. 화면을 끄거나 다른 앱으로 전환하면 변환이 중단될 수 있어요.'
                 : '녹음 중에는 화면을 끄거나 다른 앱으로 전환하지 마세요. 모바일에서는 녹음이 중단되거나 유실될 수 있어요.'}
             </span>
+          </div>
+        )}
+
+        {/* 동적 백그라운드 경고 — 실제로 백그라운드 다녀온 경우만 표시(포그라운드 복귀 시점).
+            위 정적 박스(항상 떠 있는 예방 안내)와 역할 다름. 수동 닫기(X) 또는 녹음 종료 시 자동 해제. */}
+        {bgWarning && (
+          <div className="flex items-start gap-2 rounded-lg border border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/20 p-3 text-sm text-amber-800 dark:text-amber-300" role="alert" aria-live="assertive">
+            <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" aria-hidden="true" />
+            <span className="flex-1">
+              지금 녹음 중 — 백그라운드로 나가 있었습니다. 녹음이 끊겼을 수 있어요. 바로 이 앱에 머물러 주세요.
+            </span>
+            <button
+              type="button"
+              onClick={dismissBgWarning}
+              className="flex-shrink-0 text-amber-700 dark:text-amber-400 hover:text-amber-900 dark:hover:text-amber-200"
+              aria-label="경고 닫기"
+            >
+              <X className="w-4 h-4" aria-hidden="true" />
+            </button>
           </div>
         )}
 
