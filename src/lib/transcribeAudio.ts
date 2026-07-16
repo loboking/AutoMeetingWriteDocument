@@ -51,10 +51,17 @@ async function callTranscribe(body: { signedUrl: string; language: string } | Fo
 
   // JSON(signedUrl) — Function URL 있으면 Function 우선, 장애 시 Vercel 폴백.
   if (STT_FUNCTION_URL) {
+    const fnStart = Date.now();
+    console.log('[callTranscribe] Function 호출', { url: STT_FUNCTION_URL, body });
     const fnRes = await authedFetch(STT_FUNCTION_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+    });
+    console.log('[callTranscribe] Function 응답', {
+      status: fnRes.status,
+      elapsedMs: Date.now() - fnStart,
+      ok: fnRes.ok,
     });
     if (!isFunctionFallbackStatus(fnRes.status)) {
       return fnRes;
@@ -83,6 +90,14 @@ export async function transcribeAudio(
   const storage = getRecordingStorage();
   let ref: string | null = null;
 
+  // [DEBUG 35MB STT] 원인 확정용 — 어디로 가는지(Storage/Function/Vercel). 오너 콘솔 확인 후 제거.
+  console.log('[transcribeAudio] STT 시작', {
+    blobSize: blob.size,
+    blobType: blob.type,
+    sttFunctionUrl: STT_FUNCTION_URL ?? '(미설정 → Vercel 폴백)',
+    maxDirectPostBytes: MAX_DIRECT_POST_BYTES,
+  });
+
   try {
     // 1) 저장소 업로드 → 서명 URL (Vercel 4.5MB 우회). 실패하면 multipart 직접 POST로 폴백.
     let response: Response;
@@ -92,6 +107,12 @@ export async function transcribeAudio(
       ref = uploaded.ref;
       const signedUrl = await storage.getReadableUrl(ref, SIGNED_URL_TTL_SEC);
       deps.onPhase?.('transcribing');
+      // [DEBUG] signedUrl 경로 — Function 분기 타는지.
+      console.log('[transcribeAudio] Storage 업로드 성공 → signedUrl 경로', {
+        ref,
+        signedUrlPrefix: signedUrl.slice(0, 60) + '...',
+        willCallFunction: !!STT_FUNCTION_URL,
+      });
       response = await callTranscribe({ signedUrl, language });
     } catch (uploadErr) {
       // 저장소 미설정/업로드 실패 → 작은 파일은 직접 POST로 폴백(안전망)
