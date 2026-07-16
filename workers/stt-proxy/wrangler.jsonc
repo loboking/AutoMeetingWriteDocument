@@ -1,0 +1,26 @@
+{
+  // Cloudflare Workers — Gemini STT 프록시.
+  // 목적: Vercel 300s 함수 한계를 우회해 59분 회의록 Gemini generateContent(301s+) 처리.
+  // 배포: `npx wrangler deploy` (Workers Free 플랜). subrequest 50회/요청 제약 — 폴링 3s×15=45s 캡.
+  //
+  // 비밀(secret)은 wrangler.jsonc에 평문 금지 — `wrangler secret put` 으로 주입:
+  //   wrangler secret put GEMINI_API_KEY
+  //   wrangler secret put SUPABASE_URL
+  //   wrangler secret put SUPABASE_ANON_KEY
+  //
+  // SUPABASE_URL/SUPABASE_ANON_KEY는 사실 비밀이 아님(클라이언트에도 노출되는 값).
+  // 하지만 Workers 설정 표준을 따라 secret으로 통일. var로 바꿔도 무방.
+  "name": "stt-proxy",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-01-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true
+  }
+  // secrets (wrangler secret put):
+  //   GEMINI_API_KEY       — Gemini 오디오 STT API 키
+  //   SUPABASE_URL         — Supabase 프로젝트 URL (NEXT_PUBLIC_SUPABASE_URL과 동일)
+  //   SUPABASE_ANON_KEY    — Supabase anon key (NEXT_PUBLIC_SUPABASE_ANON_KEY와 동일)
+  //
+  // 클라이언트는 Authorization: Bearer <Supabase JWT> 전달 → Workers가 getUser(token) 검증.
+}

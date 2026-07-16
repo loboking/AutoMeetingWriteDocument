@@ -19,3 +19,8 @@ next-env.d.ts
 
 # 검증 산물(도현/준 일시 프로브 — 커밋 대상 아님)
 tmp/
+
+# Cloudflare Workers — 별도 npm 설치. 메인 프로젝트와 분리.
+workers/*/node_modules/
+workers/*/wrangler.toml.bak
+.dev.vars

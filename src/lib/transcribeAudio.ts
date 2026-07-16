@@ -28,11 +28,42 @@ function pickFromResponse(data: { text?: string; segments?: TranscriptSegment[];
   return { text: data.text || '', segments: data.segments, duration: data.duration };
 }
 
-// /api/transcribe 호출(JSON signedUrl 또는 multipart). 응답 객체를 그대로 반환.
+// Workers STT URL(환경변수). 설정 시 클라가 Workers로 직접 호출 — Vercel 300s 한계 회피.
+// 미설정 시 기존 /api/transcribe (Vercel) 경로 유지(폴백).
+const WORKERS_STT_URL = process.env.NEXT_PUBLIC_WORKERS_STT_URL;
+
+// Workers 장애(502/504/네트워크) 시 자동으로 Vercel /api/transcribe 로 폴백.
+// 회귀 0 — WORKERS_STT_URL 미설정 시 100% 기존 동작. 설정 시에도 폴백 안전망 유지.
+function isWorkersFallbackStatus(status: number): boolean {
+  return status === 502 || status === 503 || status === 504;
+}
+
+// /api/transcribe 또는 Workers 호출(JSON signedUrl 또는 multipart). 응답 객체를 그대로 반환.
+// 분기: WORKERS_STT_URL 설정 + JSON(signedUrl) → Workers. 그 외 → 기존 Vercel /api/transcribe.
+//       Workers 502/503/504 → 자동 Vercel 폴백(재시도 1회).
 async function callTranscribe(body: { signedUrl: string; language: string } | FormData): Promise<Response> {
+  // multipart(FormData)는 작은 파일 직접 업로드 경로 — Workers는 signedUrl만 받으므로
+  // 이 경로는 항상 Vercel. WORKERS_STT_URL 설정 여부와 무관.
   if (body instanceof FormData) {
     return authedFetch('/api/transcribe', { method: 'POST', body });
   }
+
+  // JSON(signedUrl) — Workers URL 있으면 Workers 우선, 장애 시 Vercel 폴백.
+  if (WORKERS_STT_URL) {
+    const workersRes = await authedFetch(WORKERS_STT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!isWorkersFallbackStatus(workersRes.status)) {
+      return workersRes;
+    }
+    // Workers 502/503/504 → Vercel 폴백 (TODO: 중복 Gemini 호출 비용/과금 영향 P1 검토)
+    console.warn(
+      `[transcribeAudio] Workers ${workersRes.status}, Vercel /api/transcribe 로 폴백`
+    );
+  }
+
   return authedFetch('/api/transcribe', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

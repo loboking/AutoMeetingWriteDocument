@@ -1,0 +1,20 @@
+{
+  "name": "stt-proxy",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Cloudflare Workers — Gemini STT proxy. 301s+ generateContent 회피 (Vercel 300s 한계 우회).",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.106.2"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250101.0",
+    "typescript": "^5",
+    "wrangler": "^3.90.0"
+  }
+}
