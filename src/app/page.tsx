@@ -25,7 +25,7 @@ import { useBeforeUnload } from '@/hooks/useBeforeUnload';
 import { useProgressSimulation } from '@/hooks/useProgressSimulation';
 import { useMeetingStore } from '@/store/meetingStore';
 import { MeetingStep } from '@/types';
-import { FILE_ACCEPT_TYPES } from '@/lib/inputRouter';
+import { FILE_ACCEPT_TYPES, SHOW_FILE_LIMIT_HINT, MAX_FILE_SIZE_BYTES, MAX_DURATION_HOURS } from '@/lib/inputRouter';
 import { useBrowserSTT } from '@/hooks/useBrowserSTT';
 import { ingestFile } from '@/lib/ingestFile';
 import MeetingRecorder from '@/components/MeetingRecorder';
@@ -390,6 +390,11 @@ export default function Home() {
                   <p className="text-xs text-center text-slate-500 dark:text-slate-400">
                     지원: 음성(MP3·WAV·M4A·WebM·OGG·FLAC·AAC), 문서(TXT·MD·PDF·DOCX·XLSX)
                   </p>
+                  {SHOW_FILE_LIMIT_HINT && (
+                    <p className="text-xs text-center text-slate-500 dark:text-slate-400">
+                      최대 {MAX_FILE_SIZE_BYTES / 1024 / 1024 / 1024}GB / {MAX_DURATION_HOURS}시간 (음성)
+                    </p>
+                  )}
 
                   {uploading && (
                     <div className="space-y-2">
