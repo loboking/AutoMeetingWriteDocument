@@ -40,7 +40,7 @@ function speakerCount(segments?: TranscriptSegment[]): number {
 type ViewState = 'list' | 'new' | 'detail';
 
 interface MeetingNotePanelProps {
-  // "합성 탭에서 결합" 버튼 → 부모(ProjectList)가 ③ composite 탭으로 전환.
+  // "합성 탭에서 결합" 버튼 → 부모(page.tsx 최상위 3탭)가 ③ composite 탭으로 전환.
   onGoToSynthesize?: () => void;
 }
 
