@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { Meeting, MeetingNote, MeetingStep, DocType, DocStatus, DocVersion, DocVersionSource, Project, ProjectMode, MeetingSummary } from '@/types';
-import { DOCUMENTS, DEPENDENCIES, docTypeToField, getAllDependents, topoSortLevels, levelsFor, topoSortDocs } from '@/lib/documentUtils';
+import { DOCUMENTS, DEPENDENCIES, docTypeToField, getAllDependents, topoSortLevels, levelsFor, topoSortDocs, CORE_DOCS, orderCoreFirst } from '@/lib/documentUtils';
 import { authedFetch } from '@/lib/authFetch';
 import { mapWithConcurrency } from '@/lib/concurrency';
 import { deleteMeetingRow, fetchMeetings, mergeServer } from '@/lib/meetingsSync';
@@ -67,6 +67,9 @@ export interface GenerationProgress {
   failedDocs: DocType[]; // 재시도 후에도 실패한 문서 (UI에 명시 → 사용자가 재생성 가능)
   failedReasons?: Partial<Record<DocType, GenErrorReason>>; // 문서별 실패사유 (런타임, persist 제외)
   status: 'generating' | 'completed' | 'error' | 'cancelled';
+  // composite 모드에서만 세팅: 핵심 3개(prd/feature-list/wbs) 완료 시점 신호.
+  // 런타임-only(persist 제외). single 모드에는 사용되지 않는다.
+  coreComplete?: boolean;
 }
 
 // 진행 중 잡 체크포인트 (persist에 저장 → 새로고침/재방문 시 "남은 문서부터" 재개).
@@ -407,9 +410,12 @@ async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
     } else {
       failed++;
       console.error(`${docType} 생성 최종 실패 (계속 진행):`, lastErr);
-      // regen: 최종 실패 → regenerating 좀비를 outdated로 복원(갱신 미완 = 여전히 오래됨).
+      // regen: 최종 실패 → regenerating 좀비 복원.
+      // - 본문이 있던 문서: outdated(갱신 미완 = 여전히 오래됨).
+      // - pending(본문 없음)이었던 문서: pending으로 복원(본문이 없으니 "오래됨"은 거짓).
       if (isRegen && !get().isDocFrozen(projectId, docType)) {
-        get().setDocStatus(projectId, docType, 'outdated');
+        const wasPending = !((project?.documents?.[docType] as string | undefined)?.trim());
+        get().setDocStatus(projectId, docType, wasPending ? 'pending' : 'outdated');
       }
       // 실패사유: 서버 reason 우선, 없으면 클라 err 분류
       const err = lastErr as { serverReason?: GenErrorReason } | undefined;
@@ -449,9 +455,21 @@ async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
       } else {
         await mapWithConcurrency(pending, LEVEL_CONCURRENCY, (dt) => processDoc(dt));
       }
+
+      // composite 핵심 우선: 핵심 3개(prd/feature-list/wbs)가 모두 완료되면 루프 종료.
+      // 나머지 11개는 본문 없이 'pending'으로 남겨 사용자가 개별 생성(오너 결정 — composite만,
+      // single은 14종 종전대로). processDoc 본문은 무변경(레벨 루프 제어에만 분기 추가).
+      if (projectMode === 'composite' && CORE_DOCS.every((d) => doneSet.has(d))) {
+        break;
+      }
     }
 
-    const allDone = doneSet.size >= order.length;
+    // 완료 판정:
+    // - single: 14종 전부 완료(doneSet.size >= order.length) — 종전 불변.
+    // - composite: 핵심 3개 완료면 allDone(나머지는 pending으로 사용자 개별 생성에 위임).
+    const allDone = projectMode === 'composite'
+      ? CORE_DOCS.every((d) => doneSet.has(d))
+      : doneSet.size >= order.length;
     // 잡 최종 상태 결정:
     // - 취소: cancelled
     // - 전부 완료: completed
@@ -464,14 +482,35 @@ async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
         : failed > 0
           ? 'error'
           : 'completed';
+    // composite 핵심 완료 신호(런타임-only). 핵심 3개가 doneSet에 들어왔을 때.
+    // single은 coreComplete를 세팅하지 않는다(회귀 0).
+    const coreComplete =
+      projectMode === 'composite' && CORE_DOCS.every((d) => doneSet.has(d));
     set((st) => ({
       generationProgress: st.generationProgress
-        ? { ...st.generationProgress, currentDoc: '', status: jobStatus === 'cancelled' ? 'cancelled' : jobStatus === 'error' ? 'error' : 'completed' }
+        ? {
+            ...st.generationProgress,
+            currentDoc: '',
+            status: jobStatus === 'cancelled' ? 'cancelled' : jobStatus === 'error' ? 'error' : 'completed',
+            ...(projectMode === 'composite' ? { coreComplete } : {}),
+          }
         : null,
       activeJob: st.activeJob
         ? { ...st.activeJob, completedDocs: [...doneSet], status: jobStatus, updatedAt: Date.now() }
         : null,
     }));
+
+    // composite에서 핵심만 완료하고 끝난 경우, 나머지 문서의 docStatuses를 'pending'(본문 없음,
+    // 생성 칩)으로 세팅. single은 미접촉. 핵심이 완료되지 않은 채 끝난(취소/에러) 잡은 pending
+    // 세팅을 건너뛴다 — 사용자가 재개/재생성으로 이어가는 경로를 방해하지 않기 위해.
+    if (projectMode === 'composite' && coreComplete) {
+      const restDocs = order.filter((dt) => !CORE_DOCS.includes(dt) && !doneSet.has(dt));
+      for (const dt of restDocs) {
+        if (!get().isDocFrozen(projectId, dt)) {
+          get().setDocStatus(projectId, dt, 'pending');
+        }
+      }
+    }
   } finally {
     set({ isGenerating: false, generatingMeetingId: null });
     // 잡 정리 정책:
@@ -1222,7 +1261,9 @@ export const useMeetingStore = create<MeetingStore>()(
         const project = get().projects.find((p) => p.id === projectId);
         if (!project?.masterSummary) return; // 합성 안 됨 → 폐기
 
-        const order = topoSortDocs();
+        // 핵심 우선: 위상 레벨 내에서 CORE_DOCS(prd/feature-list/wbs)를 앞으로.
+        // single(startGeneration)은 미접촉 — topoSortDocs() 종전대로.
+        const order = orderCoreFirst(topoSortDocs());
         const preCompleted = order.filter((dt) => {
           const v = project.documents[dt];
           return typeof v === 'string' && v;
@@ -1337,14 +1378,25 @@ export const useMeetingStore = create<MeetingStore>()(
 
         const { isDocFrozen } = get();
         // 본문이 있고 frozen 아닌 targets만. 위상 평탄순서로 정렬(레벨 분해는 루프가 levelsFor로 수행).
+        // 단, 'pending'(composite에서 핵심 완료 후 본문 없이 남은 문서)은 본문이 없어도 생성 진입 허용.
+        // targets에 pending이 섞여 있으면 본문 존재 검사를 스킵한다(도현/도이 권고 a — 기존 함수 재사용).
+        const hasPendingTarget = targets.some((dt) => get().getDocStatus(projectId, dt) === 'pending');
         const valid = topoSortDocs().filter(
           (dt) =>
             targets.includes(dt) &&
             !isDocFrozen(projectId, dt) &&
-            (() => {
-              const v = project.documents[dt];
-              return typeof v === 'string' && v;
-            })()
+            (hasPendingTarget
+              ? (() => {
+                  // pending이 하나라도 포함된 배치: 본문이 있거나 pending인 것만 유효.
+                  // (본문도 없고 pending도 아닌 것은 잘못된 호출 — 스킵.)
+                  const v = project.documents[dt];
+                  const hasContent = typeof v === 'string' && v;
+                  return hasContent || get().getDocStatus(projectId, dt) === 'pending';
+                })()
+              : (() => {
+                  const v = project.documents[dt];
+                  return typeof v === 'string' && v;
+                })())
         );
         if (valid.length === 0) return;
 

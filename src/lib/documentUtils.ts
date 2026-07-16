@@ -347,3 +347,31 @@ export function levelsFor(targets: DocType[]): DocType[][] {
 export function topoSortDocs(): DocType[] {
   return topoSortLevels().flat();
 }
+
+// 합성(composite) 핵심 우선 문서 집합 — 서연 확정(오너 힌트 PRD/범위/일정).
+// composite 모드에서 이 3개가 먼저 완료되면 잡을 종료하고 나머지는 pending(개별 생성)으로 둔다.
+// single 모드는 이 집합을 사용하지 않는다(회귀 0 불변식).
+export const CORE_DOCS: DocType[] = ['prd', 'feature-list', 'wbs'];
+
+// 위상 레벨 내에서 core 문서를 앞으로 재배치한 평탄 순서를 반환한다.
+// - 레벨 자체는 유지(topoSortLevels 결과 보존) → DEPENDENCIES 위반 없음.
+// - 각 레벨 내에서 core에 속한 것을 앞, 나머지를 뒤로. 그룹 내 순서는 입력 순(DOCUMENTS 순)을 보존.
+// composite 모드 전용. single 경로는 이 함수를 호출하지 않는다.
+export function orderCoreFirst(order: DocType[], core: DocType[] = CORE_DOCS): DocType[] {
+  const coreSet = new Set(core);
+  // order는 topoSortDocs() 평탄 결과. 레벨 경계를 알기 위해 levels를 다시 구성하지 않고,
+  // 간단히 core 우선 stable 정렬을 하면 레벨 내 재배치 효과가 난다 — 단, 이는 order 내
+  // 모든 core를 한꺼번에 앞으로 빼므로 "레벨을 깬다"고 볼 수도 있다.
+  // 도현/도이 좌표: "레벨 내만" 재배치. 위상 순서를 보존하려면 levels 단위로 처리해야 한다.
+  // 안전 구현: topoSortLevels를 다시 돌려 각 레벨 내에서 core 우선 정렬 후 평탄화.
+  const levels = topoSortLevels();
+  const reordered: DocType[] = [];
+  for (const level of levels) {
+    // order에 포함된 문서만 대상(single-full은 14종 전부지만, composite도 동일).
+    const inOrder = level.filter((dt) => order.includes(dt));
+    const corePart = inOrder.filter((dt) => coreSet.has(dt));
+    const rest = inOrder.filter((dt) => !coreSet.has(dt));
+    reordered.push(...corePart, ...rest);
+  }
+  return reordered;
+}

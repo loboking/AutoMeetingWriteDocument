@@ -6,7 +6,9 @@ export type MeetingStep = 'idle' | 'recording' | 'transcribing' | 'summarizing' 
 
 // 문서 상태 타입
 // 'partial': 청킹 일부 섹션 생성 실패 — 내용은 있으나 미완성(재생성 권장)
-export type DocStatus = 'latest' | 'outdated' | 'frozen' | 'regenerating' | 'partial';
+// 'pending': 본문 없음(아직 생성 안 됨) — composite에서 핵심 3개 완료 후 나머지 11개에만 세팅.
+//   single 모드에는 쓰이지 않는다(회귀 0). UI는 partial(다시 만들기)과 분리해 "만들기" CTA를 띄운다.
+export type DocStatus = 'latest' | 'outdated' | 'frozen' | 'regenerating' | 'partial' | 'pending';
 
 // 문서 버전 정보
 export interface DocVersionInfo {

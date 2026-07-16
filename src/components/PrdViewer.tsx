@@ -1090,6 +1090,19 @@ export function PrdViewer() {
                             </span>
                           );
                         }
+                        if (status === 'pending') {
+                          // composite 핵심 완료 후 본문 없이 남은 문서(생성 칩).
+                          // single에는 발생하지 않는다(회귀 0).
+                          return (
+                            <span
+                              className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-slate-100 text-slate-600 border border-slate-200 dark:bg-slate-800/50 dark:text-slate-300 dark:border-slate-700"
+                              title="아직 생성되지 않았어요. 이 문서를 열어 '생성'을 누르면 만듭니다."
+                            >
+                              <Plus className="w-2.5 h-2.5" />
+                              미생성
+                            </span>
+                          );
+                        }
                         return null;
                       })()}
                       {hasDoc && !isCompleted && (
@@ -1691,7 +1704,17 @@ export function PrdViewer() {
                       </>
                     ) : (
                       <Button
-                        onClick={() => handleGenerateDoc(doc.key)}
+                        onClick={() => {
+                          // pending(composite 핵심 완료 후 본문 없이 남은 문서)은 regenerateDocs 경유.
+                          // single은 status가 'pending'이 될 수 없어 이 분기를 타지 않는다(회귀 0).
+                          const isPending = !!currentMeeting?.id
+                            && getDocStatus(currentMeeting.id, doc.key) === 'pending';
+                          if (isPending && currentMeeting?.id) {
+                            void regenerateDocs(currentMeeting.id, [doc.key]);
+                          } else {
+                            void handleGenerateDoc(doc.key);
+                          }
+                        }}
                         disabled={isGenerating || isSingleGenerating}
                         size="sm"
                       >
