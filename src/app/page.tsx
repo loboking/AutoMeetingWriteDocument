@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { Mic, Play, Upload, FileText, Download, FileUp, FolderOpen, X, Plus, CreditCard, RefreshCw } from 'lucide-react';
+import { Mic, Play, Upload, FileText, Download, FileUp, Layers, Plus, CreditCard, RefreshCw } from 'lucide-react';
 import Link from 'next/link';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
@@ -33,21 +33,22 @@ import TranscriptViewer from '@/components/TranscriptViewer';
 import SummaryViewer from '@/components/SummaryViewer';
 import PrdViewer from '@/components/PrdViewer';
 import DocAssistant from '@/components/DocAssistant';
-import { ProjectList } from '@/components/ProjectList';
+import { MeetingNotePanel } from '@/components/MeetingNotePanel';
+import { NoteAccumulator } from '@/components/NoteAccumulator';
 import { PageContainer } from '@/components/layout/PageContainer';
 import { DateFormat } from '@/components/DateFormat';
 
 export default function Home() {
   const currentMeeting = useMeetingStore(s => s.currentMeeting);
   const currentStep = useMeetingStore(s => s.currentStep);
-  const meetings = useMeetingStore(s => s.meetings);
   const syncFromServer = useMeetingStore(s => s.syncFromServer);
   const isSyncing = useMeetingStore(s => s.isSyncing);
   const { createMeeting, updateCurrentMeeting, updateMeetingStep, setCurrentMeeting } = useMeetingStore();
   const [meetingTitle, setMeetingTitle] = useState('');
   const [mounted, setMounted] = useState(false);
   const [uploading, setUploading] = useState(false);
-  const [showProjectList, setShowProjectList] = useState(false);
+  // 홈 최상위 3탭 — 기본 meetings(② 기획서)로 회귀 우선. 도현 결정.
+  const [topTab, setTopTab] = useState<'notes' | 'meetings' | 'composite'>('meetings');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // 진행률 시뮬레이션 훅 사용
@@ -206,19 +207,6 @@ export default function Home() {
                 <RefreshCw className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${isSyncing ? 'animate-spin' : ''}`} aria-hidden="true" />
                 <span className="hidden xs:inline">{isSyncing ? '동기화 중' : '동기화'}</span>
               </Button>
-              <Button
-                onClick={() => setShowProjectList(true)}
-                variant="outline"
-                size="sm"
-                className="gap-1.5 sm:gap-2 h-8 sm:h-9 px-2 sm:px-2.5"
-                aria-label="프로젝트 리스트 열기"
-              >
-                <FolderOpen className="w-3.5 h-3.5 sm:w-4 sm:h-4" aria-hidden="true" />
-                <span className="hidden xs:inline">프로젝트 리스트</span>
-                {meetings.length > 0 && (
-                  <Badge variant="secondary" className="ml-0.5 sm:ml-1 px-1 sm:px-1.5 py-0 text-[10px] sm:text-xs">{meetings.length}</Badge>
-                )}
-              </Button>
               <Link
                 href="/pricing"
                 aria-label="요금제 보기"
@@ -234,6 +222,31 @@ export default function Home() {
           </div>
         </header>
 
+        {/* 홈 최상위 3탭 — 도현 결정: 기본 meetings(② 기획서)로 회귀 우선.
+            ① 회의록(MeetingNotePanel) / ② 기획서(기존 단일회의 흐름 100% 보존) / ③ 합성(NoteAccumulator) */}
+        <Tabs value={topTab} onValueChange={(v) => setTopTab(v as 'notes' | 'meetings' | 'composite')} className="w-full">
+          <TabsList className="grid w-full grid-cols-3 h-auto p-1 mb-6">
+            <TabsTrigger value="notes" className="gap-1.5">
+              <Mic className="w-4 h-4" aria-hidden="true" />
+              회의록
+            </TabsTrigger>
+            <TabsTrigger value="meetings" className="gap-1.5">
+              <FileText className="w-4 h-4" aria-hidden="true" />
+              기획서
+            </TabsTrigger>
+            <TabsTrigger value="composite" className="gap-1.5">
+              <Layers className="w-4 h-4" aria-hidden="true" />
+              합성
+            </TabsTrigger>
+          </TabsList>
+
+          {/* ① 회의록 탭 — MeetingNote(회의록) 전용 패널. Meeting(② 기획서 단일회의)과 별개 엔티티. */}
+          <TabsContent value="notes">
+            <MeetingNotePanel onGoToSynthesize={() => setTopTab('composite')} />
+          </TabsContent>
+
+          {/* ② 기획서 탭 — 기존 단일회의 진행 흐름 100% 보존 (회귀 0) */}
+          <TabsContent value="meetings">
         {/* 단계 진행 바 */}
         <div className="mb-8">
           <div className="flex items-center justify-between gap-1 sm:gap-2 mb-4">
@@ -426,29 +439,13 @@ export default function Home() {
             </Tabs>
           </div>
         )}
+          </TabsContent>
 
-        {/* 프로젝트 목록 모달 */}
-        {showProjectList && (
-          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in fade-in duration-200">
-            <div className="bg-white dark:bg-slate-900 rounded-xl shadow-2xl max-w-2xl w-full max-h-[85vh] overflow-hidden flex flex-col animate-in zoom-in-95 duration-200">
-              <div className="flex items-center justify-between p-4 border-b border-slate-200 dark:border-slate-700">
-                <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-50">프로젝트 목록</h2>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => setShowProjectList(false)}
-                  className="h-8 w-8"
-                  aria-label="닫기"
-                >
-                  <X className="h-4 w-4" aria-hidden="true" />
-                </Button>
-              </div>
-              <div className="flex-1 overflow-y-auto p-4">
-                <ProjectList onClose={() => setShowProjectList(false)} />
-              </div>
-            </div>
-          </div>
-        )}
+          {/* ③ 합성 탭 — 다중 회의록 합성(composite). NoteAccumulator가 자기완결. */}
+          <TabsContent value="composite">
+            <NoteAccumulator />
+          </TabsContent>
+        </Tabs>
       </PageContainer>
 
       {/* 문서 채팅 도우미 (플로팅) — 회의/문서 없으면 스스로 숨김 */}
