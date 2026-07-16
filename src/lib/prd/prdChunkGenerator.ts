@@ -1,4 +1,4 @@
-import { llmComplete, resolveProvider } from '@/lib/llm';
+import { llmComplete } from '@/lib/llm';
 import type { LLMResult } from '@/lib/llm/types';
 import { PRD_SECTIONS, PRDChunkProgress, PRDGenerationResult } from './prdSections';
 import { SECTION_PROMPTS } from './sectionPrompts';
@@ -10,9 +10,11 @@ import type { MeetingSummary, MeetingMetadata } from '@/types';
 // Re-export types
 export type { PRDChunkProgress, PRDGenerationResult };
 
-// 섹션 출력 토큰: GLM은 reasoning에 토큰을 많이 써 16384, 그 외(gpt-4o 등)는 8192
+// 섹션 출력 토큰. 준 재현(2026-07-16): GLM heavy 단일 요청 completion 실측 2000~5000.
+// 16384→8192 축소로 응답 속도 개선 (250s 케이스 → 113s로 단축 확인) + 500 실패 빈도 감소.
+// GLM·비GLM 모두 8192. 8192가 부족한 케이스(잘림)는 현재까지 관측 안 됨.
 function sectionMaxTokens(): number {
-  return resolveProvider().id === 'zai' ? 16384 : 8192;
+  return 8192;
 }
 
 // PRD 섹션 system 프롬프트 (한국어 출력 강제)
@@ -66,7 +68,9 @@ async function generateSection(
     const maxTokens = sectionMaxTokens();
     console.log(`[PRD Chunk] 섹션 생성 시작: ${sectionId} (maxTokens=${maxTokens})`);
 
-    // 429(rate limit) 발생 시 지수 backoff 재시도 (withRetry 유지, 내부 호출만 llmComplete로)
+    // 429(rate limit) + 500/transient 오류 모두 지수 backoff 재시도.
+    // timeoutMs 180s로 단축: z.ai heavy 응답 없음(300s+)을 빠르히 throw → retry 전환.
+    // (Vercel maxDuration 300s 안에 retry 1회 분을 남기기 위한 마진.)
     const llmRes = await withRetry(
       () =>
         llmComplete({
@@ -74,9 +78,9 @@ async function generateSection(
           system: PRD_SECTION_SYSTEM,
           maxTokens,
           temperature: 0.7,
-          timeoutMs: 240000, // 섹션당 4분 (Vercel 300초 함수 한계 내)
+          timeoutMs: 180000, // 4분→3분. 300s 리밋 내 retry 마진 확보.
         }),
-      { retries: 3, baseDelayMs: 2000 }
+      { retries: 2, baseDelayMs: 2000 }
     );
     onTokens?.(llmRes); // 섹션별 토큰 실측 기록
     const extracted = llmRes.text;
@@ -110,11 +114,16 @@ async function generateSection(
   }
 }
 
-// z.ai 코딩플랜 제약:
-//  ① 단일 요청 ~300초(5분) 서버 리밋 → 무거운 PRD를 한 번에 못 끝냄 (섹션 분할 필요)
-//  ② 동시 요청 ~4개 한계 → 그 이상 병렬 시 429(code 1302) rate limit 발생
-// → 섹션을 CONCURRENCY=3으로 동시 실행 + 429 시 재시도. 순차 18분 → ~3분.
-const CONCURRENCY = 3;
+// z.ai 코딩플랜 제약 (준 재현 확정 2026-07-16):
+//  ① 단일 heavy 요청(max_tokens 8192~16384, PRD 섹션) — 100~250초로 매우 느리고 분산 큼.
+//     간헐적으로 응답 없음(300초+). summarize(가벼운 단일)은 안정.
+//  ② 동시 요청 한도: 단/중간 요청은 4개까지 OK, 5번째부터 429 rate limit(즉시 reject).
+//  ③ 동시 heavy(8192+) 3개 → 3개 모두 238초 만에 500 "操作失败"(operation failed)로 실패.
+//     2개는 안정(재현 2/2 OK). 429가 아니라 500이므로 기존 withRetry(rate limit 전용)가 안 잡음.
+// → CONCURRENCY=2 + 500/transient 오류도 withRetry 재시도 + 섹션당 max_tokens 8192로 축소(GLM).
+//   (준 보고: 15섹션 × 2동시 = 8배치. Vercel 300s 리밋 안에 처리 불가능한 경우가 여전히 존재 —
+//    이건 구조 영역이라 태오/나루에게 따로 넘김. 여기서는 재현 확정된 hang 원인만 최소 fix.)
+const CONCURRENCY = 2;
 
 // 전체 PRD 생성 (섹션별 동시성 제한 병렬 청킹)
 export async function generatePRDByChunks(
