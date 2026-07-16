@@ -17,6 +17,9 @@ export interface Env {
   GEMINI_MODEL?: string;
   SUPABASE_URL: string;
   SUPABASE_ANON_KEY: string;
+  // CORS 허용 도메인(쉼표 구분). 예: "https://meeting-auto-docs.vercel.app,https://mad.example.com".
+  // wrangler secret put PROD_ORIGINS. dev(localhost)는 별도 설정 없이 항상 허용.
+  PROD_ORIGINS?: string;
 }
 
 // Supabase Storage 도메인만 허용 — 임의 URL fetch(SSRF) 차단.
@@ -77,12 +80,20 @@ export default {
       });
     }
 
-    // CORS — 메인 앱 도메인에서만 호출. 실제 도메인은 배포 후 env로 제한(P1).
-    // 일단 * (개발/배포 직후). TODO: PROD_ORIGIN 환경변수로 잠글 것.
+    // CORS — 메인 앱 도메인에서만 호출. PROD_ORIGIN 환경변수(운영 도메인) + dev localhost 허용.
+    // 보안(P0): Workers가 공개 프록시면 남용 위험 → 운영/Vercel 도메인만.
+    const requestOrigin = request.headers.get('Origin') ?? '';
+    const allowedOrigins = (env.PROD_ORIGINS ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    // dev(localhost:12001)는 항상 허용, 운영은 PROD_ORIGINS에서.
+    const isAllowed = allowedOrigins.includes(requestOrigin) || /^http:\/\/localhost:\d+$/.test(requestOrigin);
     const corsHeaders = {
-      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Origin': isAllowed ? requestOrigin : 'null',
       'Access-Control-Allow-Methods': 'POST, OPTIONS',
       'Access-Control-Allow-Headers': 'Authorization, Content-Type',
+      Vary: 'Origin',
     };
     if (request.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: corsHeaders });
