@@ -14,6 +14,7 @@ function mockFetchOk(body: unknown) {
     ok: true,
     status: 200,
     json: async () => body,
+    text: async () => JSON.stringify(body),
   })) as unknown as typeof fetch;
 }
 
@@ -24,6 +25,105 @@ function mockFetchError(status: number) {
     text: async () => 'gemini error',
     json: async () => ({ error: 'gemini error' }),
   })) as unknown as typeof fetch;
+}
+
+// File API 업로드(resumable 2단) → 폴링(ACTIVE) → generateContent fetch를 단일 mock으로 라우팅.
+// resumable 프로토콜:
+//   step1: POST /upload/v1beta/files?uploadType=resumable + JSON metadata → Location 헤더
+//   step2: PUT <sessionUri> + 바이너리 → file 리소스(uri/name/state)
+//   step3: GET /v1beta/files/{name} → 폴링(state ACTIVE 대기)
+//   step4: POST :generateContent + fileData
+function mockFetchFileApiFlow(opts: {
+  startOk?: boolean; // step1 (resumable 시작)
+  uploadOk?: boolean; // step2 (PUT 바이너리)
+  uploadStatus?: number;
+  pollState?: 'ACTIVE' | 'PROCESSING' | 'FAILED';
+  generateText?: string;
+  generateOk?: boolean;
+}) {
+  const {
+    startOk = true,
+    uploadOk = true,
+    uploadStatus = 200,
+    pollState = 'ACTIVE',
+    generateText = '화자 1: 테스트',
+    generateOk = true,
+  } = opts;
+  const calls: Array<{ url: string; method: string; body?: unknown }> = [];
+  type MockResp = {
+    ok: boolean;
+    status: number;
+    json?: () => Promise<unknown>;
+    text?: () => Promise<string>;
+    // Headers-like: 실제 Response.headers.get(name) 호환. lowercase 키 조회.
+    headers?: { get: (name: string) => string | null };
+  };
+  const SESSION_URI =
+    'https://generativelanguage.googleapis.com/upload/v1beta/files?uploadType=resumable&key=test&upload_id=abc';
+  const mock = vi.fn(async (url: string, init?: RequestInit): Promise<MockResp> => {
+    calls.push({ url, method: init?.method || 'GET', body: init?.body });
+    const u = String(url);
+    // step1: resumable 시작 — POST + uploadType=resumable + Location 헤더
+    if (u.includes('/upload/v1beta/files') && u.includes('uploadType=resumable') && init?.method === 'POST') {
+      if (!startOk) {
+        return { ok: false, status: 400, text: async () => 'start failed' };
+      }
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: (name: string) => (name.toLowerCase() === 'location' ? SESSION_URI : null) },
+        text: async () => '',
+      };
+    }
+    // step2: PUT session URI → file 리소스
+    if (u === SESSION_URI && init?.method === 'PUT') {
+      if (!uploadOk) {
+        return { ok: false, status: uploadStatus, text: async () => 'upload failed' };
+      }
+      return {
+        ok: true,
+        status: uploadStatus,
+        json: async () => ({
+          file: {
+            name: 'files/test-file-1',
+            uri: 'https://generativelanguage.googleapis.com/v1beta/files/test-file-1',
+            mimeType: 'audio/mpeg',
+            state: 'FILE_STATE_PROCESSING',
+            displayName: 'stt-audio',
+          },
+        }),
+        text: async () => '{}',
+      };
+    }
+    // 폴링 — GET 응답은 루트가 곧 file 리소스(file 래핑 없음)
+    if (u.includes('/v1beta/files/') && (!init || init.method === 'GET')) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          name: 'files/test-file-1',
+          uri: 'https://generativelanguage.googleapis.com/v1beta/files/test-file-1',
+          mimeType: 'audio/mpeg',
+          state: pollState,
+        }),
+        text: async () => '{}',
+      };
+    }
+    // generateContent
+    if (u.includes(':generateContent')) {
+      if (!generateOk) {
+        return { ok: false, status: 400, text: async () => 'gen error' };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => makeGeminiResponse(generateText),
+        text: async () => '{}',
+      };
+    }
+    return { ok: false, status: 404, text: async () => 'unmatched' };
+  });
+  return { mock, calls };
 }
 
 describe('GeminiAudioProvider', () => {
@@ -156,6 +256,90 @@ describe('GeminiAudioProvider', () => {
       expect(inlinePart.inlineData.mimeType).toBe('audio/mp3');
       // base64 문자열이어야 함
       expect(typeof inlinePart.inlineData.data).toBe('string');
+    });
+
+    it('15MB 초과 오디오는 File API로 업로드 후 fileData로 변환을 요청한다', async () => {
+      // 16MB 버퍼 — inlineData 한계(15MB) 초과 → File API 분기.
+      const big = Buffer.alloc(16 * 1024 * 1024, 0);
+      const { mock, calls } = mockFetchFileApiFlow({
+        pollState: 'FILE_STATE_ACTIVE',
+        generateText: '화자 1: 큰 파일 테스트',
+      });
+      vi.stubGlobal('fetch', mock);
+
+      const result = await new GeminiAudioProvider().transcribe(big, { contentType: 'audio/mpeg' });
+
+      // 4단 fetch: resumable 시작(POST) → PUT 바이너리 → 폴링(GET) → generateContent(POST)
+      const posts = calls.filter((c) => c.method === 'POST');
+      const puts = calls.filter((c) => c.method === 'PUT');
+      const gets = calls.filter((c) => c.method === 'GET');
+      expect(posts.filter((c) => c.url.includes('uploadType=resumable'))).toHaveLength(1);
+      expect(puts).toHaveLength(1);
+      expect(gets.filter((c) => c.url.includes('/v1beta/files/'))).toHaveLength(1);
+      expect(posts.filter((c) => c.url.includes(':generateContent'))).toHaveLength(1);
+
+      // generateContent body에는 fileData(fileUri)가 있어야 하고 inlineData는 없어야 한다.
+      const genCall = calls.find((c) => c.url.includes(':generateContent'));
+      const body = JSON.parse(String(genCall?.body));
+      const parts = body.contents[0].parts;
+      const fileDataPart = parts.find((p: { fileData?: unknown }) => p.fileData);
+      const inlinePart = parts.find((p: { inlineData?: unknown }) => p.inlineData);
+      expect(fileDataPart).toBeTruthy();
+      expect(fileDataPart.fileData.fileUri).toContain('files/test-file-1');
+      expect(fileDataPart.fileData.mimeType).toBe('audio/mpeg');
+      expect(inlinePart).toBeUndefined();
+
+      expect(result.segments[0]).toMatchObject({ speaker: '화자 1', text: '큰 파일 테스트' });
+    });
+
+    it('File API 업로드 실패 시 에러를 throw한다', async () => {
+      const big = Buffer.alloc(16 * 1024 * 1024, 0);
+      const { mock } = mockFetchFileApiFlow({ uploadOk: false, uploadStatus: 400 });
+      vi.stubGlobal('fetch', mock);
+
+      await expect(
+        new GeminiAudioProvider().transcribe(big, { contentType: 'audio/mpeg' })
+      ).rejects.toThrow(/업로드 실패|upload failed/i);
+    });
+
+    it('File API resumable 시작 실패 시 에러를 throw한다', async () => {
+      const big = Buffer.alloc(16 * 1024 * 1024, 0);
+      const { mock } = mockFetchFileApiFlow({ startOk: false });
+      vi.stubGlobal('fetch', mock);
+
+      await expect(
+        new GeminiAudioProvider().transcribe(big, { contentType: 'audio/mpeg' })
+      ).rejects.toThrow(/resumable 시작 실패|start failed/i);
+    });
+
+    it('File API 폴링이 FAILED 상태면 에러를 throw한다', async () => {
+      const big = Buffer.alloc(16 * 1024 * 1024, 0);
+      const { mock } = mockFetchFileApiFlow({
+        pollState: 'FILE_STATE_FAILED',
+      });
+      vi.stubGlobal('fetch', mock);
+
+      await expect(
+        new GeminiAudioProvider().transcribe(big, { contentType: 'audio/mpeg' })
+      ).rejects.toThrow(/FAILED|파일 처리 실패/);
+    });
+
+    it('15MB 이하 오디오는 inlineData 경로를 유지한다 (회귀)', async () => {
+      // 14MB — inlineData 임계(15MB) 이하 → 업로드 없이 inlineData 직행.
+      const small = Buffer.alloc(14 * 1024 * 1024, 0);
+      const fetchMock = mockFetchOk(makeGeminiResponse('화자 1: 작은 파일'));
+      vi.stubGlobal('fetch', fetchMock);
+
+      await new GeminiAudioProvider().transcribe(small, { contentType: 'audio/mp3' });
+
+      const calls = (fetchMock as unknown as ReturnType<typeof vi.fn>).mock.calls;
+      // 단일 generateContent 호출만 있어야 (업로드/폴링 없음)
+      expect(calls).toHaveLength(1);
+      const calledUrl = String(calls[0][0]);
+      expect(calledUrl).toContain(':generateContent');
+      const body = JSON.parse(calls[0][1].body);
+      const inlinePart = body.contents[0].parts.find((p: { inlineData?: unknown }) => p.inlineData);
+      expect(inlinePart).toBeTruthy();
     });
   });
 

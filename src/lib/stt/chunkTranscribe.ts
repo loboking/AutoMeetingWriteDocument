@@ -3,7 +3,7 @@
 // 프레임 경계가 관대한 mp3/mpeg에서 실무상 동작하고, 녹음 webm은 useRecorder의
 // 32kbps 저비트레이트로 25MB 안에 들어오게 해 청크 경로 자체를 회피한다.
 import { WhisperApiProvider } from './factory';
-import type { STTTranscribeOptions, TranscriptSegment, TranscriptionResult } from './types';
+import type { STTProvider, STTTranscribeOptions, TranscriptSegment, TranscriptionResult } from './types';
 
 // Whisper 25MB 한계 직전. 청크당 이 크기로 분할.
 const CHUNK_BYTES = 20 * 1024 * 1024;
@@ -23,15 +23,19 @@ export function canChunk(contentType?: string): boolean {
 }
 
 /**
- * 큰 오디오 Buffer를 CHUNK_BYTES 단위로 나눠 병렬로 Whisper 호출 후 결과를 이어붙인다.
+ * 큰 오디오 Buffer를 CHUNK_BYTES 단위로 나눠 병렬 STT 후 결과를 이어붙인다.
  * segment timestamp는 청크 누적 duration으로 전역 보정한다.
  * 호출 전 canChunk(contentType)로 분할 가능 포맷인지 확인할 것.
+ *
+ * provider 주입: caller가 getServerProvider() 결과를 넘긴다. 과거엔 new WhisperApiProvider()로
+ * hardcoded되어 STT_PROVIDER=gemini-audio여도 큰 파일은 무조건 Whisper로 가 401(키 없음) 실패했음
+ * (2026-07-16 회귀). 미주입 시 기존 호환을 위해 Whisper로 폴백.
  */
 export async function transcribeChunked(
   buffer: Buffer,
-  opts?: STTTranscribeOptions
+  opts?: STTTranscribeOptions,
+  provider: STTProvider = new WhisperApiProvider()
 ): Promise<TranscriptionResult> {
-  const provider = new WhisperApiProvider();
 
   const chunks: Buffer[] = [];
   for (let i = 0; i < buffer.byteLength; i += CHUNK_BYTES) {

@@ -105,12 +105,14 @@ export async function POST(request: NextRequest) {
     if ('errorResponse' in resolved) return resolved.errorResponse;
     const { buffer, language, contentType } = resolved;
 
-    // Provider DI: OPENAI_API_KEY 있으면 Whisper, 없으면 Dummy(NO_STT_PROVIDER throw)
+    // Provider DI: STT_PROVIDER 노브(gemini-audio|whisper)로 선택. 과거엔 chunked 경로가
+    // Whisper에 hardcoded라 gemini-audio여도 큰 파일은 Whisper → 401(키 없음)로 실패했음(2026-07-16).
     const provider = getServerProvider();
     // 큰 분할 가능 포맷(mp3)은 청크 병렬 처리, 그 외는 단일 호출.
+    // chunked 경로도 동일 provider를 주입 — Gemini 선호 시 Gemini 청킹.
     const result =
       needsChunking(buffer.byteLength) && canChunk(contentType)
-        ? await transcribeChunked(buffer, { language, contentType })
+        ? await transcribeChunked(buffer, { language, contentType }, provider)
         : await provider.transcribe(buffer, { language, contentType });
 
     // TranscribeResponseSchema 형태로 반환
@@ -136,6 +138,10 @@ export async function POST(request: NextRequest) {
     }
 
     console.error('Transcribe API 오류:', error);
-    return NextResponse.json({ error: '음성 변환에 실패했습니다.' }, { status: 500 });
+    // detail: 진짜 provider 에러(Whisper 401/Gemini status 등)를 클라/로그에 노출.
+    // 라우트가 고정 카피만 주면 원인이 가려진다(2026-07-16 회귀 — Whisper 401이 삼켜짐).
+    // message만 노출 — 스택/환경변수/키는 절대 포함 금지.
+    const detail = error instanceof Error ? error.message : undefined;
+    return NextResponse.json({ error: '음성 변환에 실패했습니다.', detail }, { status: 500 });
   }
 }
