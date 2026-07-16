@@ -47,8 +47,10 @@ export default function Home() {
   const [meetingTitle, setMeetingTitle] = useState('');
   const [mounted, setMounted] = useState(false);
   const [uploading, setUploading] = useState(false);
-  // 홈 최상위 3탭 — 기본 meetings(② 기획서)로 회귀 우선. 도현 결정.
-  const [topTab, setTopTab] = useState<'notes' | 'meetings' | 'composite'>('meetings');
+  // 홈 최상위 3탭 — 기본 notes(① 회의록). 신규 사용자 첫인상에 상품 3가치(회의록/기획서/합성)가
+  // 다 드러나게(서연 UX 검증 권고, 오너 "①이 ②③에 종속되면 안 된다" 정합). 기존 단일회의
+  // 사용자는 ② 기획서 탭 클릭 1번으로 동일 흐름(회귀 0). 도현 결정(오너 판단 시 되돌림 가능).
+  const [topTab, setTopTab] = useState<'notes' | 'meetings' | 'composite'>('notes');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // 진행률 시뮬레이션 훅 사용
