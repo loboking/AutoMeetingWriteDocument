@@ -14,11 +14,14 @@
   "main": "src/index.ts",
   "compatibility_date": "2025-01-01",
   "compatibility_flags": ["nodejs_compat"],
-  // Smart Placement — Workers를 Gemini API(US 허용 리전)에 가깝게 배치해 geo-block 회피.
-  // 한국 사용자 → HKG colo 기본 → Gemini 400 geo-block. smart는 트래픽 패턴 분석 후 최적화(즉시 효과 없을 수 있음).
-  // 안 되면 placement.region = "gcp:us-east4" 등 명시적 US 강제로 전환(도현/오너).
+  // Placement — Workers를 Gemini API(US 허용 리전)에 강제 배치해 geo-block 회피.
+  // 한국 사용자 → HKG colo 기본 → Gemini 400 geo-block(f8faf10 확정).
+  // mode:"smart" 필수(region 단독 시 wrangler "mode is required" 에러) + region:"gcp:us-east4" US 강제 힌트.
+  // 공식 wrangler config: placement.{mode, region, host, hostname}. mode/region 같이 가능.
+  // 안 되면 hostname:"generativelanguage.googleapis.com"으로 Gemini 서버 근처 직접 배치(도현 백업안).
   "placement": {
-    "mode": "smart"
+    "mode": "smart",
+    "region": "gcp:us-east4"
   },
   "observability": {
     "enabled": true
