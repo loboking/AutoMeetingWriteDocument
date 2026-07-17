@@ -654,6 +654,66 @@ function stripBlobAudioUrl<T extends { audioUrl?: string } | null | undefined>(m
   return m;
 }
 
+// 합성 Project(composite) → Meeting 평탄화. 도현 hotfix — 합성 Project를 meetings[]에도
+// 저장해 meetingsSync가 자동 DB 영속(AuthGate 디바운스 upsert). 기기 이동/캐시 삭제 시 유지.
+// openCompositeProject(createProject 시점)와 runGenerationLoop composite 저장 경로 양쪽에서 재사용.
+// docTypeToField 역변환 매핑 재사용(새 매핑 함수 만들지 않음 — YAGNI).
+// transcript: sourceNoteIds 회의록 transcript 이어붙임(빈 값이면 undefined).
+// isComposite=true 식별 표식으로 단일회의 Meeting과 구분(② 회귀 0 — 단일회의는 이 함수 안 탐).
+function projectToCompositeMeeting(
+  project: Project,
+  resolveTranscript: (noteId: string) => string | undefined,
+): Meeting {
+  // Project.documents(kebab) → Meeting flat 카멜. docTypeToField로 역변환 매핑 재사용.
+  const flatDocs: Partial<Record<string, string>> = {};
+  for (const [docType, content] of Object.entries(project.documents)) {
+    if (typeof content === 'string' && content) {
+      flatDocs[docTypeToField(docType as DocType)] = content;
+    }
+  }
+
+  const transcript = project.sourceNoteIds
+    .map(resolveTranscript)
+    .filter((t): t is string => !!t && t.trim().length > 0)
+    .join('\n\n---\n\n');
+
+  const now = new Date();
+  const meeting: Meeting = {
+    id: project.id,
+    title: project.title,
+    createdAt: project.createdAt,
+    updatedAt: project.updatedAt ?? now,
+    transcript: transcript || undefined,
+    summary: project.masterSummary,
+    step: 'done',
+    completedDocs: project.completedDocs,
+    isCompleted: project.completedDocs.length > 0,
+    docVersions: project.docVersions,
+    isComposite: true,
+    compositeSourceNoteIds: project.sourceNoteIds,
+    ...flatDocs,
+  };
+  return meeting;
+}
+
+// set 콜백 안에서: project가 갱신됐을 때 meetings[]의 같은 id 합성 Meeting도 같이 최신화.
+// - 대상 Meeting이 isComposite=true인 경우만 평탄화 재적용(단일회의 절대 미접촉 — ② 회귀 0).
+// - 합성 Meeting이 meetings[]에 없으면(createProject 경유로 이미 들어갔어야 하지만 방어) no-op.
+// - transcript resolve는 meetingNotes state에서 직접 조회.
+function syncCompositeMeeting(
+  st: { meetings: Meeting[]; meetingNotes: MeetingNote[] },
+  project: Project,
+): Partial<{ meetings: Meeting[] }> {
+  const idx = st.meetings.findIndex((m) => m.id === project.id && m.isComposite);
+  if (idx < 0) return {};
+  const updated = projectToCompositeMeeting(project, (nid) =>
+    st.meetingNotes.find((n) => n.id === nid)?.transcript,
+  );
+  const next = [...st.meetings];
+  next[idx] = updated;
+  return { meetings: next };
+}
+
 export const useMeetingStore = create<MeetingStore>()(
   persist(
     (set, get) => ({
@@ -832,6 +892,8 @@ export const useMeetingStore = create<MeetingStore>()(
 
       // Project 액션 ------------------------------------------------------------
       // composite 프로젝트 생성. single은 createProject 없이 getProject가 Meeting을 래핑.
+      // hotfix(도현): composite Project를 평탄화해 meetings[]에도 upsert. meetingsSync가
+      // 자동으로 DB 영속(AuthGate 디바운스 upsert). 기기 이동/캐시 삭제 시 합성 기획서 유지.
       createProject: (init) => {
         const now = new Date();
         const project: Project = {
@@ -846,7 +908,20 @@ export const useMeetingStore = create<MeetingStore>()(
           createdAt: now,
           updatedAt: now,
         };
-        set({ projects: [...get().projects, project] });
+        // composite만 meetings[]에 동기화. single은 호출처가 없지만 가드로 보호(② 회귀 0).
+        if (project.mode === 'composite') {
+          const meeting = projectToCompositeMeeting(project, (nid) =>
+            get().meetingNotes.find((n) => n.id === nid)?.transcript,
+          );
+          const meetings = get().meetings;
+          const idx = meetings.findIndex((m) => m.id === meeting.id);
+          const nextMeetings = idx >= 0
+            ? meetings.map((m, i) => (i === idx ? meeting : m))
+            : [...meetings, meeting];
+          set({ projects: [...get().projects, project], meetings: nextMeetings });
+        } else {
+          set({ projects: [...get().projects, project] });
+        }
         return project;
       },
 
@@ -892,7 +967,9 @@ export const useMeetingStore = create<MeetingStore>()(
             completedDocs: Array.from(new Set([...(updated[idx].completedDocs ?? []), docType])),
             updatedAt: new Date(),
           };
-          return { projects: updated };
+          // hotfix(도현): 같은 id의 합성 Meeting(isComposite) flat 필드도 동기화.
+          // meetingsSync가 AuthGate 디바운스로 DB에 자동 반영. 단일회의 Meeting은 미접촉.
+          return syncCompositeMeeting(st, updated[idx]);
         });
       },
 
@@ -903,7 +980,8 @@ export const useMeetingStore = create<MeetingStore>()(
           if (idx < 0) return {};
           const updated = [...st.projects];
           updated[idx] = { ...updated[idx], masterSummary: summary, updatedAt: new Date() };
-          return { projects: updated };
+          // 합성 Meeting의 summary/transcript도 같이 최신화.
+          return syncCompositeMeeting(st, updated[idx]);
         });
       },
 
@@ -1286,44 +1364,32 @@ export const useMeetingStore = create<MeetingStore>()(
 
       // C안 어댑터 — composite Project를 currentMeeting(Meeting flat)으로 평탄화 주입.
       // PrdViewer는 currentMeeting flat 필드만 읽는다(getProject 기반이 아님 — 회귀 0 불변식).
-      // composite Project.documents(kebab 키) → Meeting flat 카멜 필드(docTypeToField 역변환 재사용).
-      // transcript는 sourceNoteIds 회의록 transcript 이어붙임(빈 문자열 최소 — YAGNI, PrdViewer가 직접 표시 안 함).
       // currentStep='done'으로 설정 — PrdViewer가 ② 탭 done 단계에서 렌더되도록.
       // 의미 애매하지만 단일/합성 경로를 ② 회귀 0으로 통합하는 최소 경로(도현 결정).
+      //
+      // hotfix(도현): 합성 Project는 createProject/updateProjectDocuments에서 meetings[]에
+      // 평탄화 동기화돼 DB 영속됨. 따라서 1순위로 meetings[]의 합성 Meeting(isComposite)을 찾아
+      // 그대로 currentMeeting에 주입(이미 평탄화됨). 2순위(레거시/마이그레이션 직후) project 폴백.
       openCompositeProject: (projectId) => {
+        // 1) meetings[]의 합성 Meeting 우선(이미 DB 영속 + 평탄화된 상태).
+        const existing = get().meetings.find((m) => m.id === projectId && m.isComposite);
+        if (existing) {
+          set({ currentMeeting: existing, currentStep: 'done' });
+          return;
+        }
+        // 2) 레거시/마이그레이션 직후 폴백: project에서 평탄화 생성(meetings[]에도 역추가로 영속화).
         const project = get().projects.find((p) => p.id === projectId && p.mode === 'composite');
         if (!project) return;
-
-        // Project.documents(kebab) → Meeting flat 카멜. docTypeToField로 역변환 매핑 재사용.
-        const flatDocs: Partial<Record<string, string>> = {};
-        for (const [docType, content] of Object.entries(project.documents)) {
-          if (typeof content === 'string' && content) {
-            flatDocs[docTypeToField(docType)] = content;
-          }
-        }
-
-        // transcript: sourceNoteIds 회의록 transcript 이어붙임(빈 값이면 빈 문자열).
-        const transcript = project.sourceNoteIds
-          .map((nid) => get().meetingNotes.find((n) => n.id === nid)?.transcript ?? '')
-          .filter((t) => t.trim())
-          .join('\n\n---\n\n');
-
-        const now = new Date();
-        const meeting: Meeting = {
-          id: project.id,
-          title: project.title,
-          createdAt: project.createdAt,
-          updatedAt: project.updatedAt ?? now,
-          transcript: transcript || undefined,
-          summary: project.masterSummary,
-          step: 'done',
-          completedDocs: project.completedDocs,
-          isCompleted: project.completedDocs.length > 0,
-          docVersions: project.docVersions,
-          ...flatDocs,
-        };
-
-        set({ currentMeeting: meeting, currentStep: 'done' });
+        const meeting = projectToCompositeMeeting(project, (nid) =>
+          get().meetingNotes.find((n) => n.id === nid)?.transcript,
+        );
+        // meetings[]에 없던 레거시 합성 Project라면 역추가로 DB 영속 유도(AuthGate 디바운스 upsert).
+        const meetings = get().meetings;
+        const idx = meetings.findIndex((m) => m.id === meeting.id);
+        const nextMeetings = idx >= 0
+          ? meetings.map((m, i) => (i === idx ? meeting : m))
+          : [...meetings, meeting];
+        set({ currentMeeting: meeting, currentStep: 'done', meetings: nextMeetings });
       },
 
       // 회의록 합성: /api/synthesize-notes 호출 → composite Project의 masterSummary 채움.
@@ -1542,6 +1608,20 @@ export const useMeetingStore = create<MeetingStore>()(
               for (const docType of Object.keys(docs) as DocType[]) {
                 if (docs[docType] === 'regenerating') docs[docType] = 'outdated';
               }
+            }
+          }
+          // hotfix 마이그레이션(도현): 레거시 합성 Project(composite)가 meetings[]에 동기화돼
+          // 있지 않던 기존 사용자 데이터 호환. 합성 Project마다 평탄화해 meetings[]에 역추가.
+          // - meetings[]에 같은 id의 isComposite Meeting이 이미 있으면 스킵(멱등).
+          // - meetingNotes가 같이 rehydrate돼 transcript 평탄화도 정상.
+          // - 한 번 동기화되면 AuthGate 디바운스 upsert로 DB에도 영속. 단일회의 미접촉.
+          if (Array.isArray(state.projects) && Array.isArray(state.meetings)) {
+            const existing = new Set(state.meetings.filter((m) => m.isComposite).map((m) => m.id));
+            const noteById = new Map((state.meetingNotes ?? []).map((n) => [n.id, n]));
+            for (const p of state.projects) {
+              if (p.mode !== 'composite' || existing.has(p.id)) continue;
+              const meeting = projectToCompositeMeeting(p, (nid) => noteById.get(nid)?.transcript);
+              state.meetings.push(meeting);
             }
           }
         }

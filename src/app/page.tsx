@@ -44,10 +44,10 @@ export default function Home() {
   const syncFromServer = useMeetingStore(s => s.syncFromServer);
   const isSyncing = useMeetingStore(s => s.isSyncing);
   // composite Project 진입점(② 기획서 탭 하단). 합성 결과 기획서 세트 목록.
-  // 회귀 0: currentMeeting을 건드리지 않는 읽기 전용 카드. 클릭 동작은 TODO(PrdViewer 연결).
-  // selector에서 filter(새 배열 반환)하지 않고 projects 통째로 받아 컴포넌트 본문에서 filter
+  // hotfix(도현): 합성 Project는 meetings[]에 평탄화 동기화돼 DB 영속됨.
+  // selector에서 filter(새 배열 반환)하지 않고 meetings 통째로 받아 컴포넌트 본문에서 filter
   // (zustand 기본 selector가 Object.is 비교 — 인라인 filter는 무한 리렌더 위험).
-  const projects = useMeetingStore(s => s.projects);
+  const meetings = useMeetingStore(s => s.meetings);
   const { createMeeting, updateCurrentMeeting, updateMeetingStep, setCurrentMeeting } = useMeetingStore();
   // C안 어댑터 — composite Project를 currentMeeting으로 주입(PrdViewer 회귀 0).
   const openCompositeProject = useMeetingStore((s) => s.openCompositeProject);
@@ -488,36 +488,37 @@ export default function Home() {
           </div>
         )}
 
-          {/* 합성 결과(composite Project) 진입점 — ① 회의록 탭에서 합성한 기획서 세트.
-              C안: 클릭 시 openCompositeProject가 currentMeeting에 composite Project를 평탄화 주입(PrdViewer 회귀 0). */}
-          {projects.filter(p => p.mode === 'composite').length > 0 && (
+          {/* 합성 결과(composite) 진입점 — ① 회의록 탭에서 합성한 기획서 세트.
+              hotfix(도현): 합성 Project는 meetings[]에 평탄화돼 DB 영속됨. 카드도 meetings[] 기반.
+              클릭 시 openCompositeProject가 meetings[]의 합성 Meeting을 currentMeeting에 주입(PrdViewer 회귀 0). */}
+          {meetings.filter(m => m.isComposite).length > 0 && (
             <div className="mt-8 pt-6 border-t border-slate-200 dark:border-slate-700">
               <div className="flex items-center gap-2 mb-3">
                 <Layers className="w-4 h-4 text-blue-600 dark:text-blue-400" aria-hidden="true" />
                 <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-300">
-                  합성으로 만든 기획서 ({projects.filter(p => p.mode === 'composite').length})
+                  합성으로 만든 기획서 ({meetings.filter(m => m.isComposite).length})
                 </h3>
               </div>
               <div className="space-y-2">
-                {projects.filter(p => p.mode === 'composite').map((p) => (
-                  <Card key={p.id} className="border-slate-200 dark:border-slate-700 hover:shadow-md transition-shadow">
+                {meetings.filter(m => m.isComposite).map((m) => (
+                  <Card key={m.id} className="border-slate-200 dark:border-slate-700 hover:shadow-md transition-shadow">
                     <CardContent className="p-3 flex items-center justify-between gap-2">
                       <div className="flex-1 min-w-0">
-                        <div className="font-medium truncate text-sm">{p.title}</div>
+                        <div className="font-medium truncate text-sm">{m.title}</div>
                         <div className="text-xs text-slate-500 mt-0.5 flex items-center gap-2 flex-wrap">
-                          <DateFormat date={p.createdAt} format="datetime" />
-                          <span>· {p.sourceNoteIds.length}개 회의록 통합</span>
+                          <DateFormat date={m.createdAt} format="datetime" />
+                          <span>· {(m.compositeSourceNoteIds?.length ?? 0)}개 회의록 통합</span>
                           <Badge variant="secondary" className="text-[10px] py-0 px-1.5 h-4">
-                            {p.completedDocs.length}/14 문서
+                            {(m.completedDocs?.length ?? 0)}/14 문서
                           </Badge>
                         </div>
                       </div>
                       <Button
                         variant="outline"
                         size="sm"
-                        onClick={() => handleViewComposite(p.id)}
+                        onClick={() => handleViewComposite(m.id)}
                         className="flex-shrink-0 text-xs gap-1.5"
-                        aria-label={`${p.title} 기획서 보기`}
+                        aria-label={`${m.title} 기획서 보기`}
                       >
                         <Layers className="w-3.5 h-3.5" aria-hidden="true" />
                         보기

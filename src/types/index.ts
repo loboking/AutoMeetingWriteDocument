@@ -125,6 +125,14 @@ export interface Meeting {
   autoAdvance?: boolean; // 자동 넘김 설정
   // 문서 버전 히스토리 (문서별 최근 N개만 유지, jsonb data에 함께 영속화)
   docVersions?: DocVersion[];
+  // 합성 Project(composite)를 meetings[]에 영속화하기 위한 식별 표식.
+  //   true: 합성 Meeting(평탄화된 composite Project) — meetingsSync로 DB 영속.
+  //   미설정/false: 단일회의 Meeting(② 기획서 종전 흐름, 무변경).
+  // 도현/오너 hotfix — 합성 Project의 DB 영속화를 위해 meetings 테이블 재사용.
+  isComposite?: boolean;
+  // 합성 Meeting 전용: 이 합성을 만든 회의록(MeetingNote) id들. UI 카드 "X개 회의록 통합" 표시용.
+  // 단일회의 Meeting은 사용하지 않는다(회귀 0).
+  compositeSourceNoteIds?: string[];
 }
 
 // 요약 결과 타입
