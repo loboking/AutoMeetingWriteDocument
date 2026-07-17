@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { Mic, Play, Upload, FileText, Download, FileUp, Layers, Plus, CreditCard, RefreshCw, Trash2 } from 'lucide-react';
+import { Mic, Play, Upload, FileText, Download, FileUp, Layers, Plus, CreditCard, RefreshCw, Trash2, FolderOpen } from 'lucide-react';
 import Link from 'next/link';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
@@ -21,6 +21,12 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { useBeforeUnload } from '@/hooks/useBeforeUnload';
 import { useProgressSimulation } from '@/hooks/useProgressSimulation';
 import { useMeetingStore } from '@/store/meetingStore';
@@ -101,6 +107,8 @@ export default function Home() {
   // openCompositeProject가 currentMeeting을 덮어쓰기 전에 사용자 확인.
   // 돌이킬 수 없는 건 아님: persist partialize로 저장된 데이터는 유지(화면만 전환).
   const [pendingCompositeId, setPendingCompositeId] = useState<string | null>(null);
+  // "내 문서" 모달 — 헤더 버튼으로 오픈. 기존 회의(단일/합성) 카드 목록을 팝업으로 표시.
+  const [showDocsModal, setShowDocsModal] = useState(false);
   // composite Project 보기 진입 래퍼 — currentMeeting이 진행 중(미완료)이면 다이얼로그로 확인,
   // 아니면(null/완료) 바로 openCompositeProject + ② 기획서 탭으로.
   const handleViewComposite = (projectId: string) => {
@@ -252,6 +260,16 @@ export default function Home() {
                 <CreditCard className="w-3.5 h-3.5 sm:w-4 sm:h-4" aria-hidden="true" />
                 <span className="hidden xs:inline">요금제</span>
               </Link>
+              <Button
+                onClick={() => setShowDocsModal(true)}
+                variant="outline"
+                size="sm"
+                className="gap-1.5 sm:gap-2 h-8 sm:h-9 px-2 sm:px-2.5"
+                aria-label="내 문서 보기"
+              >
+                <FolderOpen className="w-3.5 h-3.5 sm:w-4 sm:h-4" aria-hidden="true" />
+                <span className="hidden xs:inline">내 문서</span>
+              </Button>
             </div>
           </div>
         </header>
@@ -312,8 +330,7 @@ export default function Home() {
 
         {/* 메인 콘텐츠 */}
         {!currentMeeting ? (
-          /* 새 회의 시작 카드 + 기존 회의 카드 목록(단일회의). 형제 둘이라 fragment로 래핑. */
-          <>
+          /* 새 회의 시작 카드. 기존 회의/합성 카드는 헤더 "내 문서" 모달로 이동. */
           <Card className="max-w-lg mx-auto shadow-lg border-slate-200 dark:border-slate-700">
             <CardHeader className="pb-4 sm:pb-6">
               <CardTitle className="text-lg sm:text-xl">새 회의 시작</CardTitle>
@@ -429,69 +446,6 @@ export default function Home() {
               </Tabs>
             </CardContent>
           </Card>
-
-          {/* 기존 회의 카드 목록 — 단일회의 Meeting만(합성 isComposite는 아래 별도 섹션).
-              도현 좌표: meetings[]가 store에 있는데 UI가 안 보여줘 오너 계정에 PRD 10개+가 안 보였음.
-              ProjectList.tsx(3탭→2탭 재구정 d8ed308에서 삭제)가 하던 카드 렌더를 page.tsx로 이전.
-              클릭 시 setCurrentMeeting(meeting) → 기존 회의 진행 화면(PrdViewer 등)으로 전환. */}
-          {meetings.filter(m => !m.isComposite).length > 0 && (
-            <div className="mt-8 pt-6 border-t border-slate-200 dark:border-slate-700">
-              <div className="flex items-center gap-2 mb-3">
-                <FileText className="w-4 h-4 text-slate-600 dark:text-slate-400" aria-hidden="true" />
-                <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-300">
-                  기존 회의 ({meetings.filter(m => !m.isComposite).length})
-                </h3>
-              </div>
-              <div className="space-y-2">
-                {meetings.filter(m => !m.isComposite).map((m) => (
-                  <Card key={m.id} className="border-slate-200 dark:border-slate-700 hover:shadow-md transition-shadow">
-                    <CardContent className="p-3 flex items-center justify-between gap-2">
-                      <div className="flex-1 min-w-0">
-                        <div className="font-medium truncate text-sm">{m.title}</div>
-                        <div className="text-xs text-slate-500 mt-0.5 flex items-center gap-2 flex-wrap">
-                          <DateFormat date={m.createdAt} format="datetime" />
-                          <Badge variant="secondary" className="text-[10px] py-0 px-1.5 h-4">
-                            {(m.completedDocs?.length ?? 0)}/14 문서
-                          </Badge>
-                          {(m.isCompleted || m.step === 'done') && (
-                            <Badge variant="default" className="text-[10px] py-0 px-1.5 h-4 bg-green-600 hover:bg-green-600">
-                              완료
-                            </Badge>
-                          )}
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-1 flex-shrink-0">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => setCurrentMeeting(m)}
-                          className="text-xs gap-1.5"
-                          aria-label={`${m.title} 회의 이어보기`}
-                        >
-                          <FileText className="w-3.5 h-3.5" aria-hidden="true" />
-                          열기
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => {
-                            if (confirm(`"${m.title}" 회의를 삭제하시겠습니까?`)) {
-                              deleteMeeting(m.id);
-                            }
-                          }}
-                          className="text-xs text-red-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/20 gap-1"
-                          aria-label={`${m.title} 삭제`}
-                        >
-                          <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
-                        </Button>
-                      </div>
-                    </CardContent>
-                  </Card>
-                ))}
-              </div>
-            </div>
-          )}
-          </>
         ) : (
           /* 회의 진행 화면 */
           <div className="space-y-6">
@@ -551,48 +505,6 @@ export default function Home() {
             </Tabs>
           </div>
         )}
-
-          {/* 합성 결과(composite) 진입점 — ① 회의록 탭에서 합성한 기획서 세트.
-              hotfix(도현): 합성 Project는 meetings[]에 평탄화돼 DB 영속됨. 카드도 meetings[] 기반.
-              클릭 시 openCompositeProject가 meetings[]의 합성 Meeting을 currentMeeting에 주입(PrdViewer 회귀 0). */}
-          {meetings.filter(m => m.isComposite).length > 0 && (
-            <div className="mt-8 pt-6 border-t border-slate-200 dark:border-slate-700">
-              <div className="flex items-center gap-2 mb-3">
-                <Layers className="w-4 h-4 text-blue-600 dark:text-blue-400" aria-hidden="true" />
-                <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-300">
-                  합성으로 만든 기획서 ({meetings.filter(m => m.isComposite).length})
-                </h3>
-              </div>
-              <div className="space-y-2">
-                {meetings.filter(m => m.isComposite).map((m) => (
-                  <Card key={m.id} className="border-slate-200 dark:border-slate-700 hover:shadow-md transition-shadow">
-                    <CardContent className="p-3 flex items-center justify-between gap-2">
-                      <div className="flex-1 min-w-0">
-                        <div className="font-medium truncate text-sm">{m.title}</div>
-                        <div className="text-xs text-slate-500 mt-0.5 flex items-center gap-2 flex-wrap">
-                          <DateFormat date={m.createdAt} format="datetime" />
-                          <span>· {(m.compositeSourceNoteIds?.length ?? 0)}개 회의록 통합</span>
-                          <Badge variant="secondary" className="text-[10px] py-0 px-1.5 h-4">
-                            {(m.completedDocs?.length ?? 0)}/14 문서
-                          </Badge>
-                        </div>
-                      </div>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => handleViewComposite(m.id)}
-                        className="flex-shrink-0 text-xs gap-1.5"
-                        aria-label={`${m.title} 기획서 보기`}
-                      >
-                        <Layers className="w-3.5 h-3.5" aria-hidden="true" />
-                        보기
-                      </Button>
-                    </CardContent>
-                  </Card>
-                ))}
-              </div>
-            </div>
-          )}
           </TabsContent>
         </Tabs>
       </PageContainer>
@@ -659,6 +571,123 @@ export default function Home() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* 내 문서 모달 — 헤더 "내 문서" 버튼으로 오픈.
+          기존 회의(단일/합성) 카드 목록을 팝업으로 표시.
+          인라인 카드(page.tsx 본문)는 중복 제거로 여기로 이전. */}
+      <Dialog open={showDocsModal} onOpenChange={setShowDocsModal}>
+        <DialogContent className="sm:max-w-2xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>내 문서</DialogTitle>
+          </DialogHeader>
+          {meetings.length === 0 ? (
+            <p className="text-sm text-slate-500 py-6 text-center">저장된 회의가 없습니다.</p>
+          ) : (
+            <div className="space-y-4">
+              {/* 단일 회의 — 기존 회의 카드(열기/삭제). */}
+              {meetings.filter(m => !m.isComposite).length > 0 && (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <FileText className="w-4 h-4 text-slate-600 dark:text-slate-400" aria-hidden="true" />
+                    <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-300">
+                      회의 ({meetings.filter(m => !m.isComposite).length})
+                    </h3>
+                  </div>
+                  {meetings.filter(m => !m.isComposite).map((m) => (
+                    <Card key={m.id} className="border-slate-200 dark:border-slate-700 hover:shadow-md transition-shadow">
+                      <CardContent className="p-3 flex items-center justify-between gap-2">
+                        <div className="flex-1 min-w-0">
+                          <div className="font-medium truncate text-sm">{m.title}</div>
+                          <div className="text-xs text-slate-500 mt-0.5 flex items-center gap-2 flex-wrap">
+                            <DateFormat date={m.createdAt} format="datetime" />
+                            <Badge variant="secondary" className="text-[10px] py-0 px-1.5 h-4">
+                              {(m.completedDocs?.length ?? 0)}/14 문서
+                            </Badge>
+                            {(m.isCompleted || m.step === 'done') && (
+                              <Badge variant="default" className="text-[10px] py-0 px-1.5 h-4 bg-green-600 hover:bg-green-600">
+                                완료
+                              </Badge>
+                            )}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1 flex-shrink-0">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => {
+                              setCurrentMeeting(m);
+                              setShowDocsModal(false);
+                            }}
+                            className="text-xs gap-1.5"
+                            aria-label={`${m.title} 회의 이어보기`}
+                          >
+                            <FileText className="w-3.5 h-3.5" aria-hidden="true" />
+                            열기
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => {
+                              if (confirm(`"${m.title}" 회의를 삭제하시겠습니까?`)) {
+                                deleteMeeting(m.id);
+                              }
+                            }}
+                            className="text-xs text-red-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/20 gap-1"
+                            aria-label={`${m.title} 삭제`}
+                          >
+                            <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                          </Button>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              )}
+
+              {/* 합성 회의 — 기존 합성 카드(보기). currentMeeting 진행 중이면 handleViewComposite가 확인 다이얼로그 오픈. */}
+              {meetings.filter(m => m.isComposite).length > 0 && (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <Layers className="w-4 h-4 text-blue-600 dark:text-blue-400" aria-hidden="true" />
+                    <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-300">
+                      합성으로 만든 기획서 ({meetings.filter(m => m.isComposite).length})
+                    </h3>
+                  </div>
+                  {meetings.filter(m => m.isComposite).map((m) => (
+                    <Card key={m.id} className="border-slate-200 dark:border-slate-700 hover:shadow-md transition-shadow">
+                      <CardContent className="p-3 flex items-center justify-between gap-2">
+                        <div className="flex-1 min-w-0">
+                          <div className="font-medium truncate text-sm">{m.title}</div>
+                          <div className="text-xs text-slate-500 mt-0.5 flex items-center gap-2 flex-wrap">
+                            <DateFormat date={m.createdAt} format="datetime" />
+                            <span>· {(m.compositeSourceNoteIds?.length ?? 0)}개 회의록 통합</span>
+                            <Badge variant="secondary" className="text-[10px] py-0 px-1.5 h-4">
+                              {(m.completedDocs?.length ?? 0)}/14 문서
+                            </Badge>
+                          </div>
+                        </div>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            setShowDocsModal(false);
+                            handleViewComposite(m.id);
+                          }}
+                          className="flex-shrink-0 text-xs gap-1.5"
+                          aria-label={`${m.title} 기획서 보기`}
+                        >
+                          <Layers className="w-3.5 h-3.5" aria-hidden="true" />
+                          보기
+                        </Button>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
