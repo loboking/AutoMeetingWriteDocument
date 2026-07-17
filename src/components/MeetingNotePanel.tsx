@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -271,6 +272,7 @@ export function MeetingNotePanel({ onViewComposite }: MeetingNotePanelProps) {
   if (view === 'detail' && selectedNote) {
     return (
       <NoteDetail
+        key={selectedNote.id}
         note={selectedNote}
         onBack={() => { setSelectedId(null); setView('list'); }}
         onDelete={(e) => handleDelete(selectedNote.id, e)}
@@ -485,10 +487,58 @@ interface NoteDetailProps {
   onDelete: (e: React.MouseEvent) => void;
 }
 
+// summary → textarea 편집 문자열 변환. actionItems는 task만 줄바꿈으로 노출(P1 구조화 전까지 텍스트 블록).
+function summaryToDraft(s: MeetingSummary | undefined): {
+  overview: string;
+  keyPoints: string;
+  decisions: string;
+  actionItems: string;
+} {
+  if (!s) return { overview: '', keyPoints: '', decisions: '', actionItems: '' };
+  return {
+    overview: s.overview ?? '',
+    keyPoints: s.keyPoints.join('\n'),
+    decisions: s.decisions.join('\n'),
+    actionItems: s.actionItems.map((a) => a.task).filter(Boolean).join('\n'),
+  };
+}
+
+// textarea(줄바꿈) → 배열. 빈 줄/앞뒤 공백 제거.
+function linesToArray(text: string): string[] {
+  return text
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+}
+
 function NoteDetail({ note, onBack, onDelete }: NoteDetailProps) {
   const speakers = speakerCount(note.transcriptSegments);
   const hasSegments = !!note.transcriptSegments && note.transcriptSegments.length > 0;
   const s = note.summary;
+
+  const updateMeetingNote = useMeetingStore((st) => st.updateMeetingNote);
+
+  // 편집 모드 — isEditing 토글. 초기 draft는 note.summary 기반 lazy init.
+  // 부모가 key={note.id}로 매 note마다 NoteDetail을 새로 마운트하므로
+  // draft state는 자연스럽게 note 진입 시 한 번만 초기화된다(effect 불필요).
+  const [isEditing, setIsEditing] = useState(false);
+  const [draft, setDraft] = useState(() => summaryToDraft(note.summary));
+
+  const handleSaveEdit = () => {
+    const updatedSummary: MeetingSummary = {
+      overview: draft.overview.trim(),
+      keyPoints: linesToArray(draft.keyPoints),
+      decisions: linesToArray(draft.decisions),
+      actionItems: linesToArray(draft.actionItems).map((task) => ({ task })),
+    };
+    updateMeetingNote(note.id, { summary: updatedSummary });
+    setIsEditing(false);
+  };
+
+  const handleCancelEdit = () => {
+    setDraft(summaryToDraft(note.summary));
+    setIsEditing(false);
+  };
 
   return (
     <div className="space-y-4">
@@ -497,15 +547,45 @@ function NoteDetail({ note, onBack, onDelete }: NoteDetailProps) {
           <ArrowLeft className="w-4 h-4" aria-hidden="true" />
           목록으로
         </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={onDelete}
-          className="text-red-500 hover:text-red-700 hover:bg-red-50 gap-1.5"
-        >
-          <Trash2 className="w-4 h-4" aria-hidden="true" />
-          삭제
-        </Button>
+        <div className="flex items-center gap-2">
+          {isEditing ? (
+            <>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleCancelEdit}
+                className="gap-1.5"
+              >
+                취소
+              </Button>
+              <Button size="sm" onClick={handleSaveEdit} className="gap-1.5">
+                <CheckCircle2 className="w-4 h-4" aria-hidden="true" />
+                저장
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setIsEditing(true)}
+                className="gap-1.5"
+              >
+                <FileText className="w-4 h-4" aria-hidden="true" />
+                편집
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={onDelete}
+                className="text-red-500 hover:text-red-700 hover:bg-red-50 gap-1.5"
+              >
+                <Trash2 className="w-4 h-4" aria-hidden="true" />
+                삭제
+              </Button>
+            </>
+          )}
+        </div>
       </div>
 
       {/* 헤더 */}
@@ -536,8 +616,8 @@ function NoteDetail({ note, onBack, onDelete }: NoteDetailProps) {
         </CardContent>
       </Card>
 
-      {/* 요약 */}
-      {s && (
+      {/* 요약 — 편집 모드(4개 textarea) / 읽기 모드(기존 표시) 분기 */}
+      {(s || isEditing) && (
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
@@ -546,44 +626,96 @@ function NoteDetail({ note, onBack, onDelete }: NoteDetailProps) {
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            {s.overview && (
-              <div>
-                <div className="text-xs font-medium text-slate-500 mb-1">개요</div>
-                <p className="text-sm">{s.overview}</p>
-              </div>
-            )}
-            {s.keyPoints.length > 0 && (
-              <div>
-                <div className="text-xs font-medium text-slate-500 mb-1">핵심 사항 ({s.keyPoints.length})</div>
-                <ul className="text-sm space-y-1 list-disc pl-5">
-                  {s.keyPoints.map((k, i) => <li key={i}>{k}</li>)}
-                </ul>
-              </div>
-            )}
-            {s.decisions.length > 0 && (
-              <div>
-                <div className="text-xs font-medium text-slate-500 mb-1">결정 사항 ({s.decisions.length})</div>
-                <ul className="text-sm space-y-1 list-disc pl-5">
-                  {s.decisions.map((d, i) => <li key={i}>{d}</li>)}
-                </ul>
-              </div>
-            )}
-            {s.actionItems.length > 0 && (
-              <div>
-                <div className="text-xs font-medium text-slate-500 mb-1">Action Items ({s.actionItems.length})</div>
-                <ul className="text-sm space-y-1.5">
-                  {s.actionItems.map((a, i) => (
-                    <li key={i} className="flex items-start gap-2">
-                      <CheckCircle2 className="w-3.5 h-3.5 mt-0.5 text-blue-500 flex-shrink-0" aria-hidden="true" />
-                      <span>
-                        {a.task}
-                        {a.assignee && <span className="text-slate-500"> · {a.assignee}</span>}
-                        {a.deadline && <span className="text-slate-500"> · {a.deadline}</span>}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
+            {isEditing ? (
+              <>
+                <div className="space-y-1.5">
+                  <div className="text-xs font-medium text-slate-500">개요</div>
+                  <Textarea
+                    value={draft.overview}
+                    onChange={(e) => setDraft((d) => ({ ...d, overview: e.target.value }))}
+                    placeholder="회의 개요를 2-4문장으로 요약"
+                    className="min-h-20"
+                    aria-label="개요 편집"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <div className="text-xs font-medium text-slate-500">핵심 사항 (한 줄씩)</div>
+                  <Textarea
+                    value={draft.keyPoints}
+                    onChange={(e) => setDraft((d) => ({ ...d, keyPoints: e.target.value }))}
+                    placeholder="핵심 사항을 한 줄씩 입력"
+                    className="min-h-20"
+                    aria-label="핵심 사항 편집"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <div className="text-xs font-medium text-slate-500">결정 사항 (한 줄씩)</div>
+                  <Textarea
+                    value={draft.decisions}
+                    onChange={(e) => setDraft((d) => ({ ...d, decisions: e.target.value }))}
+                    placeholder="결정된 사항을 한 줄씩 입력"
+                    className="min-h-20"
+                    aria-label="결정 사항 편집"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <div className="text-xs font-medium text-slate-500">Action Items (한 줄씩)</div>
+                  <Textarea
+                    value={draft.actionItems}
+                    onChange={(e) => setDraft((d) => ({ ...d, actionItems: e.target.value }))}
+                    placeholder="실행 항목을 한 줄씩 입력"
+                    className="min-h-20"
+                    aria-label="Action Items 편집"
+                  />
+                  <p className="text-xs text-slate-400">
+                    {/* TODO: P1 — task/assignee/deadline 개별 필드 구조화.
+                        지금은 텍스트 한 줄 = 1개 action item(task만). */}
+                    task/담당자/마감 개별 입력은 추후 지원 예정. 한 줄당 한 항목으로 저장됩니다.
+                  </p>
+                </div>
+              </>
+            ) : (
+              <>
+                {s!.overview && (
+                  <div>
+                    <div className="text-xs font-medium text-slate-500 mb-1">개요</div>
+                    <p className="text-sm">{s!.overview}</p>
+                  </div>
+                )}
+                {s!.keyPoints.length > 0 && (
+                  <div>
+                    <div className="text-xs font-medium text-slate-500 mb-1">핵심 사항 ({s!.keyPoints.length})</div>
+                    <ul className="text-sm space-y-1 list-disc pl-5">
+                      {s!.keyPoints.map((k, i) => <li key={i}>{k}</li>)}
+                    </ul>
+                  </div>
+                )}
+                {s!.decisions.length > 0 && (
+                  <div>
+                    <div className="text-xs font-medium text-slate-500 mb-1">결정 사항 ({s!.decisions.length})</div>
+                    <ul className="text-sm space-y-1 list-disc pl-5">
+                      {s!.decisions.map((d, i) => <li key={i}>{d}</li>)}
+                    </ul>
+                  </div>
+                )}
+                {s!.actionItems.length > 0 && (
+                  <div>
+                    <div className="text-xs font-medium text-slate-500 mb-1">Action Items ({s!.actionItems.length})</div>
+                    <ul className="text-sm space-y-1.5">
+                      {s!.actionItems.map((a, i) => (
+                        <li key={i} className="flex items-start gap-2">
+                          <CheckCircle2 className="w-3.5 h-3.5 mt-0.5 text-blue-500 flex-shrink-0" aria-hidden="true" />
+                          <span>
+                            {a.task}
+                            {a.assignee && <span className="text-slate-500"> · {a.assignee}</span>}
+                            {a.deadline && <span className="text-slate-500"> · {a.deadline}</span>}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </>
             )}
           </CardContent>
         </Card>
