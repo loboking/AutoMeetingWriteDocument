@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { Mic, Play, Upload, FileText, Download, FileUp, Layers, Plus, CreditCard, RefreshCw } from 'lucide-react';
+import { Mic, Play, Upload, FileText, Download, FileUp, Layers, Plus, CreditCard, RefreshCw, Trash2 } from 'lucide-react';
 import Link from 'next/link';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
@@ -48,7 +48,7 @@ export default function Home() {
   // selector에서 filter(새 배열 반환)하지 않고 meetings 통째로 받아 컴포넌트 본문에서 filter
   // (zustand 기본 selector가 Object.is 비교 — 인라인 filter는 무한 리렌더 위험).
   const meetings = useMeetingStore(s => s.meetings);
-  const { createMeeting, updateCurrentMeeting, updateMeetingStep, setCurrentMeeting } = useMeetingStore();
+  const { createMeeting, updateCurrentMeeting, updateMeetingStep, setCurrentMeeting, deleteMeeting } = useMeetingStore();
   // C안 어댑터 — composite Project를 currentMeeting으로 주입(PrdViewer 회귀 0).
   const openCompositeProject = useMeetingStore((s) => s.openCompositeProject);
   const [meetingTitle, setMeetingTitle] = useState('');
@@ -460,16 +460,31 @@ export default function Home() {
                           )}
                         </div>
                       </div>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setCurrentMeeting(m)}
-                        className="flex-shrink-0 text-xs gap-1.5"
-                        aria-label={`${m.title} 회의 이어보기`}
-                      >
-                        <FileText className="w-3.5 h-3.5" aria-hidden="true" />
-                        열기
-                      </Button>
+                      <div className="flex items-center gap-1 flex-shrink-0">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setCurrentMeeting(m)}
+                          className="text-xs gap-1.5"
+                          aria-label={`${m.title} 회의 이어보기`}
+                        >
+                          <FileText className="w-3.5 h-3.5" aria-hidden="true" />
+                          열기
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => {
+                            if (confirm(`"${m.title}" 회의를 삭제하시겠습니까?`)) {
+                              deleteMeeting(m.id);
+                            }
+                          }}
+                          className="text-xs text-red-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/20 gap-1"
+                          aria-label={`${m.title} 삭제`}
+                        >
+                          <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                        </Button>
+                      </div>
                     </CardContent>
                   </Card>
                 ))}
