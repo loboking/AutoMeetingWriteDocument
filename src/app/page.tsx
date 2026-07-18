@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { Mic, Play, Upload, FileText, Download, FileUp, Layers, Plus, CreditCard, RefreshCw, Trash2, FolderOpen } from 'lucide-react';
+import { Mic, Play, Upload, FileText, Download, FileUp, Layers, Plus, CreditCard, RefreshCw, Trash2, FolderOpen, Pencil } from 'lucide-react';
 import Link from 'next/link';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
@@ -54,7 +54,7 @@ export default function Home() {
   // selector에서 filter(새 배열 반환)하지 않고 meetings 통째로 받아 컴포넌트 본문에서 filter
   // (zustand 기본 selector가 Object.is 비교 — 인라인 filter는 무한 리렌더 위험).
   const meetings = useMeetingStore(s => s.meetings);
-  const { createMeeting, updateCurrentMeeting, updateMeetingStep, setCurrentMeeting, deleteMeeting } = useMeetingStore();
+  const { createMeeting, updateCurrentMeeting, updateMeetingStep, setCurrentMeeting, deleteMeeting, setMeetings } = useMeetingStore();
   // C안 어댑터 — composite Project를 currentMeeting으로 주입(PrdViewer 회귀 0).
   const openCompositeProject = useMeetingStore((s) => s.openCompositeProject);
   const [meetingTitle, setMeetingTitle] = useState('');
@@ -109,6 +109,19 @@ export default function Home() {
   const [pendingCompositeId, setPendingCompositeId] = useState<string | null>(null);
   // "내 문서" 모달 — 헤더 버튼으로 오픈. 기존 회의(단일/합성) 카드 목록을 팝업으로 표시.
   const [showDocsModal, setShowDocsModal] = useState(false);
+  // 삭제 undo — 도현 설계(pendingDelete 방식, sonner 없이 인라인 배너).
+  // 삭제 클릭 → meetings[]에서 즉시 제거(UI) + 5초 카운트다운 배너. 취소 시 복원, 5초 후 deleteMeeting(본체) 확정.
+  // 주의: store의 deleteMeeting 본문은 그대로 두고(cutScope), 지연/취소 로직은 page.tsx 레벨에서.
+  // 타이머 핸들은 state가 아닌 ref로 보관(re-render 유발 방지 + cleanup 단순화).
+  const pendingDeleteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<{
+    id: string;
+    meeting: typeof meetings[number];
+    remaining: number;
+  } | null>(null);
+  // 진행 화면 title 인라인 편집 — 도현 설계(Pencil 버튼 → input 토글 → updateCurrentMeeting).
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState('');
   // composite Project 보기 진입 래퍼 — currentMeeting이 진행 중(미완료)이면 다이얼로그로 확인,
   // 아니면(null/완료) 바로 openCompositeProject + ② 기획서 탭으로.
   const handleViewComposite = (projectId: string) => {
@@ -120,6 +133,83 @@ export default function Home() {
     openCompositeProject(projectId);
     setTopTab('meetings');
   };
+
+  // 삭제 undo — "내 문서" 모달의 삭제 버튼이 부르는 진입점.
+  // meetings[]에서 즉시 제거(UI 반영) + 5초 카운트다운 배너. tombstone/DB 삭제는 5초 후 deleteMeeting(본체)이 담당.
+  const PENDING_DELETE_MS = 5000;
+  const handlePendingDelete = (id: string) => {
+    const meeting = meetings.find((m) => m.id === id);
+    if (!meeting) return;
+    // 이미 진행 중인 pending 삭제가 있으면 타이머 정리(이전 삭제는 그냥 사라짐 — 드문 케이스).
+    if (pendingDeleteTimerRef.current) {
+      clearTimeout(pendingDeleteTimerRef.current);
+    }
+    // UI에서 즉시 제거. currentMeeting이 대상이면 진행 화면도 닫아 잔상 방지.
+    setMeetings(meetings.filter((m) => m.id !== id));
+    if (currentMeeting?.id === id) {
+      setCurrentMeeting(null);
+    }
+    pendingDeleteTimerRef.current = setTimeout(() => {
+      // 5초 후 확정 — deleteMeeting 본체가 tombstone + clearChatMessages + deleteMeetingRow(DB) 처리.
+      deleteMeeting(id);
+      pendingDeleteTimerRef.current = null;
+      setPendingDelete(null);
+    }, PENDING_DELETE_MS);
+    setPendingDelete({ id, meeting, remaining: 5 });
+  };
+
+  const cancelPendingDelete = () => {
+    if (!pendingDelete) return;
+    if (pendingDeleteTimerRef.current) {
+      clearTimeout(pendingDeleteTimerRef.current);
+      pendingDeleteTimerRef.current = null;
+    }
+    // meetings[]에 복원.
+    setMeetings([...meetings, pendingDelete.meeting]);
+    setPendingDelete(null);
+  };
+
+  // 매초 카운트다운 표시 갱신. pendingDelete가 있을 때만 동작.
+  const pendingDeleteId = pendingDelete?.id;
+  useEffect(() => {
+    if (!pendingDeleteId) return;
+    const interval = setInterval(() => {
+      setPendingDelete((cur) => {
+        if (!cur) return cur;
+        const next = cur.remaining - 1;
+        return next <= 0 ? cur : { ...cur, remaining: next };
+      });
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [pendingDeleteId]); // id가 바뀔 때만 재구독(remaining 변화엔 재생성 X).
+
+  // 컴포넌트 언마운트 시 타이머 누수 방지.
+  useEffect(() => {
+    return () => {
+      if (pendingDeleteTimerRef.current) {
+        clearTimeout(pendingDeleteTimerRef.current);
+        pendingDeleteTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  // title 인라인 편집 시작 — 진행 화면 CardTitle 옆 Pencil 버튼이 호출.
+  const startEditTitle = () => {
+    if (!currentMeeting) return;
+    setTitleDraft(currentMeeting.title);
+    setEditingTitle(true);
+  };
+  const commitEditTitle = () => {
+    const trimmed = titleDraft.trim();
+    if (currentMeeting && trimmed && trimmed !== currentMeeting.title) {
+      updateCurrentMeeting({ title: trimmed });
+    }
+    setEditingTitle(false);
+  };
+  const cancelEditTitle = () => {
+    setEditingTitle(false);
+  };
+
   const handleFileUpload = async (file: File) => {
     setUploadError('');
     setUploading(true);
@@ -273,6 +363,26 @@ export default function Home() {
             </div>
           </div>
         </header>
+
+        {/* 삭제 undo 인라인 배너 — pendingDelete가 있을 때만 표시. sonner(토스트) 없이 Alert 재사용(도현 설계). */}
+        {pendingDelete && (
+          <Alert className="mb-6 border-amber-300 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/30">
+            <AlertDescription className="flex items-center justify-between gap-3 flex-wrap">
+              <span className="text-sm text-amber-900 dark:text-amber-100">
+                회의 &quot;{pendingDelete.meeting.title}&quot;이(가) 삭제되었습니다.
+                <span className="text-amber-700 dark:text-amber-300 ml-1">({pendingDelete.remaining}초 후 영구 삭제)</span>
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={cancelPendingDelete}
+                className="h-7 text-xs border-amber-400 text-amber-800 hover:bg-amber-100 dark:border-amber-700 dark:text-amber-200 dark:hover:bg-amber-900/40"
+              >
+                취소
+              </Button>
+            </AlertDescription>
+          </Alert>
+        )}
 
         {/* 홈 최상위 2탭 — 오너 확정(합성 탭 제거). 합성은 ① 회의록 안에서 자체 완결 후 ② 기획서로.
             ① 회의록(MeetingNotePanel + 다중 선택 합성) / ② 기획서(기존 단일회의 흐름 100% 보존) */}
@@ -454,7 +564,35 @@ export default function Home() {
               <CardHeader className="pb-3 sm:pb-4">
                 <div className="flex items-start sm:items-center justify-between gap-2 sm:gap-3">
                   <div className="flex-1 min-w-0">
-                    <CardTitle className="text-lg sm:text-xl md:text-2xl truncate pr-2">{currentMeeting.title}</CardTitle>
+                    {editingTitle ? (
+                      <div className="flex items-center gap-1.5">
+                        <Input
+                          value={titleDraft}
+                          onChange={(e) => setTitleDraft(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') commitEditTitle();
+                            else if (e.key === 'Escape') cancelEditTitle();
+                          }}
+                          onBlur={commitEditTitle}
+                          autoFocus
+                          className="text-lg sm:text-xl md:text-2xl h-9 px-2 py-1 max-w-[60vw]"
+                          aria-label="회의 제목 편집"
+                        />
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <CardTitle className="text-lg sm:text-xl md:text-2xl truncate pr-2">{currentMeeting.title}</CardTitle>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={startEditTitle}
+                          className="h-7 w-7 p-0 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 shrink-0"
+                          aria-label="회의 제목 편집"
+                        >
+                          <Pencil className="w-3.5 h-3.5" aria-hidden="true" />
+                        </Button>
+                      </div>
+                    )}
                     <CardDescription className="mt-0.5 sm:mt-1 text-xs sm:text-sm">
                       <DateFormat date={currentMeeting.createdAt} />
                     </CardDescription>
@@ -627,11 +765,7 @@ export default function Home() {
                           <Button
                             variant="ghost"
                             size="sm"
-                            onClick={() => {
-                              if (confirm(`"${m.title}" 회의를 삭제하시겠습니까?`)) {
-                                deleteMeeting(m.id);
-                              }
-                            }}
+                            onClick={() => handlePendingDelete(m.id)}
                             className="text-xs text-red-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/20 gap-1"
                             aria-label={`${m.title} 삭제`}
                           >
