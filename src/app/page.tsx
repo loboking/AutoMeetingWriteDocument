@@ -732,7 +732,7 @@ export default function Home() {
                     </h3>
                   </div>
                   {meetings.filter(m => !m.isComposite).map((m) => (
-                    <Card key={m.id} className="border-slate-200 dark:border-slate-700 hover:shadow-md transition-shadow">
+                    <Card key={m.id} className="border-slate-200 dark:border-slate-700 hover:shadow-md transition-shadow cursor-pointer" onClick={() => { setCurrentMeeting(m); setShowDocsModal(false); }}>
                       <CardContent className="p-3 flex items-center justify-between gap-2">
                         <div className="flex-1 min-w-0">
                           <div className="font-medium truncate text-sm">{m.title}</div>
@@ -765,7 +765,7 @@ export default function Home() {
                           <Button
                             variant="ghost"
                             size="sm"
-                            onClick={() => handlePendingDelete(m.id)}
+                            onClick={(e) => { e.stopPropagation(); handlePendingDelete(m.id); }}
                             className="text-xs text-red-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/20 gap-1"
                             aria-label={`${m.title} 삭제`}
                           >
@@ -788,7 +788,7 @@ export default function Home() {
                     </h3>
                   </div>
                   {meetings.filter(m => m.isComposite).map((m) => (
-                    <Card key={m.id} className="border-slate-200 dark:border-slate-700 hover:shadow-md transition-shadow">
+                    <Card key={m.id} className="border-slate-200 dark:border-slate-700 hover:shadow-md transition-shadow cursor-pointer" onClick={() => { setShowDocsModal(false); handleViewComposite(m.id); }}>
                       <CardContent className="p-3 flex items-center justify-between gap-2">
                         <div className="flex-1 min-w-0">
                           <div className="font-medium truncate text-sm">{m.title}</div>
