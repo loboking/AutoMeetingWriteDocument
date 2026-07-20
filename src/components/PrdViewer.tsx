@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { FileText, Download, Copy, Check, Loader2, Plus, Edit, Save, Eye, File, Code, BookOpen, Presentation, Printer, ChevronLeft, ChevronRight, Terminal, CheckCircle2, Circle, ToggleLeft, ToggleRight, Lock, Unlock, AlertTriangle, Share2, X, RefreshCw, Maximize, Info } from 'lucide-react';
+import { FileText, Download, Copy, Check, Loader2, Plus, Edit, Save, Eye, File, Code, BookOpen, Presentation, Printer, ChevronLeft, ChevronRight, Terminal, CheckCircle2, Circle, ToggleLeft, ToggleRight, Lock, Unlock, AlertTriangle, Share2, X, RefreshCw, Maximize, Info, ShieldCheck } from 'lucide-react';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { saveAs } from 'file-saver';
 import ReactMarkdown from 'react-markdown';
@@ -133,6 +133,16 @@ export function PrdViewer() {
   const [staleGuard, setStaleGuard] = useState<{ docType: DocType; parents: DocType[] } | null>(null);
   // '현재 브라우저 기준' 고지 1회 노출 여부 (#10). 영향배너 첫 표시 때만, localStorage 플래그로 재표시 차단.
   const [showScopeHint, setShowScopeHint] = useState(false);
+
+  // 품질 검토 결과 — 현재 활성 문서(activeDoc)를 LLM으로 검증한 이슈 목록.
+  // 오너 요구: "품질 검토" 버튼 → LLM 검증 → 이슈 배너 / 녹색 완료 배지 / 검증 불가 안내.
+  // activeDoc이 바뀌면 결과도 의미가 없어지므로 함께 리셋.
+  const [qualityResult, setQualityResult] = useState<{
+    status: 'idle' | 'checking' | 'done' | 'error';
+    issues?: { severity: 'high' | 'medium' | 'low'; category: string; message: string }[];
+    errorMessage?: string;
+    checkedDoc?: DocType; // 검증을 수행한 문서(전환 시 결과 유지 여부 판단용)
+  }>({ status: 'idle' });
 
   const [editedContent, setEditedContent] = useState('');
   const [copied, setCopied] = useState(false);
@@ -445,6 +455,46 @@ export function PrdViewer() {
       }
     } finally {
       setIsSingleGenerating(false);
+    }
+  };
+
+  // 품질 검토 — 현재 활성 문서(activeDoc) 본문을 /api/quality-check로 보내 LLM 검증.
+  // 오너 요구 흐름: 검토 중 spinner → 이슈 있으면 amber 배너 / 0건이면 녹색 완료 배지 / 에러 시 안내.
+  const handleQualityCheck = async () => {
+    const docKey = activeDoc;
+    const content = documents[docKey]?.trim();
+    if (!content) return; // 본문 없으면 검사 무의미
+    setQualityResult({ status: 'checking', checkedDoc: docKey });
+    try {
+      const response = await authedFetch('/api/quality-check', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          docType: docKey,
+          content,
+          context: currentMeeting?.title,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        setQualityResult({
+          status: 'error',
+          checkedDoc: docKey,
+          errorMessage: data?.message || '검증할 수 없습니다. 잠시 후 다시 시도해주세요.',
+        });
+        return;
+      }
+      setQualityResult({
+        status: 'done',
+        checkedDoc: docKey,
+        issues: Array.isArray(data.issues) ? data.issues : [],
+      });
+    } catch (e) {
+      setQualityResult({
+        status: 'error',
+        checkedDoc: docKey,
+        errorMessage: '검증할 수 없습니다. 잠시 후 다시 시도해주세요.',
+      });
     }
   };
 
@@ -1290,6 +1340,28 @@ export function PrdViewer() {
               </div>
             )}
 
+            {/* 품질 검토 버튼 — 현재 활성 문서를 LLM으로 검증 (오너 요구) */}
+            <Button
+              onClick={handleQualityCheck}
+              disabled={!currentContent || qualityResult.status === 'checking'}
+              title={!currentContent ? '본문이 없어 검증 불가' : '현재 문서를 LLM으로 품질 검증합니다'}
+              size="sm"
+              variant="outline"
+              className="h-8 flex-shrink-0"
+            >
+              {qualityResult.status === 'checking' ? (
+                <>
+                  <Loader2 className="w-4 h-4 sm:mr-2 animate-spin" />
+                  <span className="hidden sm:inline">검토 중...</span>
+                </>
+              ) : (
+                <>
+                  <ShieldCheck className="w-4 h-4 sm:mr-2" />
+                  <span className="hidden sm:inline">품질 검토</span>
+                </>
+              )}
+            </Button>
+
             {/* 공유 버튼 */}
             <Button
               onClick={handleShare}
@@ -1537,7 +1609,7 @@ export function PrdViewer() {
 
             return (
               <div key={doc.key} className="space-y-4">
-                {/* outdated 상단 배너 (#12): 진입 시 자동 모달 없이 조용히 안내 + 직계 부모명.
+                {/* outdated 상단 배너 (#12): 진입 시 자동 모달 없이 조요히 안내 + 직계 부모명.
                     클릭 전엔 아무것도 재생성/변경하지 않음. */}
                 {docHasContent && currentMeeting?.id && getDocStatus(currentMeeting.id, doc.key) === 'outdated' && (
                   <div className="rounded-lg border border-amber-200 bg-amber-50 dark:border-amber-700 dark:bg-amber-900/30 p-3">
@@ -1562,6 +1634,66 @@ export function PrdViewer() {
                         <RefreshCw className="w-3.5 h-3.5 mr-1" />
                         지금 갱신
                       </Button>
+                    </div>
+                  </div>
+                )}
+
+                {/* 품질 검토 결과 배너 (오너 요구) — 활성 문서에 대한 결과만 표시.
+                    checkedDoc이 doc.key와 다르면(=다른 문서 검증 후 전환) 배너 숨김. */}
+                {docHasContent && qualityResult.checkedDoc === doc.key && qualityResult.status === 'done' && (
+                  qualityResult.issues && qualityResult.issues.length > 0 ? (
+                    <div className="rounded-lg border border-amber-200 bg-amber-50 dark:border-amber-700 dark:bg-amber-900/30 p-3">
+                      <div className="flex items-start gap-2">
+                        <AlertTriangle className="w-4 h-4 mt-0.5 text-amber-600 dark:text-amber-400 flex-shrink-0" />
+                        <div className="flex-1 min-w-0 space-y-1.5">
+                          <p className="text-sm font-medium text-amber-800 dark:text-amber-300">
+                            품질 검토: {qualityResult.issues.length}개 이슈 발견
+                          </p>
+                          <ul className="space-y-1">
+                            {qualityResult.issues.map((iss, i) => (
+                              <li key={i} className="text-xs text-amber-700 dark:text-amber-400 flex items-start gap-1.5">
+                                <span className={
+                                  'inline-flex items-center px-1 py-0.5 rounded text-[10px] font-medium flex-shrink-0 ' +
+                                  (iss.severity === 'high'
+                                    ? 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300'
+                                    : iss.severity === 'medium'
+                                      ? 'bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300'
+                                      : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300')
+                                }>
+                                  {iss.severity === 'high' ? '치명' : iss.severity === 'medium' ? '보통' : '경미'}
+                                </span>
+                                <span>
+                                  <span className="font-medium">{iss.category}</span>
+                                  {' — '}
+                                  {iss.message}
+                                </span>
+                              </li>
+                            ))}
+                          </ul>
+                          <p className="text-[11px] text-amber-600 dark:text-amber-400 pt-0.5">
+                            본문을 수정한 뒤 다시 &lsquo;품질 검토&rsquo;를 눌러 재검증할 수 있어요.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="rounded-lg border border-green-200 bg-green-50 dark:border-green-700 dark:bg-green-900/30 p-3">
+                      <div className="flex items-center gap-2">
+                        <CheckCircle2 className="w-4 h-4 text-green-600 dark:text-green-400 flex-shrink-0" />
+                        <p className="text-sm font-medium text-green-800 dark:text-green-300">
+                          품질 검토 통과 · 발견된 이슈가 없습니다
+                        </p>
+                      </div>
+                    </div>
+                  )
+                )}
+                {docHasContent && qualityResult.checkedDoc === doc.key && qualityResult.status === 'error' && (
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800/50 p-3">
+                    <div className="flex items-center gap-2">
+                      <AlertTriangle className="w-4 h-4 text-slate-500 flex-shrink-0" />
+                      <p className="text-sm text-slate-600 dark:text-slate-300">
+                        {qualityResult.errorMessage || '검증할 수 없습니다. 잠시 후 다시 시도해주세요.'}
+                      </p>
                     </div>
                   </div>
                 )}

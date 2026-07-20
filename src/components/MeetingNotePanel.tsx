@@ -3,7 +3,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import {
   Mic, Plus, Trash2, Clock, Users, FileText, ArrowLeft, Sparkles,
-  CheckCircle2, Loader2, AlertCircle,
+  CheckCircle2, Loader2, AlertCircle, ShieldCheck, AlertTriangle,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -540,6 +540,58 @@ function NoteDetail({ note, onBack, onDelete }: NoteDetailProps) {
     setIsEditing(false);
   };
 
+  // 품질 검토 — 회의록 요약(overview/keyPoints/decisions/actionItems)을 /api/quality-check로 보내 검증.
+  // 오너 요구 흐름: 검토 중 spinner → 이슈 있으면 amber 배너 / 0건이면 녹색 완료 배지 / 에러 시 안내.
+  // 회의록은 summary 4개 필드를 직렬화해 본문으로 전달(PRD 단일 본문과 구조가 다름).
+  const [qualityResult, setQualityResult] = useState<{
+    status: 'idle' | 'checking' | 'done' | 'error';
+    issues?: { severity: 'high' | 'medium' | 'low'; category: string; message: string }[];
+    errorMessage?: string;
+  }>({ status: 'idle' });
+
+  const handleQualityCheck = async () => {
+    const summary = note.summary;
+    if (!summary) return;
+    // 회의록 summary 4필드 직렬화 — PRD/단일 본문과 다르게 구조화된 형태를 텍스트로 조합.
+    const lines: string[] = [];
+    if (summary.overview) lines.push(`## 개요\n${summary.overview}`);
+    if (summary.keyPoints?.length) lines.push(`## 핵심 사항\n${summary.keyPoints.map((k) => `- ${k}`).join('\n')}`);
+    if (summary.decisions?.length) lines.push(`## 결정 사항\n${summary.decisions.map((d) => `- ${d}`).join('\n')}`);
+    if (summary.actionItems?.length) lines.push(`## Action Items\n${summary.actionItems.map((a) => `- ${a.task}${a.assignee ? ` (담당: ${a.assignee})` : ''}${a.deadline ? ` [기한: ${a.deadline}]` : ''}`).join('\n')}`);
+    const content = lines.join('\n\n').trim();
+    if (!content) return;
+
+    setQualityResult({ status: 'checking' });
+    try {
+      const response = await authedFetch('/api/quality-check', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          docType: 'meeting-note',
+          content,
+          context: note.title,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        setQualityResult({
+          status: 'error',
+          errorMessage: data?.message || '검증할 수 없습니다. 잠시 후 다시 시도해주세요.',
+        });
+        return;
+      }
+      setQualityResult({
+        status: 'done',
+        issues: Array.isArray(data.issues) ? data.issues : [],
+      });
+    } catch {
+      setQualityResult({
+        status: 'error',
+        errorMessage: '검증할 수 없습니다. 잠시 후 다시 시도해주세요.',
+      });
+    }
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -574,6 +626,22 @@ function NoteDetail({ note, onBack, onDelete }: NoteDetailProps) {
                 <FileText className="w-4 h-4" aria-hidden="true" />
                 편집
               </Button>
+              {/* 품질 검토 버튼 (오너 요구) */}
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleQualityCheck}
+                disabled={!note.summary || qualityResult.status === 'checking'}
+                className="gap-1.5"
+                title={!note.summary ? '요약이 없어 검증 불가' : '이 회의록 요약을 LLM으로 품질 검증합니다'}
+              >
+                {qualityResult.status === 'checking' ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <ShieldCheck className="w-4 h-4" />
+                )}
+                품질 검토
+              </Button>
               <Button
                 variant="ghost"
                 size="sm"
@@ -587,6 +655,61 @@ function NoteDetail({ note, onBack, onDelete }: NoteDetailProps) {
           )}
         </div>
       </div>
+
+      {/* 품질 검토 결과 배너 (오너 요구) */}
+      {qualityResult.status === 'done' && (
+        qualityResult.issues && qualityResult.issues.length > 0 ? (
+          <Alert className="border-amber-200 bg-amber-50 dark:border-amber-700 dark:bg-amber-900/30">
+            <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+            <AlertDescription className="space-y-1.5">
+              <p className="text-sm font-medium text-amber-800 dark:text-amber-300">
+                품질 검토: {qualityResult.issues.length}개 이슈 발견
+              </p>
+              <ul className="space-y-1">
+                {qualityResult.issues.map((iss, i) => (
+                  <li key={i} className="text-xs text-amber-700 dark:text-amber-400 flex items-start gap-1.5">
+                    <span className={
+                      'inline-flex items-center px-1 py-0.5 rounded text-[10px] font-medium flex-shrink-0 ' +
+                      (iss.severity === 'high'
+                        ? 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300'
+                        : iss.severity === 'medium'
+                          ? 'bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300'
+                          : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300')
+                    }>
+                      {iss.severity === 'high' ? '치명' : iss.severity === 'medium' ? '보통' : '경미'}
+                    </span>
+                    <span>
+                      <span className="font-medium">{iss.category}</span>
+                      {' — '}
+                      {iss.message}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+              <p className="text-[11px] text-amber-600 dark:text-amber-400 pt-0.5">
+                요약을 수정한 뒤 다시 &lsquo;품질 검토&rsquo;를 눌러 재검증할 수 있어요.
+              </p>
+            </AlertDescription>
+          </Alert>
+        ) : (
+          <Alert className="border-green-200 bg-green-50 dark:border-green-700 dark:bg-green-900/30">
+            <CheckCircle2 className="w-4 h-4 text-green-600 dark:text-green-400" />
+            <AlertDescription>
+              <p className="text-sm font-medium text-green-800 dark:text-green-300">
+                품질 검토 통과 · 발견된 이슈가 없습니다
+              </p>
+            </AlertDescription>
+          </Alert>
+        )
+      )}
+      {qualityResult.status === 'error' && (
+        <Alert>
+          <AlertCircle className="w-4 h-4" />
+          <AlertDescription>
+            {qualityResult.errorMessage || '검증할 수 없습니다. 잠시 후 다시 시도해주세요.'}
+          </AlertDescription>
+        </Alert>
+      )}
 
       {/* 헤더 */}
       <Card>
