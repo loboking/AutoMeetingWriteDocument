@@ -545,8 +545,9 @@ function NoteDetail({ note, onBack, onDelete }: NoteDetailProps) {
   // 회의록은 summary 4개 필드를 직렬화해 본문으로 전달(PRD 단일 본문과 구조가 다름).
   const [qualityResult, setQualityResult] = useState<{
     status: 'idle' | 'checking' | 'done' | 'error';
-    issues?: { severity: 'high' | 'medium' | 'low'; category: string; message: string }[];
+    issues?: { severity: 'high' | 'medium' | 'low'; category: string; message: string; source: 'glm' | 'codex' | 'common' }[];
     errorMessage?: string;
+    codexSkipped?: boolean; // Codex(OpenAI) 검증 스킵 — 키 없음/쿼터/에러. GLM만 결과 표시.
   }>({ status: 'idle' });
 
   const handleQualityCheck = async () => {
@@ -583,6 +584,7 @@ function NoteDetail({ note, onBack, onDelete }: NoteDetailProps) {
       setQualityResult({
         status: 'done',
         issues: Array.isArray(data.issues) ? data.issues : [],
+        codexSkipped: data?.codexSkipped === true,
       });
     } catch {
       setQualityResult({
@@ -683,9 +685,26 @@ function NoteDetail({ note, onBack, onDelete }: NoteDetailProps) {
                       {' — '}
                       {iss.message}
                     </span>
+                    {(iss.source === 'glm' || iss.source === 'codex' || iss.source === 'common') && (
+                      <span className={
+                        'inline-flex items-center px-1 py-0.5 rounded text-[10px] font-medium flex-shrink-0 ' +
+                        (iss.source === 'glm'
+                          ? 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300'
+                          : iss.source === 'codex'
+                            ? 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300'
+                            : 'bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300')
+                      }>
+                        {iss.source === 'glm' ? 'GLM' : iss.source === 'codex' ? 'Codex' : '공통'}
+                      </span>
+                    )}
                   </li>
                 ))}
               </ul>
+              {qualityResult.codexSkipped && (
+                <p className="text-[11px] text-slate-500 dark:text-slate-400 pt-0.5">
+                  Codex(OpenAI) 검증을 건너뛰었어요 — API 키가 없거나 쿼터/네트워크 문제입니다. GLM 결과만 표시돼요.
+                </p>
+              )}
               <p className="text-[11px] text-amber-600 dark:text-amber-400 pt-0.5">
                 요약을 수정한 뒤 다시 &lsquo;품질 검토&rsquo;를 눌러 재검증할 수 있어요.
               </p>

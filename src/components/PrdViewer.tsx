@@ -139,8 +139,9 @@ export function PrdViewer() {
   // activeDoc이 바뀌면 결과도 의미가 없어지므로 함께 리셋.
   const [qualityResult, setQualityResult] = useState<{
     status: 'idle' | 'checking' | 'done' | 'error';
-    issues?: { severity: 'high' | 'medium' | 'low'; category: string; message: string }[];
+    issues?: { severity: 'high' | 'medium' | 'low'; category: string; message: string; source: 'glm' | 'codex' | 'common' }[];
     errorMessage?: string;
+    codexSkipped?: boolean; // Codex(OpenAI) 검증 스킵 — 키 없음/쿼터/에러. GLM만 결과 표시.
     checkedDoc?: DocType; // 검증을 수행한 문서(전환 시 결과 유지 여부 판단용)
   }>({ status: 'idle' });
 
@@ -488,6 +489,7 @@ export function PrdViewer() {
         status: 'done',
         checkedDoc: docKey,
         issues: Array.isArray(data.issues) ? data.issues : [],
+        codexSkipped: data?.codexSkipped === true,
       });
     } catch (e) {
       setQualityResult({
@@ -1662,6 +1664,18 @@ export function PrdViewer() {
                                 }>
                                   {iss.severity === 'high' ? '치명' : iss.severity === 'medium' ? '보통' : '경미'}
                                 </span>
+                                {(iss.source === 'glm' || iss.source === 'codex' || iss.source === 'common') && (
+                                  <span className={
+                                    'inline-flex items-center px-1 py-0.5 rounded text-[10px] font-medium flex-shrink-0 ' +
+                                    (iss.source === 'glm'
+                                      ? 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300'
+                                      : iss.source === 'codex'
+                                        ? 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300'
+                                        : 'bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300')
+                                  }>
+                                    {iss.source === 'glm' ? 'GLM' : iss.source === 'codex' ? 'Codex' : '공통'}
+                                  </span>
+                                )}
                                 <span>
                                   <span className="font-medium">{iss.category}</span>
                                   {' — '}
@@ -1670,6 +1684,11 @@ export function PrdViewer() {
                               </li>
                             ))}
                           </ul>
+                          {qualityResult.codexSkipped && (
+                            <p className="text-[11px] text-slate-500 dark:text-slate-400 pt-0.5">
+                              Codex(OpenAI) 검증을 건너뛰었어요 — API 키가 없거나 쿼터/네트워크 문제입니다. GLM 결과만 표시돼요.
+                            </p>
+                          )}
                           <p className="text-[11px] text-amber-600 dark:text-amber-400 pt-0.5">
                             본문을 수정한 뒤 다시 &lsquo;품질 검토&rsquo;를 눌러 재검증할 수 있어요.
                           </p>

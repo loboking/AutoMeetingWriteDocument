@@ -23,6 +23,9 @@ export interface QualityIssue {
   severity: 'high' | 'medium' | 'low';
   category: string;
   message: string;
+  // 출처 — GLM(llmComplete) / Codex(OpenAI 직접 fetch) / common(양쪽 모두가 같은 category로 잡은 이슈).
+  // 도현 설계(2026-07-21): cutScope — llmComplete/lib/llm 본문 무변경, Codex는 본 라우트에서만 직접 fetch.
+  source: 'glm' | 'codex' | 'common';
 }
 
 interface QualityBody {
@@ -59,9 +62,9 @@ function docTypeLabel(docType: string): string {
   }
 }
 
-// LLM 품질 검증. 결과로 QualityIssue[] 반환(이슈 0건이면 검증 통과).
-// 프롬프트는 JSON 배열만 반환하도록 강제. 빈 응답/파싱 실패 시 throw.
-async function runQualityCheck(body: QualityBody): Promise<QualityIssue[]> {
+// GLM 품질 검증 — llmComplete(기본 provider) 호출. 결과로 QualityIssue[] 반환.
+// 비즈니스 리스크/논리/누락 관점 강점. Codex와 보완적 각도.
+async function runGlmQualityCheck(body: QualityBody): Promise<QualityIssue[]> {
   const label = docTypeLabel(body.docType);
   const prompt = `당신은 한국 기업의 시니어 PM/기획 리뷰어입니다. 다음 ${label}을 분석해 품질 이슈를 찾아주세요.
 
@@ -99,11 +102,94 @@ ${body.context ? `## 추가 맥락\n${body.context}` : ''}
     maxRetries: 2,
   });
 
+  return parseIssues(rawText, 'glm');
+}
+
+// Codex(OpenAI gpt-4o) 품질 검증 — fetch 직접호출.
+// llmComplete/lib/llm 무변경(cutScope). 문서 완성도/오타/Go-No-Go/디테일 강점 — GLM과 보완적.
+// OPENAI_API_KEY 없거나 429/에러 시 throw → 호출부에서 스킵.
+async function runCodexQualityCheck(body: QualityBody): Promise<QualityIssue[]> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    throw new Error('no-key');
+  }
+
+  const label = docTypeLabel(body.docType);
+  const prompt = `당신은 한국 기업의 시니어 문서 리뷰어입니다. 다음 ${label}을 분석해 완성도/디테일 관점에서 품질 이슈를 찾아주세요.
+
+## 분석 대상 ${label}
+\`\`\`
+${body.content}
+\`\`\`
+
+${body.context ? `## 추가 맥락\n${body.context}` : ''}
+
+## 분석 항목 (중복 가능)
+1. **오타/문법/어색한 표현**: 맞춤법, 중복 단어, 어색한 직역투, 혼용되는 용어
+2. **Go-No-Go 결정 누락**: 회의록이라면 명확한 결정(go/no-go)이 있는지, PRD라면 출시 기준이 명확한지
+3. **구체성 부족**: "적절히"/"추후 협의"/"약간" 등 모호한 표현, 수치/기한/담당자 누락
+4. **구조/가독성**: 빈 섹션, 중복 서술, 논리적 순서 위반, 항목 분류 오류
+5. **디테일/일관성**: 용어 통일, 단위 표기, 날짜 형식, 제품명/기능명 일관성
+
+## 심각도 기준
+- **high**: 즉시 결정/보완이 필요한 치명적 이슈 (Go-No-Go 누락, 핵심 기한/수치 부재 등)
+- **medium**: 보완 권장 (모호한 표현, 구조 흐트러짐)
+- **low**: 사소한 오타/정리 제안
+
+## 출력 형식 (JSON 배열만 반환 — 다른 설명 금지)
+[
+  { "severity": "high", "category": "Go-No-Go 결정 누락", "message": "출시 결정(go/no-go)이 명시되지 않았습니다." },
+  { "severity": "medium", "category": "구체성 부족", "message": "'추후 협의'로 기한이 모호합니다." }
+]
+
+이슈가 없으면 빈 배열 \`[]\`을 반환합니다. 한국어로 작성하세요. JSON 배열 외 텍스트는 출력하지 마세요.`;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 180_000);
+  let resp: Response;
+  try {
+    resp = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o',
+        messages: [
+          { role: 'system', content: KOREAN_OUTPUT_SYSTEM_PROMPT },
+          { role: 'user', content: prompt },
+        ],
+        max_tokens: 4096,
+        temperature: 0.3,
+      }),
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  if (!resp.ok) {
+    // 429/에러 — 호출부에서 스킵하도록 status를 가진 에러로 전달.
+    const e = new Error(`OpenAI ${resp.status}`) as Error & { status?: number };
+    e.status = resp.status;
+    throw e;
+  }
+
+  const data = (await resp.json()) as {
+    choices?: Array<{ message?: { content?: string } }>;
+  };
+  const rawText = data.choices?.[0]?.message?.content ?? '';
+
+  return parseIssues(rawText, 'codex');
+}
+
+// JSON 배열 응답 파싱 — GLM/Codex 공용. source를 주입해 반환.
+// 빈 응답/파싱 실패 시 throw. 정제 패턴은 synthesize-notes/route.ts:127-147 차용.
+function parseIssues(rawText: string, source: 'glm' | 'codex'): QualityIssue[] {
   const content = (rawText || '').trim();
   if (!content) throw new Error('빈 응답');
 
-  // JSON 정제 — synthesize-notes/route.ts:127-147 패턴 차용.
-  // 배열이므로 \\{[\\s\\S]*\\} 대신 \\[[\\s\\S]*\\] 사용.
   const cleaned = content.replace(/[\x00-\x1F\x7F]/g, ' ');
 
   let parsed: unknown;
@@ -116,7 +202,6 @@ ${body.context ? `## 추가 맥락\n${body.context}` : ''}
       parsed = JSON.parse(withoutCodeBlock);
     }
   } else {
-    // 코드 블록 안에 배열이 있는 경우
     const codeBlockMatch = cleaned.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
     if (codeBlockMatch) {
       parsed = JSON.parse(codeBlockMatch[1]);
@@ -129,7 +214,6 @@ ${body.context ? `## 추가 맥락\n${body.context}` : ''}
     throw new Error('LLM 응답이 배열이 아님');
   }
 
-  // 스키마 가드: 각 원소가 {severity, category, message} 형태인지.
   const issues: QualityIssue[] = [];
   for (const item of parsed) {
     if (!item || typeof item !== 'object') continue;
@@ -146,11 +230,43 @@ ${body.context ? `## 추가 맥락\n${body.context}` : ''}
         severity,
         category: category.trim(),
         message: message.trim(),
+        source,
       });
     }
   }
 
   return issues;
+}
+
+// 두 검증기(GLM/Codex) 결과 병합 + 중복 제거.
+// 도현 설계: 단순하게 category 기준. 양쪽이 같은 category를 잡으면 source='common'으로 합침
+// (메시지는 GLM 것 유지 — 클라이언트에 더 익숙한 비즈니스 톤). 그 외는 그대로.
+function mergeIssues(glm: QualityIssue[], codex: QualityIssue[]): QualityIssue[] {
+  if (codex.length === 0) return glm;
+  if (glm.length === 0) return codex;
+
+  const codexCategories = new Set(codex.map(i => i.category));
+  const merged: QualityIssue[] = [];
+  const commonCategories = new Set<string>();
+
+  // GLM 먼저 순회 — common이면 source 교체, 아니면 그대로.
+  for (const issue of glm) {
+    if (codexCategories.has(issue.category)) {
+      commonCategories.add(issue.category);
+      merged.push({ ...issue, source: 'common' });
+    } else {
+      merged.push(issue);
+    }
+  }
+
+  // Codex 추가 — common이 아닌 것만.
+  for (const issue of codex) {
+    if (!commonCategories.has(issue.category)) {
+      merged.push(issue);
+    }
+  }
+
+  return merged;
 }
 
 export async function POST(request: NextRequest) {
@@ -182,10 +298,40 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const issues = await runQualityCheck({ docType, content, context: body.context });
+    // GLM 검증(항상 실행) — llmComplete 기본 provider. provider-agnostic 원칙 유지.
+    let glmIssues: QualityIssue[];
+    try {
+      glmIssues = await runGlmQualityCheck({ docType, content, context: body.context });
+    } catch (error) {
+      // GLM 실패는 전체 실패(기본 provider) — 기존 동작 유지.
+      console.error('[quality-check] GLM 검증 실패:', error);
+      const reason = classifyQcError(error);
+      const status = reason === '429' ? 429 : 503;
+      return NextResponse.json(
+        {
+          error: '품질 검증을 수행할 수 없습니다. 잠시 후 다시 시도해주세요.',
+          reason,
+        },
+        { status }
+      );
+    }
+
+    // Codex(OpenAI) 검증 — 쿼터 시도. 스킵 시 codexSkipped=true (에러 아님).
+    // OPENAI_API_KEY 없음 / 429 / timeout / 네트워크 에러 → GLM 결과만 반환 + 안내.
+    let codexIssues: QualityIssue[] = [];
+    let codexSkipped = false;
+    try {
+      codexIssues = await runCodexQualityCheck({ docType, content, context: body.context });
+    } catch (error) {
+      codexSkipped = true;
+      const reason = classifyQcError(error);
+      console.warn(`[quality-check] Codex 검증 스킵(reason=${reason}):`, error);
+    }
+
+    const issues = mergeIssues(glmIssues, codexIssues);
 
     return NextResponse.json(
-      { issues },
+      { issues, codexSkipped },
       {
         headers: {
           'Cache-Control': 'no-store, no-cache, must-revalidate',
