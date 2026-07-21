@@ -40,6 +40,25 @@ import { CommandPanel } from '@/components/CommandPanel';
 // 전체 내보내기 ZIP에 담을 수 있는 포맷(개별 다운로드와 동일).
 type ExportFormat = 'md' | 'txt' | 'pdf' | 'docx' | 'xlsx' | 'pptx';
 
+// 품질검토 이슈 message용 react-markdown components 매핑.
+// LLM이 마크다운(**, `, - [ ] 등)을 포함한 message를 반환하면 생 문법이 노출되는 문제 방지.
+// prose/Tailwind Typography 미사용(프로젝트 설정 X) → 인라인 components prop로 직접 스타일 지정.
+// 본문(L2068) 풀매핑과 별개로 이슈 message 전용 경량 매핑(cutScope: 본문 무변경).
+// message는 보통 짧은 인라인 텍스트이고 <li> 자식이라 p/ul/ol/li를 인라인 평탄화.
+const issueMessageMarkdownComponents = {
+  h1: ({ children }: { children?: React.ReactNode }) => <strong className="font-semibold">{children}: </strong>,
+  h2: ({ children }: { children?: React.ReactNode }) => <strong className="font-semibold">{children}: </strong>,
+  h3: ({ children }: { children?: React.ReactNode }) => <strong className="font-semibold">{children}: </strong>,
+  h4: ({ children }: { children?: React.ReactNode }) => <strong className="font-semibold">{children} </strong>,
+  p: ({ children }: { children?: React.ReactNode }) => <span className="inline">{children}</span>,
+  ul: ({ children }: { children?: React.ReactNode }) => <span className="inline">{children}</span>,
+  ol: ({ children }: { children?: React.ReactNode }) => <span className="inline">{children}</span>,
+  li: ({ children }: { children?: React.ReactNode }) => <span className="inline">· {children} </span>,
+  strong: ({ children }: { children?: React.ReactNode }) => <strong className="font-semibold">{children}</strong>,
+  em: ({ children }: { children?: React.ReactNode }) => <em>{children}</em>,
+  code: ({ children }: { children?: React.ReactNode }) => <code className="px-1 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-[0.85em] font-mono">{children}</code>,
+} as const;
+
 // 시각화('visual')를 지원하지 않는 문서. 기본 진입은 'preview'로, '시각화' 탭은 유지.
 const NO_VISUAL: DocType[] = ['prd', 'feature-list', 'screen-list', 'user-story', 'api-spec', 'deployment'];
 
@@ -1679,7 +1698,9 @@ export function PrdViewer() {
                                 <span>
                                   <span className="font-medium">{iss.category}</span>
                                   {' — '}
-                                  {iss.message}
+                                  <ReactMarkdown remarkPlugins={[remarkGfm]} components={issueMessageMarkdownComponents}>
+                                    {iss.message}
+                                  </ReactMarkdown>
                                 </span>
                               </li>
                             ))}

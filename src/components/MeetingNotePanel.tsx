@@ -1,6 +1,8 @@
 'use client';
 
 import { useState, useMemo, useEffect } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import {
   Mic, Plus, Trash2, Clock, Users, FileText, ArrowLeft, Sparkles,
   CheckCircle2, Loader2, AlertCircle, ShieldCheck, AlertTriangle,
@@ -24,6 +26,52 @@ import type { MeetingNote, MeetingSummary, TranscriptSegment } from '@/types';
 // "저장 후 종료" 1차 CTA(자기완결). 합성(다중 선택 → PRD 합성) 로직을 이 컴포넌트에서 자체 완결.
 // 합성 완료 시 onSynthesisComplete → 부모가 ② 기획서 탭으로 전환.
 // MeetingRecorder를 mode='note'로 재사용 — 신규 입력 컴포넌트 없음(YAGNI).
+
+// react-markdown components 매핑 — 읽기 모드에서만 사용.
+// GLM summary / 품질검토 이슈 message가 마크다운(#, -, **, - [ ])을 포함하면
+// 생 텍스트로 노출되는 문제 방지. prose/Tailwind Typography 미사용(프로젝트 설정 X) →
+// 인라인 components prop로 직접 스타일 지정. PrdViewer 본문(L2068)은 이미 자체 풀매핑을
+// 쓰고 있으니 여기서는 재사용하지 않고 독립 경량 매핑으로 유지(cutScope: 본문 무변경).
+// 세 용도: (1) summary 본문(블록 단락), (2) 이슈 message(인라인, <li> 자식), (3) 카드 미리보기(line-clamp-2).
+
+// (1) 요약 본문용 — p/ul/ol/li가 블록 흐름. 단락·리스트 구조가 사는 게 자연스러움.
+const summaryMarkdownComponents = {
+  h1: ({ children }: { children?: React.ReactNode }) => <h3 className="text-base font-bold mt-3 mb-1 first:mt-0">{children}</h3>,
+  h2: ({ children }: { children?: React.ReactNode }) => <h3 className="text-base font-bold mt-3 mb-1 first:mt-0">{children}</h3>,
+  h3: ({ children }: { children?: React.ReactNode }) => <h4 className="text-sm font-bold mt-2 mb-1 first:mt-0">{children}</h4>,
+  h4: ({ children }: { children?: React.ReactNode }) => <h4 className="text-sm font-semibold mt-1 mb-0.5 first:mt-0">{children}</h4>,
+  p: ({ children }: { children?: React.ReactNode }) => <p className="mb-2 leading-relaxed last:mb-0">{children}</p>,
+  ul: ({ children }: { children?: React.ReactNode }) => <ul className="mb-2 ml-4 list-disc space-y-1 last:mb-0">{children}</ul>,
+  ol: ({ children }: { children?: React.ReactNode }) => <ol className="mb-2 ml-4 list-decimal space-y-1 last:mb-0">{children}</ol>,
+  li: ({ children }: { children?: React.ReactNode }) => <li>{children}</li>,
+  strong: ({ children }: { children?: React.ReactNode }) => <strong className="font-semibold">{children}</strong>,
+  em: ({ children }: { children?: React.ReactNode }) => <em>{children}</em>,
+  code: ({ children }: { children?: React.ReactNode }) => <code className="px-1 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-[0.85em] font-mono">{children}</code>,
+} as const;
+
+// (2) 이슈 message용 — 보통 짧은 인라인 텍스트. <li> 자식이라 블록 p가 들어가면 줄바꿈이 어색해짐.
+// p/ul/ol/li를 인라인으로 평탄화. 헤딩도 인라인 강조로.
+const inlineMarkdownComponents = {
+  h1: ({ children }: { children?: React.ReactNode }) => <strong className="font-semibold">{children}: </strong>,
+  h2: ({ children }: { children?: React.ReactNode }) => <strong className="font-semibold">{children}: </strong>,
+  h3: ({ children }: { children?: React.ReactNode }) => <strong className="font-semibold">{children}: </strong>,
+  h4: ({ children }: { children?: React.ReactNode }) => <strong className="font-semibold">{children} </strong>,
+  p: ({ children }: { children?: React.ReactNode }) => <span className="inline">{children}</span>,
+  ul: ({ children }: { children?: React.ReactNode }) => <span className="inline">{children}</span>,
+  ol: ({ children }: { children?: React.ReactNode }) => <span className="inline">{children}</span>,
+  li: ({ children }: { children?: React.ReactNode }) => <span className="inline">· {children} </span>,
+  strong: ({ children }: { children?: React.ReactNode }) => <strong className="font-semibold">{children}</strong>,
+  em: ({ children }: { children?: React.ReactNode }) => <em>{children}</em>,
+  code: ({ children }: { children?: React.ReactNode }) => <code className="px-1 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-[0.85em] font-mono">{children}</code>,
+} as const;
+
+// (3) 카드 미리보기 overview용 — p를 line-clamp-2로. 카드 시각 목적(2줄 잘림) 보존.
+const cardPreviewMarkdownComponents = {
+  ...inlineMarkdownComponents,
+  p: ({ children }: { children?: React.ReactNode }) => <p className="line-clamp-2">{children}</p>,
+  ul: ({ children }: { children?: React.ReactNode }) => <ul className="line-clamp-2">{children}</ul>,
+  ol: ({ children }: { children?: React.ReactNode }) => <ol className="line-clamp-2">{children}</ol>,
+} as const;
 
 // 브라우저 UUID(store generateId와 동일 패턴).
 function generateId(): string {
@@ -452,10 +500,14 @@ export function MeetingNotePanel({ onViewComposite }: MeetingNotePanelProps) {
                             )}
                           </div>
                           {/* 서연 P0 2-2: 요약은 한 단계 진하게(font-medium text-slate-700), 메타는 보조화 위에 이미 적용(text-xs). */}
+                          {/* ReactMarkdown — GLM summary가 마크다운(#/-/**)을 포함하면 생 문법이 보이는 문제 방지.
+                              카드 시각 목적(line-clamp-2)은 cardPreviewMarkdownComponents의 p 매핑으로 보존. */}
                           {note.summary?.overview && (
-                            <p className="text-sm font-medium text-slate-700 dark:text-slate-300 mt-2 line-clamp-2">
-                              {note.summary.overview}
-                            </p>
+                            <div className="text-sm font-medium text-slate-700 dark:text-slate-300 mt-2">
+                              <ReactMarkdown remarkPlugins={[remarkGfm]} components={cardPreviewMarkdownComponents}>
+                                {note.summary.overview}
+                              </ReactMarkdown>
+                            </div>
                           )}
                         </div>
                       </div>
@@ -683,7 +735,9 @@ function NoteDetail({ note, onBack, onDelete }: NoteDetailProps) {
                     <span>
                       <span className="font-medium">{iss.category}</span>
                       {' — '}
-                      {iss.message}
+                      <ReactMarkdown remarkPlugins={[remarkGfm]} components={inlineMarkdownComponents}>
+                        {iss.message}
+                      </ReactMarkdown>
                     </span>
                     {(iss.source === 'glm' || iss.source === 'codex' || iss.source === 'common') && (
                       <span className={
@@ -821,14 +875,24 @@ function NoteDetail({ note, onBack, onDelete }: NoteDetailProps) {
                 {s!.overview && (
                   <div>
                     <div className="text-xs font-medium text-slate-500 mb-1">개요</div>
-                    <p className="text-sm">{s!.overview}</p>
+                    <div className="text-sm">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]} components={summaryMarkdownComponents}>
+                        {s!.overview}
+                      </ReactMarkdown>
+                    </div>
                   </div>
                 )}
                 {s!.keyPoints.length > 0 && (
                   <div>
                     <div className="text-xs font-medium text-slate-500 mb-1">핵심 사항 ({s!.keyPoints.length})</div>
                     <ul className="text-sm space-y-1 list-disc pl-5">
-                      {s!.keyPoints.map((k, i) => <li key={i}>{k}</li>)}
+                      {s!.keyPoints.map((k, i) => (
+                        <li key={i}>
+                          <ReactMarkdown remarkPlugins={[remarkGfm]} components={summaryMarkdownComponents}>
+                            {k}
+                          </ReactMarkdown>
+                        </li>
+                      ))}
                     </ul>
                   </div>
                 )}
@@ -836,7 +900,13 @@ function NoteDetail({ note, onBack, onDelete }: NoteDetailProps) {
                   <div>
                     <div className="text-xs font-medium text-slate-500 mb-1">결정 사항 ({s!.decisions.length})</div>
                     <ul className="text-sm space-y-1 list-disc pl-5">
-                      {s!.decisions.map((d, i) => <li key={i}>{d}</li>)}
+                      {s!.decisions.map((d, i) => (
+                        <li key={i}>
+                          <ReactMarkdown remarkPlugins={[remarkGfm]} components={summaryMarkdownComponents}>
+                            {d}
+                          </ReactMarkdown>
+                        </li>
+                      ))}
                     </ul>
                   </div>
                 )}
@@ -847,8 +917,10 @@ function NoteDetail({ note, onBack, onDelete }: NoteDetailProps) {
                       {s!.actionItems.map((a, i) => (
                         <li key={i} className="flex items-start gap-2">
                           <CheckCircle2 className="w-3.5 h-3.5 mt-0.5 text-blue-500 flex-shrink-0" aria-hidden="true" />
-                          <span>
-                            {a.task}
+                          <span className="flex-1">
+                            <ReactMarkdown remarkPlugins={[remarkGfm]} components={summaryMarkdownComponents}>
+                              {a.task}
+                            </ReactMarkdown>
                             {a.assignee && <span className="text-slate-500"> · {a.assignee}</span>}
                             {a.deadline && <span className="text-slate-500"> · {a.deadline}</span>}
                           </span>
