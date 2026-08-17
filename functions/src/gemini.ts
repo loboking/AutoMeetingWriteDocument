@@ -69,6 +69,7 @@ interface GeminiUsageMetadata {
 interface GeminiGenerateResponse {
   candidates?: Array<{
     content?: { parts?: Array<{ text?: string }> };
+    finishReason?: string; // 'MAX_TOKENS'면 출력이 도중에 잘린 것 — 200 OK라도 불완전할 수 있음.
   }>;
   usageMetadata?: GeminiUsageMetadata;
 }
@@ -280,7 +281,12 @@ export async function transcribeWithGemini(
         parts: [{ text: prompt }, audioPart],
       },
     ],
-    generationConfig: { temperature: 0 },
+    generationConfig: {
+      temperature: 0,
+      // 미지정 시 모델 기본값에 걸려 긴 회의(1시간+) 전사가 도중에 잘릴 수 있음.
+      // gemini-2.5-flash/pro 모두 출력 상한 65536 — 넉넉히 잡아 실질적으로 안 걸리게.
+      maxOutputTokens: 65536,
+    },
   };
 
   const url = `${GEMINI_GENERATE_CONTENT_ENDPOINT}/${model}:generateContent?key=${apiKey}`;
@@ -304,6 +310,13 @@ export async function transcribeWithGemini(
   }
 
   const data = (await response.json()) as GeminiGenerateResponse;
+
+  // MAX_TOKENS면 200 OK로 왔어도 전사가 도중에 잘린 것 — 조용히 반토막 결과를
+  // 반환하면 회의 내용이 틀리게 요약되므로 여기서 명시적으로 실패시킨다.
+  if (data.candidates?.[0]?.finishReason === 'MAX_TOKENS') {
+    throw new Error('Gemini STT 응답이 길이 제한으로 잘렸습니다(MAX_TOKENS). 회의가 너무 길 수 있습니다.');
+  }
+
   const parts = data.candidates?.[0]?.content?.parts ?? [];
   const fullText = parts
     .map((p) => p.text ?? '')

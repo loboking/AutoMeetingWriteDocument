@@ -243,6 +243,29 @@ describe('GeminiAudioProvider', () => {
       ).rejects.toThrow();
     });
 
+    it('finishReason이 MAX_TOKENS면 잘린 결과를 그대로 반환하지 않고 에러를 throw한다', async () => {
+      vi.stubGlobal(
+        'fetch',
+        mockFetchOk({
+          candidates: [{ content: { parts: [{ text: '화자 1: 도중에 끊긴 전사' }] }, finishReason: 'MAX_TOKENS' }],
+        })
+      );
+      await expect(
+        new GeminiAudioProvider().transcribe(Buffer.from('audio'))
+      ).rejects.toThrow(/MAX_TOKENS/);
+    });
+
+    it('요청에 넉넉한 maxOutputTokens를 지정한다 (긴 회의 전사가 기본값에 잘리는 것 방지)', async () => {
+      const fetchMock = mockFetchOk(makeGeminiResponse('테스트'));
+      vi.stubGlobal('fetch', fetchMock);
+
+      await new GeminiAudioProvider().transcribe(Buffer.from('audio'));
+
+      const callArgs = (fetchMock as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
+      const body = JSON.parse(callArgs[1].body);
+      expect(body.generationConfig.maxOutputTokens).toBeGreaterThanOrEqual(65536);
+    });
+
     it('요청 body에 base64 inlineData가 포함된다', async () => {
       const fetchMock = mockFetchOk(makeGeminiResponse('테스트'));
       vi.stubGlobal('fetch', fetchMock);
