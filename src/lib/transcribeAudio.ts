@@ -127,7 +127,10 @@ export async function transcribeAudio(
       // 저장소 미설정/업로드 실패 → 작은 파일은 직접 POST로 폴백(안전망)
       console.warn('[transcribeAudio] 저장소 경로 실패, multipart 폴백 시도:', uploadErr);
       if (blob.size > MAX_DIRECT_POST_BYTES) {
-        throw new Error('오디오 업로드에 실패했습니다. 잠시 후 다시 시도해주세요.');
+        // 원인을 사용자에게 그대로 노출 — presign 401/네트워크/CORS/R2 에러가
+        // generic 문구에 묻혀 진단 불가였음(2026-08-20 운영 디버깅).
+        const cause = uploadErr instanceof Error ? uploadErr.message.slice(0, 140) : String(uploadErr);
+        throw new Error(`오디오 업로드에 실패했습니다 — ${cause}`);
       }
       const fd = new FormData();
       fd.append('audioFile', blob, 'audio.webm');
