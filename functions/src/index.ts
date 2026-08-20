@@ -121,6 +121,7 @@ export const sttProxy = onRequest(
         region: 'us-central1',
         geminiKey: !!env.GEMINI_API_KEY,
         supabase: !!process.env.SUPABASE_URL && !!process.env.SUPABASE_ANON_KEY,
+        r2Host: process.env.R2_STORAGE_HOST || null, // presign URL 허용 도메인(R2 전환 진단용)
       };
       if (!env.GEMINI_API_KEY || req.query.probe !== '1') {
         res.status(200).json(base);

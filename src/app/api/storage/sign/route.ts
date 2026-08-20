@@ -34,16 +34,23 @@ function safeExt(ext: string): string {
 // presigned URL 생성(aws4fetch). TTL은 URL에 X-Amz-Expires를 "사인 전에" 심는다 —
 // aws4fetch는 이미 있는 X-Amz-Expires를 서명에 포함한다(라이브러리 내부 확인).
 // 사인 후 파라미터를 추가/변경하면 서명 불일치로 403.
+// PUT은 contentType을 함께 서명에 넣는다 — 미서명 시 R2가 객체를 octet-stream으로 저장하고
+// Gemini가 "Unsupported MIME type" 400으로 거부한다(실측).
 async function presign(
   client: AwsClient,
   method: 'GET' | 'PUT' | 'DELETE',
   key: string,
-  ttlSec: number
+  ttlSec: number,
+  contentType?: string
 ): Promise<string> {
   const url = new URL(`${R2_ENDPOINT}/${R2_BUCKET}/${key}`);
   url.searchParams.set('X-Amz-Expires', String(Math.max(60, Math.min(ttlSec, 86400))));
-  const signed = await client.sign(new Request(url, { method }), {
-    aws: { signQuery: true },
+  const headers: Record<string, string> = {};
+  if (method === 'PUT' && contentType) headers['Content-Type'] = contentType;
+  // allHeaders: Content-Type을 서명에 포함 → R2가 객체를 해당 MIME으로 저장.
+  // 미포함 시 octet-stream으로 저장돼 Gemini가 "Unsupported MIME type" 400으로 거부(실측).
+  const signed = await client.sign(new Request(url, { method, headers }), {
+    aws: { signQuery: true, allHeaders: !!(method === 'PUT' && contentType) },
   } as never);
   return signed.url;
 }
@@ -61,8 +68,9 @@ export async function POST(request: NextRequest) {
     };
     const ext = safeExt((body.ext || '').toLowerCase());
     const key = `${auth.user.id}/${crypto.randomUUID()}.${ext}`;
+    const contentType = body.contentType || 'application/octet-stream';
 
-    const uploadUrl = await presign(client, 'PUT', key, 600);
+    const uploadUrl = await presign(client, 'PUT', key, 600, contentType);
     return NextResponse.json({ key, uploadUrl });
   } catch (error) {
     const message = error instanceof Error ? error.message : '';
