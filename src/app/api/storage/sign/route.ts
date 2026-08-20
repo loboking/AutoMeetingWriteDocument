@@ -56,8 +56,7 @@ async function presign(
 }
 
 export async function POST(request: NextRequest) {
-  // PUT presign — 업로드용. key는 서버가 생성(유저 격리).
-  // mode:'multipart-create' → CreateMultipartUpload(uploadId 반환)
+  console.log('[storage/sign] POST 진입', { ua: request.headers.get('user-agent')?.slice(0, 60) });
   try {
     const auth = await requireUser(request);
     if (auth.response) return auth.response;
@@ -102,8 +101,7 @@ export async function POST(request: NextRequest) {
 }
 
 export async function PUT(request: NextRequest) {
-  // GET presign — STT 서버가 fetch할 읽기 URL.
-  // mode:'multipart-part' → 파트 업로드 presign. mode:'multipart-complete' → 완료.
+  console.log('[storage/sign] PUT 진입');
   try {
     const auth = await requireUser(request);
     if (auth.response) return auth.response;
