@@ -17,10 +17,15 @@ describe('validateAudio', () => {
     expect(r.ok).toBe(false);
   });
 
-  it('50MB 초과는 ok:false이고 error에 크기 안내 포함', () => {
+  it('상한(500MB) 초과는 ok:false이고 error에 크기 안내 포함', () => {
     const r = validateAudio({ name: 'a.mp3', type: 'audio/mpeg', size: MAX_AUDIO_SIZE + 1 });
     expect(r.ok).toBe(false);
     expect(r.error).toMatch(/MB/);
+  });
+
+  it('50MB 초과 500MB 이하는 ok:true (R2 전환 — 구 50MB 제한 해제)', () => {
+    const r = validateAudio({ name: 'a.mp3', type: 'audio/mpeg', size: 60 * 1024 * 1024 });
+    expect(r.ok).toBe(true);
   });
 
 });
