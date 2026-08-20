@@ -89,6 +89,7 @@ export async function transcribeAudio(
 ): Promise<TranscribeResult> {
   const storage = getRecordingStorage();
   let ref: string | null = null;
+  let succeeded = false;
 
   // [DEBUG 35MB STT] 원인 확정용 — 어디로 가는지(Storage/Function/Vercel). 오너 콘솔 확인 후 제거.
   console.log('[transcribeAudio] STT 시작', {
@@ -115,6 +116,14 @@ export async function transcribeAudio(
       });
       response = await callTranscribe({ signedUrl, language });
     } catch (uploadErr) {
+      // 50MB(Storage 버킷 한계) 초과 — 안내 후 재시도 유도. multipart 폴백도 4.5MB 벽이라 무의미.
+      const msg = uploadErr instanceof Error ? uploadErr.message : String(uploadErr);
+      if (msg.includes('exceeded the maximum allowed size') || msg.includes('Payload too large') || msg.includes('413')) {
+        throw new Error(
+          `녹음 파일이 저장소 한계(50MB)를 초과했습니다 (${Math.round(blob.size / 1048576)}MB). ` +
+          '관리자에게 Storage 업로드 한도 상향을 요청하세요.'
+        );
+      }
       // 저장소 미설정/업로드 실패 → 작은 파일은 직접 POST로 폴백(안전망)
       console.warn('[transcribeAudio] 저장소 경로 실패, multipart 폴백 시도:', uploadErr);
       if (blob.size > MAX_DIRECT_POST_BYTES) {
@@ -132,6 +141,7 @@ export async function transcribeAudio(
     if (response.ok) {
       const result = pickFromResponse(data);
       if (!result.text.trim()) throw new Error('변환된 텍스트가 비어 있습니다.');
+      succeeded = true;
       return result;
     }
 
@@ -141,13 +151,15 @@ export async function transcribeAudio(
       if (!browser || !browser.text.trim()) {
         throw new Error(deps.browserError || '브라우저 음성 변환에 실패했습니다.');
       }
+      succeeded = true;
       return { text: browser.text, segments: browser.segments, duration: browser.duration };
     }
 
     // 3) 그 외 서버 에러
     throw new Error(data.message || data.error || '음성 변환에 실패했습니다.');
   } finally {
-    // 변환 성공/실패/폴백 어느 경로든 임시 사본 정리(베스트에포트)
-    if (ref) void storage.delete(ref);
+    // 성공 시에만 임시 사본 정리. 실패 시 Storage에 보존 — 브라우저 blob은 메모리라
+    // 화면을 떠나면 녹음이 소실되므로, 저장본이 남아 있어야 재시도가 가능하다(오너: "날라가버려" 방지).
+    if (ref && succeeded) void storage.delete(ref);
   }
 }

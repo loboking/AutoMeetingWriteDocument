@@ -3,7 +3,7 @@
 // STT provider 패턴(stt/types.ts)과 동일하게 구현체를 갈아끼울 수 있게 한다.
 // 현재 구현: Supabase Storage. 추후: Google Drive 등(구현체만 추가).
 
-export type RecordingStorageName = 'supabase' | 'google-drive';
+export type RecordingStorageName = 'supabase' | 'r2' | 'google-drive';
 
 export interface UploadResult {
   ref: string; // 저장소 내부 참조(Supabase=object path, Drive=fileId 등). 삭제/URL생성에 사용.

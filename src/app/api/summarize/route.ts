@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireUser } from '@/lib/apiAuth';
 import type { MeetingSummary } from '@/types';
 import { llmComplete } from '@/lib/llm';
+import { needsChunking, splitTranscript, mergeSummaries } from './chunkSummarize';
 
 export const runtime = 'nodejs';
 // Vercel 함수 상한 (요약은 단일 호출이라 180초로 충분, generate-doc은 300초)
@@ -151,10 +152,20 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: '텍스트가 필요합니다.' }, { status: 400 });
     }
 
-    const summary = await summarizeWithGPT(text, context);
+    // 긴 회의록(>12K자)은 1회 호출에 통째 넣으면 출력 JSON이 8192 토큰에서 잘려
+    // 파싱 실패 → 가짜 mock 반환(사용자 체감 "회의 짤림"). 분할 후 순차 요약(map-reduce).
+    // 순차인 이유: GLM은 동시 heavy(8192+) 호출 시 500 실패(prdChunkGenerator 관측).
+    const chunks = needsChunking(text) ? splitTranscript(text) : [text];
+    console.log('[API] 요약 분할', { totalLen: text.length, chunks: chunks.length });
+
+    const partialSummaries: MeetingSummary[] = [];
+    for (const chunk of chunks) {
+      partialSummaries.push(await summarizeWithGPT(chunk, context));
+    }
+    const summary = chunks.length > 1 ? mergeSummaries(partialSummaries) : partialSummaries[0]!;
 
     const duration = Date.now() - startTime;
-    console.log(`[API] 요약 완료 - ${duration}ms`);
+    console.log(`[API] 요약 완료 - ${duration}ms (청크 ${chunks.length}개)`);
     console.log('[API] 최종 응답 overview:', summary?.overview?.substring(0, 100));
 
     // 캐시 방지 헤더 추가

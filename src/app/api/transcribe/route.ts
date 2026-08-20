@@ -7,7 +7,7 @@ import { NO_STT_PROVIDER } from '@/lib/stt/types';
 export const runtime = 'nodejs';
 // maxDuration 900: 59분 회의록 Gemini generateContent(301s+) 처리. Vercel Pro 플랜 필수(900s 상한).
 // Hobby 플랜이면 300s로 제한 → 배포 시 Vercel이 거부/캡. 그땐 하이브리드(Whisper chunked + Gemini 화자 추정) 백업안.
-export const maxDuration = 900;
+export const maxDuration = 300;
 
 // 단일 Whisper 호출 상한(25MB 직전). 분할 가능 포맷(mp3)은 청크로 우회 → 크기 무관.
 const SINGLE_CALL_MAX_BYTES = 24 * 1024 * 1024;
@@ -20,14 +20,15 @@ function isTooLarge(byteLength: number, contentType?: string): boolean {
   return byteLength > SINGLE_CALL_MAX_BYTES;
 }
 
-// signedUrl은 신뢰 도메인(Supabase Storage)만 허용 — 임의 URL fetch(SSRF) 차단.
+// signedUrl은 신뢰 도메인(Supabase Storage / R2)만 허용 — 임의 URL fetch(SSRF) 차단.
 function isAllowedSignedUrl(url: string): boolean {
   try {
     const u = new URL(url);
     if (u.protocol !== 'https:') return false;
     const base = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    if (!base) return false;
-    return u.host === new URL(base).host;
+    if (base && u.host === new URL(base).host) return true;
+    const r2Host = process.env.NEXT_PUBLIC_R2_BUCKET_ENDPOINT_HOST;
+    return !!r2Host && u.host === r2Host;
   } catch {
     return false;
   }

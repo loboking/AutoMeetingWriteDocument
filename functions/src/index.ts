@@ -27,13 +27,15 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { loadGeminiEnv, transcribeWithGemini } from './gemini';
 import type { Request, Response } from 'express';
 
-// Supabase Storage 도메인만 허용 — 임의 URL fetch(SSRF) 차단.
-// 메인 앱 NEXT_PUBLIC_SUPABASE_URL 과 동일한 호스트인지 검증.
+// Supabase Storage / R2 도메인만 허용 — 임의 URL fetch(SSRF) 차단.
+// 메인 앱 NEXT_PUBLIC_SUPABASE_URL 또는 R2_STORAGE_HOST(있으면)와 동일한 호스트인지 검증.
 function isAllowedSignedUrl(url: string, supabaseUrl: string): boolean {
   try {
     const u = new URL(url);
     if (u.protocol !== 'https:') return false;
-    return u.host === new URL(supabaseUrl).host;
+    if (u.host === new URL(supabaseUrl).host) return true;
+    const r2Host = process.env.R2_STORAGE_HOST;
+    return !!r2Host && u.host === r2Host;
   } catch {
     return false;
   }
@@ -104,6 +106,7 @@ export const sttProxy = onRequest(
       'SUPABASE_URL',
       'SUPABASE_ANON_KEY',
       'PROD_ORIGINS',
+      'R2_STORAGE_HOST',
     ],
   },
   async (req: Request, res: Response) => {

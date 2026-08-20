@@ -4,8 +4,15 @@
 
 import * as XLSX from 'xlsx';
 import PptxGenJS from 'pptxgenjs';
-import { Document as DocxDocument, Packer, Paragraph, TextRun, HeadingLevel } from 'docx';
+import {
+  Document as DocxDocument, Packer, Paragraph, TextRun, HeadingLevel,
+  Table as DocxTable, TableRow, TableCell, WidthType, ShadingType,
+} from 'docx';
 import { prerenderMermaid, lookupDiagram, type PrerenderResult } from './mermaidExport';
+import { groupSemanticSections, dropEmptySections } from './docgen/semanticSection';
+import { planSlides, itemsToLines } from './docgen/pptPlanner';
+import { parseInlineRuns } from './docgen/inlineRuns';
+import type { SlidePlan } from './docgen/types';
 
 // PDF 내보내기(html2pdf)용 스타일. 인쇄(handlePrint)와 동일 톤의 컬러 헤더/표 디자인.
 export const PDF_EXPORT_CSS = `
@@ -155,104 +162,161 @@ export function contentToHtml(content: string, diagrams?: PrerenderResult): stri
 }
 
 // Blob 생성(ZIP 묶기 + 개별 다운로드 공용). saveAs는 호출부에서.
-export async function buildDocxBlob(content: string): Promise<Blob> {
-  // 마크다운을 파싱하여 Word 문서 생성
-  const lines = content.split('\n');
-  const paragraphs: Paragraph[] = [];
+// SemanticSection(docgen AST) 기반 → docx Table API로 진짜 표, 코드블록 모노스페이스 렌더.
+// 기존 라인 직역은 표를 "a | b" 텍스트 한 줄로 평탄화하고 코드 내용을 평문으로 떨어뜨렸음(치명).
+const DOCX_BRAND = '2563EB';
 
-  lines.forEach(line => {
-    const trimmed = line.trim();
+function docxHeadingLevel(level: number): (typeof HeadingLevel)[keyof typeof HeadingLevel] {
+  switch (level) {
+    case 1: return HeadingLevel.HEADING_1;
+    case 2: return HeadingLevel.HEADING_2;
+    case 3: return HeadingLevel.HEADING_3;
+    case 4: return HeadingLevel.HEADING_4;
+    case 5: return HeadingLevel.HEADING_5;
+    case 6: return HeadingLevel.HEADING_6;
+    default: return HeadingLevel.HEADING_1;
+  }
+}
 
-    // 빈 줄
-    if (!trimmed) {
-      paragraphs.push(new Paragraph({ text: '' }));
-      return;
-    }
+// 인라인 마커(**/`/*/~~)를 docx TextRun(bold/italic/strike/code 폰트)로 복원.
+function richRuns(text: string): TextRun[] {
+  return parseInlineRuns(text).map(
+    (r) =>
+      new TextRun({
+        text: r.text,
+        bold: r.bold,
+        italics: r.italic,
+        strike: r.strike,
+        font: r.code ? 'Consolas' : undefined,
+      })
+  );
+}
 
-    // 헤더 처리 (# ## ### #### ##### ######)
-    const headerMatch = trimmed.match(/^(#{1,6})\s+(.+)$/);
-    if (headerMatch) {
-      const level = headerMatch[1].length;
-      const text = headerMatch[2];
-      let headingLevel: typeof HeadingLevel[keyof typeof HeadingLevel];
-
-      switch (level) {
-        case 1: headingLevel = HeadingLevel.HEADING_1; break;
-        case 2: headingLevel = HeadingLevel.HEADING_2; break;
-        case 3: headingLevel = HeadingLevel.HEADING_3; break;
-        case 4: headingLevel = HeadingLevel.HEADING_4; break;
-        case 5: headingLevel = HeadingLevel.HEADING_5; break;
-        case 6: headingLevel = HeadingLevel.HEADING_6; break;
-        default: headingLevel = HeadingLevel.HEADING_1;
-      }
-
-      paragraphs.push(new Paragraph({
-        text: text,
-        heading: headingLevel,
-        spacing: { before: 200, after: 100 }
-      }));
-      return;
-    }
-
-    // 볼드 처리 (**text**)
-    if (trimmed.includes('**')) {
-      const parts = trimmed.split(/\*\*(.+?)\*\*/);
-      const runs: TextRun[] = parts.map((part, i) =>
-        i % 2 === 0 ? new TextRun(part) : new TextRun({ text: part, bold: true })
-      );
-      paragraphs.push(new Paragraph({ children: runs, spacing: { after: 100 } }));
-      return;
-    }
-
-    // 리스트 처리 (-, *, +, 1.)
-    const listMatch = trimmed.match(/^[\-\*\+]\s+(.+)$/);
-    const numberMatch = trimmed.match(/^\d+\.\s+(.+)$/);
-
-    if (listMatch || numberMatch) {
-      const text = listMatch ? listMatch[1] : numberMatch![1];
-      paragraphs.push(new Paragraph({
+// 마크다운 표(rows[][]) → docx Table. 헤더 행 브랜드 강조 + 본문 줄무늬.
+function tableFromRows(rows: string[][]): DocxTable {
+  const [header, ...body] = rows;
+  const headerCells = (header ?? []).map(
+    (c) =>
+      new TableCell({
+        shading: { fill: DOCX_BRAND, type: ShadingType.CLEAR, color: 'auto' },
         children: [
-          new TextRun({ text: '• ', bold: true }),
-          new TextRun(text)
+          new Paragraph({
+            children: [new TextRun({ text: c.trim(), bold: true, color: 'FFFFFF' })],
+          }),
         ],
-        indent: { left: 720 },
-        spacing: { after: 50 }
-      }));
-      return;
-    }
+      })
+  );
+  const headerRow = new TableRow({ tableHeader: true, children: headerCells });
+  const bodyRows = body.map(
+    (row, ri) =>
+      new TableRow({
+        children: row.map(
+          (c) =>
+            new TableCell({
+              shading: ri % 2
+                ? { fill: 'F3F4F6', type: ShadingType.CLEAR, color: 'auto' }
+                : undefined,
+              children: [new Paragraph({ children: richRuns(c.trim()) })],
+            })
+        ),
+      })
+  );
+  return new DocxTable({
+    rows: [headerRow, ...bodyRows],
+    width: { size: 9000, type: WidthType.DXA }, // A4 본문 폭(twips) — PERCENTAGE size:100은 2%로 폭 붕괴
+  });
+}
 
-    // 테이블 처리 (|)
-    if (trimmed.includes('|')) {
-      const cells = trimmed.split('|').filter((_, i, arr) => i > 0 && i < arr.length - 1);
-      // 간단한 테이블 처리 - 나중에 개선 가능
-      if (cells.length > 1) {
-        paragraphs.push(new Paragraph({
-          text: cells.join(' | '),
-          spacing: { after: 50 }
-        }));
-        return;
+// 코드/mermaid 블록 → 검은 배경 모노스페이스 문단(줄별). mermaid는 소스를 코드로(이미지는 P1).
+function codeParagraphs(code: string, isMermaid: boolean, lang?: string): Paragraph[] {
+  if (!code.trim()) return []; // 빈 코드펜스 → 빈 검은 상자 방지.
+  const lines = code.split('\n');
+  if (isMermaid) {
+    lines.unshift('mermaid 다이어그램 원본 소스:');
+  } else if (lang && lang !== 'text') {
+    lines.unshift(`${lang}:`);
+  }
+  return lines.map((ln) =>
+    new Paragraph({
+      children: [new TextRun({ text: ln || ' ', font: 'Consolas', color: 'F9FAFB' })],
+      shading: { fill: '1F2937', type: ShadingType.CLEAR, color: 'auto' },
+      spacing: { after: 0, line: 276 },
+    })
+  );
+}
+
+export async function buildDocxBlob(content: string): Promise<Blob> {
+  const sections = dropEmptySections(groupSemanticSections(content));
+  const children: Array<Paragraph | DocxTable> = [];
+
+  for (const section of sections) {
+    if (section.heading && section.heading.text.trim()) {
+      children.push(
+        new Paragraph({
+          children: richRuns(section.heading.text),
+          heading: docxHeadingLevel(section.heading.level),
+          spacing: { before: 240, after: 100 },
+        })
+      );
+    }
+    for (const block of section.blocks) {
+      switch (block.type) {
+        case 'heading':
+          children.push(
+            new Paragraph({
+              children: richRuns(block.text ?? ''),
+              heading: docxHeadingLevel(block.level ?? 4),
+              spacing: { before: 160, after: 80 },
+            })
+          );
+          break;
+        case 'paragraph':
+          children.push(new Paragraph({ children: richRuns(block.text ?? ''), spacing: { after: 100 } }));
+          break;
+        case 'quote':
+          children.push(
+            new Paragraph({
+              children: [new TextRun({ text: block.text ?? '', italics: true, color: '4B5563' })],
+              indent: { left: 360 },
+              spacing: { after: 100 },
+            })
+          );
+          break;
+        case 'list':
+          for (const line of itemsToLines(block.items)) {
+            children.push(new Paragraph({ children: richRuns(line), spacing: { after: 40 } }));
+          }
+          break;
+        case 'table':
+          if (block.rows && block.rows.length > 0) children.push(tableFromRows(block.rows));
+          break;
+        case 'code':
+        case 'mermaid':
+          children.push(...codeParagraphs(block.code ?? '', block.type === 'mermaid', block.lang));
+          break;
+        case 'thematicBreak':
+          children.push(
+            new Paragraph({
+              text: '',
+              border: { bottom: { color: 'E5E7EB', space: 1, style: 'single', size: 6 } },
+              spacing: { before: 120, after: 120 },
+            })
+          );
+          break;
+        default:
+          break;
       }
     }
+  }
 
-    // 코드 블록 처리 (```로 감싸진 부분)
-    if (trimmed.startsWith('```')) {
-      return; // 코드 블록 시작/종료 무시
-    }
-
-    // 일반 텍스트
-    paragraphs.push(new Paragraph({
-      text: trimmed,
-      spacing: { after: 100 }
-    }));
-  });
+  // 빈 입력(heading도 block도 없음) → 빈 문서 대신 폴백.
+  if (children.length === 0) {
+    children.push(new Paragraph({ text: '(내용 없음)', heading: HeadingLevel.HEADING_1 }));
+  }
 
   const doc = new DocxDocument({
-    sections: [{
-      properties: {},
-      children: paragraphs
-    }]
+    sections: [{ properties: {}, children }],
   });
-
   return Packer.toBlob(doc);
 }
 
@@ -307,166 +371,144 @@ export function buildXlsxBlob(content: string): Blob {
   return new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
 }
 
+// PPT 브랜드 색 — Word/docx와 동일 톤 유지.
+const PPTX_BRAND = '2563EB';
+const PPTX_INK = '1F2937';
+const PPTX_SUB = '4B5563';
+
+// SlidePlan 1장 → pptxgenjs 슬라이드 1장 렌더. planner가 이미 밀도/분할을 끝낸 상태.
+function renderPptxSlide(
+  pptx: PptxGenJS,
+  slide: PptxGenJS.Slide,
+  plan: SlidePlan,
+  diagrams: PrerenderResult
+): void {
+  // 표지: 브랜드 배경 + 중앙 대제목. 인라인 마커(**/code) run 복원.
+  if (plan.kind === 'title') {
+    slide.background = { color: PPTX_BRAND };
+    slide.addText(
+      parseInlineRuns(plan.title).map((r) => ({
+        text: r.text,
+        options: { bold: true, italic: r.italic, fontFace: r.code ? 'Courier New' : undefined },
+      })),
+      { x: 0.5, y: 2.6, w: 9, h: 1.8, fontSize: 40, align: 'center', color: 'FFFFFF' }
+    );
+    return;
+  }
+  // 섹션/표/이미지 공통: 상단 제목 + 컬러 언더라인. 분할 슬라이드는 (i/N) 접미.
+  const partSuffix =
+    plan.partCount && plan.partCount > 1 && plan.partIndex !== undefined
+      ? ` (${plan.partIndex + 1}/${plan.partCount})`
+      : '';
+  slide.addText(
+    parseInlineRuns(plan.title + partSuffix).map((r) => ({
+      text: r.text,
+      options: { bold: r.bold ?? true, italic: r.italic, fontFace: r.code ? 'Courier New' : undefined },
+    })),
+    { x: 0.5, y: 0.5, w: 9, h: 0.7, fontSize: 28, color: PPTX_INK }
+  );
+  slide.addShape(pptx.ShapeType.rect, {
+    x: 0.5, y: 1.18, w: 3, h: 0.045, fill: { color: PPTX_BRAND },
+  });
+
+  // 표 슬라이드. colW(열 균등분할) + autoPage(셀 텍스트 길 래핑 시 다음 슬라이드로)로 footer 넘침 방지.
+  if (plan.kind === 'table' && plan.table) {
+    const colCount = Math.max(1, plan.table.headers.length);
+    const rows: PptxGenJS.TableRow[] = [
+      plan.table.headers.map((h) => ({
+        text: h,
+        options: { bold: true, color: 'FFFFFF', fill: { color: PPTX_BRAND }, fontSize: 12 },
+      })),
+      ...plan.table.rows.map((r, ri) =>
+        r.map((c) => ({
+          text: c,
+          options: {
+            color: PPTX_INK,
+            fill: { color: ri % 2 ? 'F3F4F6' : 'FFFFFF' },
+            fontSize: 11,
+          },
+        }))
+      ),
+    ];
+    slide.addTable(rows, {
+      x: 0.5, y: 1.5, w: 9,
+      colW: Array(colCount).fill(9 / colCount),
+      autoPage: true, autoPageRepeatHeader: true,
+      border: { type: 'solid', pt: 0.5, color: 'E5E7EB' }, valign: 'middle',
+    });
+    return;
+  }
+
+  // 이미지/코드 슬라이드. mermaid는 사전 래스터화 PNG, 실패 시 코드 폴백.
+  if (plan.kind === 'image' && plan.codeBlock) {
+    if (plan.codeBlock.lang === 'mermaid') {
+      const img = lookupDiagram(diagrams, plan.codeBlock.code);
+      if (img) {
+        const dispW = Math.min(8.6, img.w / 96);
+        const dispH = Math.min(dispW * (img.h / img.w), 4.6);
+        slide.addImage({ data: img.dataUrl, x: (10 - dispW) / 2, y: 1.6, w: dispW, h: dispH });
+        return;
+      }
+    }
+    slide.addText(plan.codeBlock.code, {
+      x: 0.8, y: 1.5, w: 8.4, h: 4.8, fontSize: 10, fontFace: 'Courier New',
+      color: PPTX_SUB, valign: 'top',
+    });
+    return;
+  }
+
+  // 섹션(불릿). itemsToLines가 '· '/'N. ' 접두를 달고 있어 bullet:true 없이 문자열로 표현.
+  // parseInlineRuns가 **/`/*/~~ 마커를 run별 bold/code/italic로 복원. fit:'shrink'는 overflow 안전망.
+  if (plan.bullets && plan.bullets.length > 0) {
+    const textRows: PptxGenJS.TextProps[] = [];
+    for (const b of plan.bullets) {
+      const runs = parseInlineRuns(b);
+      if (runs.length === 0) continue;
+      runs.forEach((r, i) => {
+        textRows.push({
+          text: r.text,
+          options: {
+            breakLine: i === runs.length - 1,
+            bold: r.bold,
+            italic: r.italic,
+            fontSize: 16,
+            color: PPTX_SUB,
+            fontFace: r.code ? 'Courier New' : undefined,
+            paraSpaceAfter: 8,
+          },
+        });
+      });
+    }
+    slide.addText(textRows, { x: 0.7, y: 1.5, w: 8.6, h: 5.0, valign: 'top', fit: 'shrink' });
+  }
+}
+
 export async function buildPptxBlob(content: string): Promise<Blob> {
-  // ★ 내보내기 전 mermaid 블록을 PNG로 사전 래스터화 (화면 SVG는 재사용 불가)
+  // mermaid 블록은 내보내기 전 PNG로 사전 래스터화(화면 SVG 재사용 불가).
   const diagrams = await prerenderMermaid(content);
+  const sections = dropEmptySections(groupSemanticSections(content));
+  const plans = planSlides(sections);
 
   const pptx = new PptxGenJS();
   pptx.defineLayout({ name: 'A4', width: 10, height: 7.5 });
   pptx.layout = 'A4';
 
-  const BRAND = '2563EB';
-  const INK = '1F2937';
-  const SUB = '4B5563';
-
-  // 브랜드 마스터: 상단 컬러바 + 푸터 + 페이지번호
+  // 브랜드 마스터: 상단 컬러바 + 푸터 + 페이지번호.
   pptx.defineSlideMaster({
     title: 'BRAND',
     background: { color: 'FFFFFF' },
     objects: [
-      { rect: { x: 0, y: 0, w: '100%', h: 0.16, fill: { color: BRAND } } },
+      { rect: { x: 0, y: 0, w: '100%', h: 0.16, fill: { color: PPTX_BRAND } } },
       { text: { text: 'MeetingAutoDocs', options: { x: 0.4, y: 7.05, w: 5, h: 0.3, fontSize: 9, color: '9CA3AF' } } },
     ],
     slideNumber: { x: 9.0, y: 7.05, w: 0.7, h: 0.3, fontSize: 9, color: '9CA3AF', align: 'right' },
   });
 
-  const lines = content.split('\n');
-
-  // 제목 슬라이드 (브랜드 배경)
-  const firstLine = lines.find((l) => l.match(/^#{1,6}\s/))?.replace(/^#+\s*/, '') || lines[0] || '문서';
-  const titleSlide = pptx.addSlide();
-  titleSlide.background = { color: BRAND };
-  titleSlide.addText(firstLine, {
-    x: 0.5, y: 2.6, w: 9, h: 1.8, fontSize: 40, bold: true, align: 'center', color: 'FFFFFF',
-  });
-
-  let currentSlide: PptxGenJS.Slide = pptx.addSlide({ masterName: 'BRAND' });
-  let yPosition = 0.6;
-  const newSlide = () => {
-    currentSlide = pptx.addSlide({ masterName: 'BRAND' });
-    yPosition = 0.6;
-  };
-  const ensureSpace = (need: number) => {
-    if (yPosition + need > 6.9) newSlide();
-  };
-
-  // fence/table 상태머신
-  let inFence = false;
-  let fenceLang = '';
-  let fenceBuf: string[] = [];
-  let tableBuf: string[][] = [];
-
-  const flushTable = () => {
-    if (tableBuf.length === 0) return;
-    ensureSpace(Math.min(0.4 * tableBuf.length + 0.3, 4));
-    const rows = tableBuf.map((cells, ri) =>
-      cells.map((c) => ({
-        text: c.trim(),
-        options:
-          ri === 0
-            ? { bold: true, color: 'FFFFFF', fill: { color: BRAND }, fontSize: 12 }
-            : { color: INK, fill: { color: ri % 2 ? 'F3F4F6' : 'FFFFFF' }, fontSize: 11 },
-      }))
-    );
-    currentSlide.addTable(rows as unknown as PptxGenJS.TableRow[], {
-      x: 0.5, y: yPosition, w: 9, border: { type: 'solid', pt: 0.5, color: 'E5E7EB' },
-      valign: 'middle',
-    });
-    yPosition += Math.min(0.42 * tableBuf.length + 0.3, 4);
-    tableBuf = [];
-  };
-
-  for (const line of lines) {
-    const trimmed = line.trim();
-
-    // ── 코드펜스 토글 ──
-    if (trimmed.startsWith('```')) {
-      if (!inFence) {
-        inFence = true;
-        fenceLang = trimmed.slice(3).trim().toLowerCase();
-        fenceBuf = [];
-      } else {
-        flushTable();
-        if (fenceLang === 'mermaid') {
-          const img = lookupDiagram(diagrams, fenceBuf.join('\n'));
-          if (img) {
-            const dispW = Math.min(8.6, img.w / 96);
-            const dispH = Math.min(dispW * (img.h / img.w), 4.6);
-            ensureSpace(dispH + 0.3);
-            currentSlide.addImage({ data: img.dataUrl, x: (10 - dispW) / 2, y: yPosition, w: dispW, h: dispH });
-            yPosition += dispH + 0.3;
-          } else if (fenceBuf.length) {
-            // 폴백: 다이어그램 렌더 실패 → 코드 텍스트로
-            ensureSpace(1.2);
-            currentSlide.addText(fenceBuf.join('\n'), {
-              x: 0.8, y: yPosition, w: 8.4, h: 1, fontSize: 10, fontFace: 'Courier New', color: SUB,
-            });
-            yPosition += 1.2;
-          }
-        } else if (fenceBuf.length) {
-          ensureSpace(1.2);
-          currentSlide.addText(fenceBuf.join('\n'), {
-            x: 0.8, y: yPosition, w: 8.4, h: 1, fontSize: 10, fontFace: 'Courier New', color: SUB,
-          });
-          yPosition += 1.2;
-        }
-        inFence = false;
-        fenceLang = '';
-      }
-      continue;
-    }
-    if (inFence) {
-      fenceBuf.push(line);
-      continue;
-    }
-
-    if (!trimmed) continue;
-
-    // ── 표 누적 (연속 |행을 한 표로) ──
-    if (trimmed.includes('|') && !trimmed.match(/^#/)) {
-      if (trimmed.replace(/[|\s:-]/g, '') === '') continue; // 구분행 |---|---| 제외
-      const cells = trimmed.split('|').filter((_, i, arr) => i > 0 && i < arr.length - 1);
-      if (cells.length > 0) {
-        tableBuf.push(cells);
-        continue;
-      }
-    } else if (tableBuf.length) {
-      flushTable();
-    }
-
-    // ── 헤더: 새 슬라이드 + 컬러 언더라인 ──
-    const headerMatch = trimmed.match(/^(#{1,3})\s+(.+)$/);
-    if (headerMatch) {
-      newSlide();
-      const level = headerMatch[1].length;
-      const fontSize = 32 - level * 5;
-      currentSlide.addText(headerMatch[2], {
-        x: 0.5, y: yPosition, w: 9, h: 0.7, fontSize, bold: true, color: INK,
-      });
-      currentSlide.addShape(pptx.ShapeType.rect, {
-        x: 0.5, y: yPosition + 0.72, w: 3, h: 0.045, fill: { color: BRAND },
-      });
-      yPosition += 1.0;
-      continue;
-    }
-
-    ensureSpace(0.5);
-
-    // 리스트
-    if (trimmed.match(/^[\-\*\+]\s/) || trimmed.match(/^\d+\.\s/)) {
-      const text = trimmed.replace(/^[\-\*\+\d.]+\s/, '');
-      currentSlide.addText(`• ${text}`, {
-        x: 0.8, y: yPosition, w: 8.4, h: 0.4, fontSize: 16, color: SUB,
-      });
-      yPosition += 0.5;
-    } else {
-      currentSlide.addText(trimmed, {
-        x: 0.7, y: yPosition, w: 8.6, h: 0.4, fontSize: 14, color: INK,
-      });
-      yPosition += 0.42;
-    }
+  for (const plan of plans) {
+    const slide =
+      plan.kind === 'title' ? pptx.addSlide() : pptx.addSlide({ masterName: 'BRAND' });
+    renderPptxSlide(pptx, slide, plan, diagrams);
   }
-  flushTable();
 
   return (await pptx.write({ outputType: 'blob' })) as Blob;
 }
