@@ -57,6 +57,7 @@ async function presign(
 
 export async function POST(request: NextRequest) {
   // PUT presign — 업로드용. key는 서버가 생성(유저 격리).
+  // mode:'multipart-create' → CreateMultipartUpload(uploadId 반환)
   try {
     const auth = await requireUser(request);
     if (auth.response) return auth.response;
@@ -65,10 +66,28 @@ export async function POST(request: NextRequest) {
     const body = (await request.json().catch(() => ({}))) as {
       contentType?: string;
       ext?: string;
+      mode?: 'multipart-create';
     };
     const ext = safeExt((body.ext || '').toLowerCase());
     const key = `${auth.user.id}/${crypto.randomUUID()}.${ext}`;
     const contentType = body.contentType || 'application/octet-stream';
+
+    // multipart 시작 — 모바일 브라우저가 대용량 단일 PUT에서 죽는 문제(Failed to fetch) 해결.
+    if (body.mode === 'multipart-create') {
+      const url = new URL(`${R2_ENDPOINT}/${R2_BUCKET}/${key}?uploads=`);
+      const res = await client.fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': contentType },
+      });
+      if (!res.ok) {
+        const detail = await res.text().catch(() => '');
+        throw new Error(`multipart 생성 실패 (${res.status}): ${detail.slice(0, 120)}`);
+      }
+      const xml = await res.text();
+      const uploadId = xml.match(/<UploadId>([^<]+)<\/UploadId>/)?.[1];
+      if (!uploadId) throw new Error('multipart UploadId 파싱 실패');
+      return NextResponse.json({ key, uploadId });
+    }
 
     const uploadUrl = await presign(client, 'PUT', key, 600, contentType);
     return NextResponse.json({ key, uploadUrl });
@@ -78,23 +97,68 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'NO_RECORDING_STORAGE', message: '저장소가 설정되지 않았습니다.' }, { status: 503 });
     }
     console.error('[storage/sign] PUT presign 오류:', error);
-    return NextResponse.json({ error: 'presign 실패' }, { status: 500 });
+    return NextResponse.json({ error: 'presign 실패', message }, { status: 500 });
   }
 }
 
 export async function PUT(request: NextRequest) {
   // GET presign — STT 서버가 fetch할 읽기 URL.
+  // mode:'multipart-part' → 파트 업로드 presign. mode:'multipart-complete' → 완료.
   try {
     const auth = await requireUser(request);
     if (auth.response) return auth.response;
 
     const client = getR2Client();
-    const body = (await request.json().catch(() => ({}))) as { key?: string; ttlSec?: number };
+    const body = (await request.json().catch(() => ({}))) as {
+      key?: string;
+      ttlSec?: number;
+      mode?: 'multipart-part' | 'multipart-complete' | 'multipart-abort';
+      uploadId?: string;
+      partNumber?: number;
+      parts?: { partNumber: number; etag: string }[];
+    };
     const key = body.key || '';
     // 유저 격리: 본인 프리픽스만.
     if (!key.startsWith(`${auth.user.id}/`)) {
       return NextResponse.json({ error: '유효하지 않은 키입니다.' }, { status: 403 });
     }
+
+    // 파트 presign — 브라우저가 조각(10MB)을 직접 PUT.
+    if (body.mode === 'multipart-part' && body.uploadId && body.partNumber) {
+      const url = new URL(`${R2_ENDPOINT}/${R2_BUCKET}/${key}`);
+      url.searchParams.set('partNumber', String(body.partNumber));
+      url.searchParams.set('uploadId', body.uploadId);
+      const signed = await client.sign(new Request(url, { method: 'PUT' }), {
+        aws: { signQuery: true },
+      } as never);
+      return NextResponse.json({ url: signed.url });
+    }
+
+    // 완료 — 파트 ETag 목록으로 객체 조립.
+    if (body.mode === 'multipart-complete' && body.uploadId && body.parts) {
+      const xml =
+        '<CompleteMultipartUpload>' +
+        [...body.parts]
+          .sort((a, b) => a.partNumber - b.partNumber)
+          .map((p) => `<Part><PartNumber>${p.partNumber}</PartNumber><ETag>${p.etag}</ETag></Part>`)
+          .join('') +
+        '</CompleteMultipartUpload>';
+      const url = new URL(`${R2_ENDPOINT}/${R2_BUCKET}/${key}?uploadId=${encodeURIComponent(body.uploadId)}`);
+      const res = await client.fetch(url, { method: 'POST', body: xml });
+      if (!res.ok) {
+        const detail = await res.text().catch(() => '');
+        throw new Error(`multipart 완료 실패 (${res.status}): ${detail.slice(0, 120)}`);
+      }
+      return NextResponse.json({ ok: true });
+    }
+
+    // 중단 — 실패 시 R2에 미완성 파트 남는 것 방지.
+    if (body.mode === 'multipart-abort' && body.uploadId) {
+      const url = new URL(`${R2_ENDPOINT}/${R2_BUCKET}/${key}?uploadId=${encodeURIComponent(body.uploadId)}`);
+      await client.fetch(url, { method: 'DELETE' });
+      return NextResponse.json({ ok: true });
+    }
+
     const url = await presign(client, 'GET', key, body.ttlSec || 300);
     return NextResponse.json({ url });
   } catch (error) {
@@ -103,7 +167,7 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ error: 'NO_RECORDING_STORAGE', message: '저장소가 설정되지 않았습니다.' }, { status: 503 });
     }
     console.error('[storage/sign] GET presign 오류:', error);
-    return NextResponse.json({ error: 'presign 실패' }, { status: 500 });
+    return NextResponse.json({ error: 'presign 실패', message }, { status: 500 });
   }
 }
 
