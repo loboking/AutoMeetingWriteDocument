@@ -31,8 +31,11 @@ const FILE_POLL_TIMEOUT_MS = 60_000;
 const FILE_POLL_INTERVAL_MS = 1_000;
 
 // STT용 모델. LLM용 GEMINI_MODEL과 분리(STT와 LLM이 다른 모델을 쓸 수 있게).
+// gemini-2.5-flash/flash-lite는 신규 프로젝트에 404(단종) — gemini-3.5-flash-lite로 교체.
+// gemini-3.6-flash는 thinking 토큰이 출력 상한(65536)을 잡아먹어 긴 회의 전사가 MAX_TOKENS로
+// 잘림(실측 3시간 오디오 기준 thoughtsTokenCount 62916 — 재현/검증 완료) — flash-lite만 사용.
 function resolveModel(): string {
-  return process.env.GEMINI_STT_MODEL || process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+  return process.env.GEMINI_STT_MODEL || process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
 }
 
 // Gemini generateContent 응답의 usageMetadata 형태.

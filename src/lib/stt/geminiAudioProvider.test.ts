@@ -204,14 +204,14 @@ describe('GeminiAudioProvider', () => {
       expect(calledUrl).not.toContain('/openai/');
     });
 
-    it('기본 모델은 gemini-2.5-flash다', async () => {
+    it('기본 모델은 gemini-3.5-flash-lite다', async () => {
       const fetchMock = mockFetchOk(makeGeminiResponse('테스트'));
       vi.stubGlobal('fetch', fetchMock);
 
       await new GeminiAudioProvider().transcribe(Buffer.from('audio'));
 
       const calledUrl = (fetchMock as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
-      expect(calledUrl).toContain('/gemini-2.5-flash:generateContent');
+      expect(calledUrl).toContain('/gemini-3.5-flash-lite:generateContent');
     });
 
     it('GEMINI_STT_MODEL로 모델을 오버라이드한다', async () => {

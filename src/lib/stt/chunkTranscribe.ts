@@ -62,7 +62,9 @@ export async function transcribeChunked(
     text,
     duration: offset,
     language: results[0]?.language || opts?.language || 'ko',
-    provider: 'whisper-api',
-    hasSpeakerDiarization: false,
+    // 이전엔 'whisper-api'/false로 하드코딩 — Gemini가 주입돼도 결과에 Whisper라고 잘못 표시되던 버그.
+    // 실제 청크 처리에 쓰인 provider를 그대로 반영.
+    provider: results[0]?.provider ?? provider.name,
+    hasSpeakerDiarization: results.some((r) => r.hasSpeakerDiarization),
   };
 }

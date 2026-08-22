@@ -15,7 +15,10 @@ const SINGLE_CALL_MAX_MB = 24;
 const TOO_LARGE_MESSAGE = `오디오 파일이 너무 큽니다. (mp3는 무제한, 그 외 포맷은 최대 ${SINGLE_CALL_MAX_MB}MB) 긴 녹음은 mp3로 변환하거나 파일을 나눠 올려주세요.`;
 
 // 큰 파일 거부 여부: 분할 가능 포맷이면 통과(청크 처리), 아니면 단일 호출 상한 적용.
-function isTooLarge(byteLength: number, contentType?: string): boolean {
+// 이 상한은 Whisper 단일 요청 한계(25MB)에서 온 것 — Gemini는 File API로 파일 크기와
+// 무관하게 처리하므로(938MB 테스트 확인, 2026-08) gemini-audio provider일 땐 적용 제외.
+function isTooLarge(byteLength: number, contentType?: string, providerName?: string): boolean {
+  if (providerName === 'gemini-audio') return false;
   if (canChunk(contentType)) return false; // mp3 등 → 청크로 처리하므로 크기 무관
   return byteLength > SINGLE_CALL_MAX_BYTES;
 }
@@ -37,7 +40,8 @@ function isAllowedSignedUrl(url: string): boolean {
 // JSON { signedUrl } 또는 multipart(audioFile) 양쪽에서 오디오 Buffer를 얻는다.
 // 반환: { buffer, language } 또는 { errorResponse }(검증 실패 시 즉시 응답).
 async function resolveAudio(
-  request: NextRequest
+  request: NextRequest,
+  providerName?: string
 ): Promise<{ buffer: Buffer; language: string; contentType?: string } | { errorResponse: NextResponse }> {
   const contentType = request.headers.get('content-type') || '';
 
@@ -63,7 +67,7 @@ async function resolveAudio(
     const buffer = Buffer.from(arrayBuffer);
     // 저장소가 보존한 원본 MIME → Whisper 포맷 판단 + 분할 가능 여부 판정용
     const audioContentType = res.headers.get('content-type') || undefined;
-    if (isTooLarge(buffer.byteLength, audioContentType)) {
+    if (isTooLarge(buffer.byteLength, audioContentType, providerName)) {
       return {
         errorResponse: NextResponse.json(
           { error: 'FILE_TOO_LARGE', message: TOO_LARGE_MESSAGE },
@@ -87,7 +91,7 @@ async function resolveAudio(
   if (!audioFile) {
     return { errorResponse: NextResponse.json({ error: '오디오 파일이 필요합니다.' }, { status: 400 }) };
   }
-  if (isTooLarge(audioFile.size, audioFile.type || undefined)) {
+  if (isTooLarge(audioFile.size, audioFile.type || undefined, providerName)) {
     return {
       errorResponse: NextResponse.json(
         { error: 'FILE_TOO_LARGE', message: TOO_LARGE_MESSAGE },
@@ -104,13 +108,13 @@ export async function POST(request: NextRequest) {
     const auth = await requireUser(request);
     if (auth.response) return auth.response;
 
-    const resolved = await resolveAudio(request);
-    if ('errorResponse' in resolved) return resolved.errorResponse;
-    const { buffer, language, contentType } = resolved;
-
     // Provider DI: STT_PROVIDER 노브(gemini-audio|whisper)로 선택. 과거엔 chunked 경로가
     // Whisper에 hardcoded라 gemini-audio여도 큰 파일은 Whisper → 401(키 없음)로 실패했음(2026-07-16).
+    // isTooLarge(24MB 상한)도 Whisper 전용 제약이라 provider를 먼저 구해서 크기 체크에 넘김.
     const provider = getServerProvider();
+    const resolved = await resolveAudio(request, provider.name);
+    if ('errorResponse' in resolved) return resolved.errorResponse;
+    const { buffer, language, contentType } = resolved;
     // 큰 분할 가능 포맷(mp3)은 청크 병렬 처리, 그 외는 단일 호출.
     // chunked 경로도 동일 provider를 주입 — Gemini 선호 시 Gemini 청킹.
     const result =

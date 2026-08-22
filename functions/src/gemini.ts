@@ -42,8 +42,11 @@ export function loadGeminiEnv(): GeminiEnv {
   return { GEMINI_API_KEY, GEMINI_STT_MODEL, GEMINI_MODEL };
 }
 
+// gemini-2.5-flash/flash-lite는 신규 프로젝트에 404(단종) — gemini-3.5-flash-lite로 교체.
+// gemini-3.6-flash는 thinking 토큰이 출력 상한(65536)을 잡아먹어 긴 회의 전사가 MAX_TOKENS로
+// 잘림(실측 3시간 오디오 기준 thoughtsTokenCount 62916 — 재현/검증 완료) — flash-lite만 사용.
 function resolveModel(env: GeminiEnv): string {
-  return env.GEMINI_STT_MODEL || env.GEMINI_MODEL || 'gemini-2.5-flash';
+  return env.GEMINI_STT_MODEL || env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
 }
 
 // ArrayBuffer → base64 문자열. Node의 globalThis.btoa 사용.
@@ -284,7 +287,7 @@ export async function transcribeWithGemini(
     generationConfig: {
       temperature: 0,
       // 미지정 시 모델 기본값에 걸려 긴 회의(1시간+) 전사가 도중에 잘릴 수 있음.
-      // gemini-2.5-flash/pro 모두 출력 상한 65536 — 넉넉히 잡아 실질적으로 안 걸리게.
+      // gemini-3.5-flash-lite/3.6-flash 모두 출력 상한 65536 — 넉넉히 잡아 실질적으로 안 걸리게.
       maxOutputTokens: 65536,
     },
   };

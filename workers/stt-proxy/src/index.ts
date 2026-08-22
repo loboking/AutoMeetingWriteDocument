@@ -22,13 +22,24 @@ export interface Env {
   PROD_ORIGINS?: string;
 }
 
-// Supabase Storage 도메인만 허용 — 임의 URL fetch(SSRF) 차단.
-// 메인 앱 NEXT_PUBLIC_SUPABASE_URL 과 동일한 호스트인지 검증.
+// 신뢰 도메인만 허용 — 임의 URL fetch(SSRF) 차단.
+// R2 presigned URL은 이제 이 계정 전용 프리사인 라우트(app/api/storage/r2/*)에서 직접 발급됨
+// (2026-08, Supabase Storage 50MB 전역 캡 우회). AWS SDK가 virtual-hosted-style로 서명하면
+// "{bucket}.{accountId}.r2.cloudflarestorage.com" 처럼 버킷명이 서브도메인으로 붙어서
+// 정확매치(===)로는 안 걸림 — 접미사(endsWith)로 이 계정의 R2 호스트 전체를 허용.
+// 비밀값 아님(서명 URL에 매번 노출되는 값)이라 하드코딩.
+const R2_ACCOUNT_HOST = '78ca0337ba8844c4275604a06bb7cc9d.r2.cloudflarestorage.com';
+
+function isR2Host(host: string): boolean {
+  return host === R2_ACCOUNT_HOST || host.endsWith(`.${R2_ACCOUNT_HOST}`);
+}
+
 function isAllowedSignedUrl(url: string, supabaseUrl: string): boolean {
   try {
     const u = new URL(url);
     if (u.protocol !== 'https:') return false;
-    return u.host === new URL(supabaseUrl).host;
+    if (u.host === new URL(supabaseUrl).host) return true;
+    return isR2Host(u.host);
   } catch {
     return false;
   }

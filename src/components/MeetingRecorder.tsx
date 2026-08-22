@@ -7,7 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { useRecorder } from '@/hooks/useRecorder';
+import { useRecorder, type RecoverableSession } from '@/hooks/useRecorder';
 import { useBeforeUnload } from '@/hooks/useBeforeUnload';
 import { useWakeLock } from '@/hooks/useWakeLock';
 import { useRecordingBackgroundWarning } from '@/hooks/useRecordingBackgroundWarning';
@@ -33,17 +33,41 @@ function VoiceRecorder({ onResult }: VoiceRecorderProps = {}) {
     duration,
     audioUrl,
     startRecording,
+    continueRecording,
     stopRecording,
     pauseRecording,
     resumeRecording,
     getAudioBlob,
     reset,
+    clearBackup,
+    listRecoverableSessions,
+    recoverSession,
+    discardRecoverableSession,
   } = useRecorder();
 
   const { updateCurrentMeeting, updateMeetingStep } = useMeetingStore();
   const browserSTT = useBrowserSTT();
   const [isUploading, setIsUploading] = useState(false);
+  const [transcribeError, setTranscribeError] = useState<string | null>(null);
   const hasAutoTranscribed = useRef(false);
+
+  // 새로고침/크래시로 남겨진 미완성 녹음 — 컴포넌트 마운트 시 1회 확인.
+  const [recoverable, setRecoverable] = useState<RecoverableSession[]>([]);
+  useEffect(() => {
+    listRecoverableSessions().then(setRecoverable);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleRecoverSession = async (sessionId: string) => {
+    const ok = await recoverSession(sessionId);
+    setRecoverable((prev) => prev.filter((s) => s.sessionId !== sessionId));
+    if (!ok) alert('복구에 실패했습니다. 이미 지워졌거나 손상된 백업일 수 있어요.');
+  };
+
+  const handleDiscardRecoverable = (sessionId: string) => {
+    discardRecoverableSession(sessionId);
+    setRecoverable((prev) => prev.filter((s) => s.sessionId !== sessionId));
+  };
 
   // 진행률 시뮬레이션 훅 사용
   const { progress: uploadProgress, startSimulation, stopSimulation, resetSimulation } = useProgressSimulation(300, 10, 90);
@@ -77,6 +101,7 @@ function VoiceRecorder({ onResult }: VoiceRecorderProps = {}) {
     if (!blob) return;
 
     setIsUploading(true);
+    setTranscribeError(null);
     resetSimulation();
     startSimulation();
     if (!onResult) updateMeetingStep('transcribing');
@@ -89,6 +114,8 @@ function VoiceRecorder({ onResult }: VoiceRecorderProps = {}) {
       });
 
       stopSimulation();
+      // 전사 성공 — IndexedDB 임시 백업은 이제 필요 없음.
+      clearBackup();
 
       // 회의록 모드(② onResult 전달 시)는 Meeting store를 건드리지 않고 결과만 부모로 위로.
       if (onResult) {
@@ -111,7 +138,9 @@ function VoiceRecorder({ onResult }: VoiceRecorderProps = {}) {
       updateMeetingStep('transcribing');
     } catch (error) {
       console.error('Transcribe error:', error);
-      alert(error instanceof Error ? error.message : '음성 변환에 실패했습니다.');
+      // 실패해도 오디오(청크/IndexedDB 백업)는 그대로 남겨둔다 — "다시 시도" 버튼으로 재전송 가능.
+      // 예전엔 alert만 띄우고 끝이라, 사용자가 다음으로 누를 수 있는 게 "다시 녹음"(=원본 삭제)뿐이었음.
+      setTranscribeError(error instanceof Error ? error.message : '음성 변환에 실패했습니다.');
       if (!onResult) updateMeetingStep('recording');
     } finally {
       stopSimulation();
@@ -140,6 +169,32 @@ function VoiceRecorder({ onResult }: VoiceRecorderProps = {}) {
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-6">
+        {/* 이전에 끊긴 녹음 복구 배너 — 새로고침/탭 닫힘/크래시로 전사 전에 유실된 녹음이
+            IndexedDB에 남아있으면 여기서 되살릴 수 있다(2026-08 치명 버그 대응). */}
+        {recoverable.length > 0 && (
+          <div className="space-y-2">
+            {recoverable.map((s) => (
+              <div
+                key={s.sessionId}
+                className="flex items-center justify-between gap-2 rounded-lg border border-blue-200 dark:border-blue-900 bg-blue-50 dark:bg-blue-950/20 p-3 text-sm text-blue-800 dark:text-blue-300"
+                role="alert"
+              >
+                <span className="flex-1">
+                  이전에 끝까지 처리되지 못한 녹음이 있어요 ({new Date(s.startedAt).toLocaleString('ko-KR')} 시작). 복구할까요?
+                </span>
+                <div className="flex gap-2 flex-shrink-0">
+                  <Button size="sm" onClick={() => handleRecoverSession(s.sessionId)}>
+                    복구
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => handleDiscardRecoverable(s.sessionId)}>
+                    삭제
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
         {/* 녹음 상태 표시 */}
         <div className="text-center space-y-4" role="status" aria-live="polite">
           <div className="text-6xl font-mono font-bold text-slate-800 dark:text-slate-200" aria-label={`녹음 시간 ${formatTime(duration)}`}>
@@ -280,6 +335,41 @@ function VoiceRecorder({ onResult }: VoiceRecorderProps = {}) {
                     ? '브라우저에서 무료 모델로 음성을 변환 중입니다. 최초 1회 모델 다운로드로 시간이 걸릴 수 있어요...'
                     : 'AI가 음성을 텍스트로 변환하고 있습니다. 잠시만 기다려주세요...'}
                 </p>
+              </div>
+            ) : transcribeError ? (
+              /* 전사 실패 — 오디오는 그대로 살아있음. 재시도/이어서 녹음/폐기 중 선택. */
+              <div className="space-y-3">
+                <div className="flex items-start gap-2 rounded-lg border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950/20 p-3 text-sm text-red-800 dark:text-red-300" role="alert">
+                  <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" aria-hidden="true" />
+                  <span className="flex-1">{transcribeError}</span>
+                </div>
+                <div className="flex gap-2">
+                  <Button onClick={handleTranscribe} size="lg" className="flex-1">
+                    다시 시도
+                  </Button>
+                  <Button
+                    onClick={() => {
+                      setTranscribeError(null);
+                      continueRecording();
+                    }}
+                    variant="secondary"
+                    size="lg"
+                    className="flex-1"
+                  >
+                    이어서 녹음
+                  </Button>
+                  <Button
+                    onClick={() => {
+                      setTranscribeError(null);
+                      reset();
+                    }}
+                    variant="outline"
+                    size="lg"
+                    className="flex-1"
+                  >
+                    버리고 다시 녹음
+                  </Button>
+                </div>
               </div>
             ) : (
               /* 변환 완료 후 옵션 */

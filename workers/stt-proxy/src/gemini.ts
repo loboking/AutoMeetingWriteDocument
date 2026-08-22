@@ -33,8 +33,10 @@ export interface GeminiEnv {
   GEMINI_MODEL?: string;
 }
 
+// gemini-2.5-flash/flash-lite는 신규 프로젝트에 404(단종) — gemini-3.5-flash-lite로 교체.
+// gemini-3.6-flash는 thinking 토큰이 출력 상한을 잡아먹어 긴 회의 전사가 MAX_TOKENS로 잘림 — flash-lite만 사용.
 function resolveModel(env: GeminiEnv): string {
-  return env.GEMINI_STT_MODEL || env.GEMINI_MODEL || 'gemini-2.5-flash';
+  return env.GEMINI_STT_MODEL || env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
 }
 
 // ArrayBuffer → base64 문자열. Workers는 Buffer.toString('base64') 불가.
