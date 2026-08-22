@@ -102,7 +102,13 @@ ${context ? `## 추가 맥락\n${context}` : ''}
       baseURL: process.env.ZAI_BASE_URL
     });
 
-    // API 실패 시 목업 반환 (안정성 확보)
+    // generate-doc/route.ts와 동일 원칙: 키가 아예 없으면(데모/개발) mock 허용.
+    // 키는 있는데 호출이 실패하면 throw해서 진짜 실패로 처리 — 이전엔 무조건 mock을 반환해서
+    // 실제 회의 내용과 무관한 가짜 요약("대시보드 기능 추가"...)이 진짜처럼 저장되던 버그(2026-08 확인).
+    const hasKey = !!process.env.OPENAI_API_KEY || !!process.env.ZAI_API_KEY;
+    if (hasKey) {
+      throw error instanceof Error ? error : new Error('요약 생성 실패');
+    }
     return getMockSummary();
   }
 }
