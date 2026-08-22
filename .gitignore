@@ -32,3 +32,4 @@ functions/lib/
 firebase-debug.log
 firebase-debug.*.log
 *.local
+.env*
