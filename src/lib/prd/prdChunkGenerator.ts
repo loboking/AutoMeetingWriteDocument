@@ -5,6 +5,7 @@ import { SECTION_PROMPTS } from './sectionPrompts';
 import { mapWithConcurrency, withRetry } from '@/lib/concurrency';
 import { sanitizeSectionContent } from './sanitizeSection';
 import { postProcessGeneratedDocument } from './advancedGuards';
+import { assemblePRD } from './assemblePRD';
 import type { MeetingSummary, MeetingMetadata } from '@/types';
 
 // Re-export types
@@ -29,8 +30,8 @@ const PRD_SECTION_SYSTEM =
   '예: "上述"(X) → "위에서 언급한"(O), "心理"(X) → "심리"(O), "該当"(X) → "해당"(O). ' +
   '모든 한자어는 반드시 한글로만 표기합니다.';
 
-// 단일 섹션 생성
-async function generateSection(
+// 단일 섹션 생성. 클라 섹션 오케스트레이션(route가 섹션당 1콜)에서도 직접 호출한다.
+export async function generateSection(
   sectionId: string,
   summary: MeetingSummary,
   transcript: string,
@@ -164,67 +165,6 @@ export async function generatePRDByChunks(
     sections,
     progress: progressList,
   };
-}
-
-// 섹션 H2 대제목(## N. 제목) 보장
-// GLM이 ### N.1 부터 출력해 H2를 누락하면 뷰어가 해당 섹션을 못 찾아 공백으로 보임 → 자동 보정
-function ensureSectionHeading(content: string, sectionTitle: string): string {
-  const trimmed = content.trimStart();
-  // 섹션 번호 추출 (예: "9. 기술 요구사항" → "9")
-  const num = sectionTitle.match(/^(\d+)\./)?.[1];
-  // 이미 올바른 H2(## N.)로 시작하면 그대로 둠
-  if (num) {
-    const h2Pattern = new RegExp(`^##\\s+${num}\\.`, 'm');
-    // 본문 첫 헤딩이 ## N. 이면 OK
-    if (new RegExp(`^##\\s+${num}\\.`).test(trimmed)) return content;
-    // ### N.x 등 H3로 시작하거나 H2가 빠진 경우 → H2 대제목을 앞에 삽입
-    if (!h2Pattern.test(content)) {
-      return `## ${sectionTitle}\n\n${trimmed}`;
-    }
-  }
-  // 번호 패턴이 없으면 첫 헤딩이 H2인지만 확인, 아니면 삽입
-  if (!/^##\s/.test(trimmed)) {
-    return `## ${sectionTitle}\n\n${trimmed}`;
-  }
-  return content;
-}
-
-// PRD 문서 조립
-function assemblePRD(
-  sections: Record<string, string>,
-  meetingInfo: { title: string; date: string }
-): string {
-  const parts: string[] = [];
-
-  // 헤더
-  parts.push(`# PRD (Product Requirements Document)`);
-  parts.push(``);
-  parts.push(`> 회의: ${meetingInfo.title}`);
-  parts.push(`> 작성일: ${meetingInfo.date}`);
-  parts.push(``);
-  parts.push(`---`);
-  parts.push(``);
-
-  // 섹션 순서대로 조립
-  const sortedSections = [...PRD_SECTIONS].sort((a, b) => a.order - b.order);
-
-  for (const section of sortedSections) {
-    const content = sections[section.id];
-    if (content) {
-      parts.push(ensureSectionHeading(content, section.title));
-      parts.push(``);
-      parts.push(`---`);
-      parts.push(``);
-    }
-  }
-
-  // 푸터
-  parts.push(``);
-  parts.push(`---`);
-  parts.push(``);
-  parts.push(`*이 문서는 회의 녹음을 바탕으로 AI가 자동 생성했습니다.*`);
-
-  return parts.join('\n');
 }
 
 // 섹션 재시도 (실패한 섹션만)

@@ -94,8 +94,8 @@ describe('levelsFor (부분집합 일괄 재생성용)', () => {
 });
 
 describe('CORE_DOCS (composite 핵심 우선 집합)', () => {
-  it('핵심 3개: prd / feature-list / wbs (서연 확정)', () => {
-    expect(CORE_DOCS).toEqual(['prd', 'feature-list', 'wbs']);
+  it('핵심 = prd 단독 (오너 결정: 회의록→문서는 PRD만 먼저)', () => {
+    expect(CORE_DOCS).toEqual(['prd']);
   });
 
   it('모든 핵심이 실제 DocType이다', () => {
@@ -141,15 +141,14 @@ describe('orderCoreFirst (composite 핵심 우선 재배치)', () => {
     expect(orderCoreFirst(['prd'])).toEqual(['prd']);
   });
 
-  it('같은 레벨 내에서 core가 non-core보다 앞에 정렬된다 (레벨 0: prd/user-story/feature-list/flowchart)', () => {
-    // 레벨 0 = 의존성 없는 4종. 그중 core는 prd, feature-list. 이 둘이 non-core(user-story, flowchart)보다 앞이어야 함.
+  it('core(prd)가 레벨 0에서 non-core보다 앞에 정렬된다', () => {
+    // CORE_DOCS=['prd'] — 오너 결정(PRD만 먼저). prd가 같은 레벨의 non-core보다 앞.
     const order = orderCoreFirst(topoSortDocs());
     const pos = new Map<DocType, number>();
     order.forEach((d, i) => pos.set(d, i));
     expect(pos.get('prd')!).toBeLessThan(pos.get('user-story')!);
     expect(pos.get('prd')!).toBeLessThan(pos.get('flowchart')!);
-    expect(pos.get('feature-list')!).toBeLessThan(pos.get('user-story')!);
-    expect(pos.get('feature-list')!).toBeLessThan(pos.get('flowchart')!);
+    expect(pos.get('prd')!).toBeLessThan(pos.get('feature-list')!);
   });
 });
 
@@ -157,19 +156,17 @@ describe('coreDone 판정 (composite 완료 조건)', () => {
   // runGenerationLoop의 완료 판정 로직을 단순 재현한 헬퍼.
   const isCoreDone = (doneSet: Set<DocType>) => CORE_DOCS.every((d) => doneSet.has(d));
 
-  it('핵심 3개가 모두 있으면 true', () => {
+  it('PRD가 있으면 true (오너 결정: PRD만 핵심)', () => {
+    expect(isCoreDone(new Set(['prd']))).toBe(true);
     expect(isCoreDone(new Set(['prd', 'feature-list', 'wbs']))).toBe(true);
-    expect(isCoreDone(new Set(['prd', 'feature-list', 'wbs', 'api-spec']))).toBe(true);
   });
 
-  it('하나라도 빠지면 false', () => {
-    expect(isCoreDone(new Set(['prd', 'feature-list']))).toBe(false);
-    expect(isCoreDone(new Set(['prd', 'wbs']))).toBe(false);
+  it('PRD가 없으면 false', () => {
     expect(isCoreDone(new Set(['feature-list', 'wbs']))).toBe(false);
     expect(isCoreDone(new Set())).toBe(false);
   });
 
-  it('나머지 11개만 있어도 false (핵심이 우선)', () => {
+  it('나머지 문서만 있어도 false (PRD 우선)', () => {
     const allButCore = DOCUMENTS.map((d) => d.key).filter((d) => !CORE_DOCS.includes(d));
     expect(isCoreDone(new Set(allButCore))).toBe(false);
   });

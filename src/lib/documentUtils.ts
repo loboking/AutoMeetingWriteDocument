@@ -348,10 +348,11 @@ export function topoSortDocs(): DocType[] {
   return topoSortLevels().flat();
 }
 
-// 합성(composite) 핵심 우선 문서 집합 — 서연 확정(오너 힌트 PRD/범위/일정).
-// composite 모드에서 이 3개가 먼저 완료되면 잡을 종료하고 나머지는 pending(개별 생성)으로 둔다.
+// 합성(composite) 핵심 우선 문서 집합.
+// 오너 확정(2026-08): 회의록→문서 전환 시 PRD만 먼저 생성(빠른 확인 우선). 나머지 13종은
+// pending으로 남겨 사용자가 개별 생성. (이전 [prd,feature-list,wbs] 3종 → prd 1종으로 축소.)
 // single 모드는 이 집합을 사용하지 않는다(회귀 0 불변식).
-export const CORE_DOCS: DocType[] = ['prd', 'feature-list', 'wbs'];
+export const CORE_DOCS: DocType[] = ['prd'];
 
 // 위상 레벨 내에서 core 문서를 앞으로 재배치한 평탄 순서를 반환한다.
 // - 레벨 자체는 유지(topoSortLevels 결과 보존) → DEPENDENCIES 위반 없음.

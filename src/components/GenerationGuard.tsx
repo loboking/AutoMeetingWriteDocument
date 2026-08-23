@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { useMeetingStore, REASON_LABEL } from '@/store/meetingStore';
 import { DOCUMENTS } from '@/lib/documentUtils';
+import { genProgressPct } from '@/lib/genProgress';
 import { useBeforeUnload } from '@/hooks/useBeforeUnload';
 import { useGenerationRecovery } from '@/hooks/useGenerationRecovery';
 import { useWakeLock } from '@/hooks/useWakeLock';
@@ -46,7 +47,9 @@ export default function GenerationGuard() {
 
   const done = progress.completedDocs.length;
   const total = progress.totalLevels;
-  const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+  // 문서 내부 세부진행(PRD 섹션 등)을 분수로 blend → 진행바가 움직여 '0% 프리징' 해소.
+  const sub = progress.subProgress;
+  const pct = genProgressPct(done, total, sub);
   const failed = progress.failedDocs || [];
   const failedReasons = progress.failedReasons;
   // "문서명(사유)" 형태로. 사유 없으면 문서명만.
@@ -76,7 +79,7 @@ export default function GenerationGuard() {
         <div className="w-full h-1.5 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
           <div
             className={`h-full ${progress.status === 'error' ? 'bg-amber-500' : 'bg-green-500'}`}
-            style={{ width: `${pct}%` }}
+            style={{ width: `${progress.status === 'error' ? pct : 100}%` }}
           />
         </div>
         {failed.length > 0 ? (
@@ -134,6 +137,7 @@ export default function GenerationGuard() {
               <>
                 <span className="font-medium text-slate-700 dark:text-slate-200">{progress.currentDoc}</span>
                 {' '}생성 중 · {currentIndex}/{total}번째
+                {sub && sub.total > 0 ? ` · ${sub.label} ${sub.done}/${sub.total}` : ''}
               </>
             ) : (
               <>전체 {total}개 문서를 의존성 순서대로 생성합니다</>
@@ -193,7 +197,8 @@ export default function GenerationGuard() {
 
       {/* 명시적 종료 확인 다이얼로그 */}
       <AlertDialog open={showCancelDialog} onOpenChange={setShowCancelDialog}>
-        <AlertDialogContent>
+        {/* 생성 오버레이가 z-[100]이라 기본 z-50 확인창이 그 아래 깔려 '예,종료'를 못 누름 → 위로 올림 */}
+        <AlertDialogContent className="z-[110]">
           <AlertDialogHeader>
             <AlertDialogTitle>문서 생성을 종료할까요?</AlertDialogTitle>
             <AlertDialogDescription>

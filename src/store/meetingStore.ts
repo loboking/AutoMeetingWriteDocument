@@ -1,9 +1,11 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { Meeting, MeetingNote, MeetingStep, DocType, DocStatus, DocVersion, DocVersionSource, Project, ProjectMode, MeetingSummary } from '@/types';
+import type { Meeting, MeetingNote, MeetingStep, DocType, DocStatus, DocVersion, DocVersionSource, Project, ProjectMode, MeetingSummary, MeetingMetadata } from '@/types';
 import { DOCUMENTS, DEPENDENCIES, docTypeToField, getAllDependents, topoSortLevels, levelsFor, topoSortDocs, CORE_DOCS, orderCoreFirst } from '@/lib/documentUtils';
 import { authedFetch } from '@/lib/authFetch';
 import { mapWithConcurrency } from '@/lib/concurrency';
+import { PRD_SECTIONS } from '@/lib/prd/prdSections';
+import { assemblePRD } from '@/lib/prd/assemblePRD';
 import { deleteMeetingRow, fetchMeetings, mergeServer } from '@/lib/meetingsSync';
 import {
   deleteMeetingNoteRow,
@@ -70,6 +72,8 @@ export interface GenerationProgress {
   // composite 모드에서만 세팅: 핵심 3개(prd/feature-list/wbs) 완료 시점 신호.
   // 런타임-only(persist 제외). single 모드에는 사용되지 않는다.
   coreComplete?: boolean;
+  // 문서 내부 세부 진행(예: PRD 섹션 7/15). 0% 프리징 해소용 — 진행바에 blend.
+  subProgress?: { label: string; done: number; total: number };
 }
 
 // 진행 중 잡 체크포인트 (persist에 저장 → 새로고침/재방문 시 "남은 문서부터" 재개).
@@ -187,12 +191,19 @@ async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
   const order = job.order;
   const doneSet = new Set<DocType>(job.completedDocs);
 
+  // 진행바 분모: composite full은 핵심(prd)만 생성하고 나머지 14종은 pending으로 위임하므로
+  // order.length(14)가 아니라 실제 생성 문서 수(CORE_DOCS)로 잡아야 0→100%로 채워진다.
+  // single/regen은 order 전부를 생성하므로 종전대로 order.length.
+  const displayTotal = projectMode === 'composite' && job.mode !== 'regen'
+    ? CORE_DOCS.length
+    : order.length;
+
   set({
     isGenerating: true,
     generatingMeetingId: projectId,
     generationProgress: {
       currentLevel: doneSet.size,
-      totalLevels: order.length,
+      totalLevels: displayTotal,
       currentDoc: '',
       completedDocs: [...doneSet],
       failedDocs: [],
@@ -325,30 +336,128 @@ async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
       }
     };
 
+    // PRD 섹션 오케스트레이션: 섹션당 generate-doc 1콜(각자 maxDuration 300s) → 단일 300s 초과 해결.
+    // prepare로 메타데이터를 1회 확정(수치 정합성)한 뒤 섹션을 동시성 2로 순회, 클라에서 조립.
+    // 섹션마다 subProgress 갱신 → 진행바가 움직여 '0% 프리징' 해소.
+    const prdSectionFetch = async (extra: Record<string, unknown>, timeoutMs: number): Promise<Record<string, unknown>> => {
+      const MAX = 3;
+      let err: unknown = null;
+      for (let a = 0; a < MAX; a++) {
+        if (genAbort.cancelled) throw new Error('취소됨');
+        const controller = new AbortController();
+        genAbort.controllers.add(controller);
+        const to = setTimeout(() => controller.abort(new DOMException('timeout', 'TimeoutError')), timeoutMs);
+        try {
+          const res = await authedFetch('/api/generate-doc', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ docType: 'prd', summary, transcript, meetingInfo, meetingId: projectId, projectId, ...extra }),
+            signal: controller.signal,
+          });
+          if (!res.ok) {
+            const e = new Error('PRD 요청 실패') as Error & { status?: number };
+            e.status = res.status;
+            throw e;
+          }
+          return await res.json() as Record<string, unknown>;
+        } catch (e) {
+          err = e;
+          if (genAbort.cancelled) throw e;
+          if ((e as { status?: number })?.status === 402) throw e; // 한도초과는 재시도 무의미
+          if (a < MAX - 1) {
+            const is429 = (e as { status?: number })?.status === 429;
+            await new Promise((r) => setTimeout(r, (is429 ? 5000 : 2000) * Math.pow(2, a)));
+          }
+        } finally {
+          clearTimeout(to);
+          genAbort.controllers.delete(controller);
+        }
+      }
+      throw err;
+    };
+
+    const generatePrdViaSections = async (): Promise<{ content: string; partial?: boolean }> => {
+      let metadata: MeetingMetadata | undefined;
+      try {
+        const prep = await prdSectionFetch({ prdPhase: 'prepare' }, 90_000);
+        metadata = prep.metadata as MeetingMetadata | undefined;
+      } catch (e) {
+        if ((e as { status?: number })?.status === 402) throw e; // 한도초과는 문서 실패로 전파(사유 limit)
+        console.warn('PRD prepare 실패 → 메타데이터 없이 섹션 생성 진행:', e);
+      }
+
+      const sections = [...PRD_SECTIONS].sort((a, b) => a.order - b.order);
+      const total = sections.length;
+      let done = 0;
+      const setSub = () => set((st) => st.generationProgress
+        ? { generationProgress: { ...st.generationProgress, subProgress: { label: 'PRD 섹션', done, total } } }
+        : {});
+      setSub();
+
+      const results = await mapWithConcurrency(sections, PRD_SECTION_CONCURRENCY, async (section) => {
+        if (genAbort.cancelled) return { id: section.id, content: '', failed: true };
+        try {
+          const body = await prdSectionFetch({ prdSection: section.id, metadata }, 320_000);
+          const c = typeof body.content === 'string' ? body.content : '';
+          return { id: section.id, content: c, failed: !c || c.includes('생성 실패') };
+        } catch (e) {
+          console.warn(`PRD 섹션 실패(${section.id}):`, e);
+          return { id: section.id, content: `## ${section.title}\n\n생성 실패`, failed: true };
+        } finally {
+          done++;
+          setSub();
+        }
+      });
+
+      // subProgress 정리(다음 단계로 이월 방지)
+      set((st) => st.generationProgress ? { generationProgress: { ...st.generationProgress, subProgress: undefined } } : {});
+      if (genAbort.cancelled) throw new Error('취소됨');
+
+      const map: Record<string, string> = {};
+      let okCount = 0;
+      for (const r of results) {
+        if (!r) continue;
+        map[r.id] = r.content;
+        if (!r.failed && r.content) okCount++;
+      }
+      if (okCount === 0) throw new Error('PRD 전 섹션 생성 실패'); // 상위 실패 집계로
+
+      return { content: assemblePRD(map, meetingInfo), partial: okCount < total };
+    };
+
     // 일시 실패(타임아웃/빈응답/429/모바일 백그라운드 복귀 시 네트워크 끊김) 재시도.
     // 모바일에서 백그라운드 진입 시 in-flight fetch가 'TypeError: Load failed' 등으로 떨어질 수
     // 있어, 재시도 횟수를 늘려(총 3회) 복귀 후 자동 복구율을 높인다. 429는 더 길게 backoff.
-    const MAX_ATTEMPTS = 3;
     let result: { content: string; partial?: boolean } | null = null;
     let lastErr: unknown = null;
-    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-      if (genAbort.cancelled) break;
+    if (docType === 'prd') {
+      // PRD는 섹션 오케스트레이션(자체 섹션 재시도 포함)으로 대체.
       try {
-        result = await attemptOnce();
-        break;
+        result = await generatePrdViaSections();
       } catch (e) {
         lastErr = e;
-        // 사용자 취소(cancel 버튼)만 즉시 중단. 타임아웃 abort(TimeoutError)·네트워크 끊김
-        // (TypeError: Load failed) 등은 일시 실패로 보고 재시도로 흘려 복귀 후 자동 복구.
-        if (genAbort.cancelled) { result = null; break; }
-        // 402(사용량 한도 초과)는 재시도해도 안 풀림 → 즉시 실패 처리(사유 'limit'으로 노출).
-        if ((e as { status?: number })?.status === 402) break;
-        if (attempt < MAX_ATTEMPTS - 1) {
-          const is429 = (e as { status?: number })?.status === 429;
-          // 429: 5s,10s / 그 외: 2s,4s (지수 backoff)
-          const delay = (is429 ? 5000 : 2000) * Math.pow(2, attempt);
-          console.warn(`${docType} 생성 실패 → ${delay / 1000}초 후 재시도${is429 ? '(429)' : ''}:`, e);
-          await new Promise((r) => setTimeout(r, delay));
+      }
+    } else {
+      const MAX_ATTEMPTS = 3;
+      for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+        if (genAbort.cancelled) break;
+        try {
+          result = await attemptOnce();
+          break;
+        } catch (e) {
+          lastErr = e;
+          // 사용자 취소(cancel 버튼)만 즉시 중단. 타임아웃 abort(TimeoutError)·네트워크 끊김
+          // (TypeError: Load failed) 등은 일시 실패로 보고 재시도로 흘려 복귀 후 자동 복구.
+          if (genAbort.cancelled) { result = null; break; }
+          // 402(사용량 한도 초과)는 재시도해도 안 풀림 → 즉시 실패 처리(사유 'limit'으로 노출).
+          if ((e as { status?: number })?.status === 402) break;
+          if (attempt < MAX_ATTEMPTS - 1) {
+            const is429 = (e as { status?: number })?.status === 429;
+            // 429: 5s,10s / 그 외: 2s,4s (지수 backoff)
+            const delay = (is429 ? 5000 : 2000) * Math.pow(2, attempt);
+            console.warn(`${docType} 생성 실패 → ${delay / 1000}초 후 재시도${is429 ? '(429)' : ''}:`, e);
+            await new Promise((r) => setTimeout(r, delay));
+          }
         }
       }
     }
@@ -435,6 +544,8 @@ async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
   };
 
   const LEVEL_CONCURRENCY = 3;
+  // PRD 섹션 동시 콜 수. z.ai heavy 3동시 → 500 폭탄이라 2로 고정(문서레벨 CONCURRENCY와 별개).
+  const PRD_SECTION_CONCURRENCY = 2;
 
   try {
     // 레벨 순차, 레벨 내 병렬(동시3). 같은 레벨은 상호 의존 없어 안전.
@@ -445,7 +556,7 @@ async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
       const pending = level.filter((dt) => !doneSet.has(dt));
       if (pending.length === 0) continue;
 
-      // PRD는 내부적으로 CONCURRENCY=3 청킹이라 z.ai 슬롯을 점유 → 단독 선행(429 방어).
+      // PRD는 섹션 오케스트레이션(동시 2콜)으로 z.ai 슬롯을 점유 → 단독 선행(다른 문서와 겹치면 429/500).
       if (pending.includes('prd')) {
         await processDoc('prd');
         const rest = pending.filter((dt) => dt !== 'prd');

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireUser } from '@/lib/apiAuth';
 import { getPRDPrompt } from '@/lib/prdTemplate';
-import { generatePRDByChunks } from '@/lib/prd/prdChunkGenerator';
+import { generatePRDByChunks, generateSection } from '@/lib/prd/prdChunkGenerator';
 import { inferMetadata } from '@/lib/prd/inferMetadata';
 import { resolveCoreMetrics } from '@/lib/prd/resolveCoreMetrics';
 import { getApiSpecPrompt } from '@/lib/apiSpecTemplate';
@@ -18,7 +18,7 @@ import { getStoryboardPrompt } from '@/lib/storyboardTemplate';
 import { getWBSPrompt } from '@/lib/wbsTemplate';
 import { getTestPlanPrompt } from '@/lib/testPlanTemplate';
 import { reviewDocument } from '@/lib/docReviewer';
-import type { MeetingSummary } from '@/types';
+import type { MeetingSummary, MeetingMetadata } from '@/types';
 import { llmComplete } from '@/lib/llm';
 import type { LLMResult } from '@/lib/llm/types';
 import { recordTokenUsage } from '@/lib/tokenUsage';
@@ -762,6 +762,10 @@ export async function POST(request: NextRequest) {
 
     const body = await request.json();
     const { docType, summary, transcript, meetingInfo, review = true, contextDocs = {}, meetingId, projectId } = body;
+    // PRD 섹션 오케스트레이션(클라 주도): prepare=메타데이터 1회 확정, prdSection=단일 섹션 생성.
+    const prdPhase: string | undefined = body.prdPhase;
+    const prdSection: string | undefined = body.prdSection;
+    const clientMetadata: MeetingMetadata | undefined = body.metadata;
 
     if (!summary || !meetingInfo) {
       return NextResponse.json(
@@ -795,6 +799,25 @@ export async function POST(request: NextRequest) {
           );
         }
       }
+    }
+
+    // ── PRD 클라 오케스트레이션 분기 (섹션당 자기 maxDuration 300s로 300s 초과 근본 해결) ──
+    // prepare: 메타데이터+핵심수치를 1회 확정해 모든 섹션 콜이 단일 출처로 공유(수치 정합성).
+    //   문서 미생성 → 과금 미집계(recordUsage는 첫 섹션 성공에서).
+    if (docType === 'prd' && prdPhase === 'prepare') {
+      const metadata = inferMetadata(summary, transcript || '');
+      metadata.coreMetrics = await resolveCoreMetrics(summary, transcript || '', metadata.coreMetrics);
+      return NextResponse.json({ metadata });
+    }
+    // 단일 섹션: generateSection은 내부적으로 실패를 삼켜 '생성 실패' 본문을 돌려주므로 throw 없음.
+    if (docType === 'prd' && typeof prdSection === 'string') {
+      const { content: sectionContent } = await generateSection(
+        prdSection, summary, transcript || '', meetingInfo, {}, undefined, clientMetadata,
+        (r) => recordTokenUsage({ userId: auth.user.id, op: 'doc-generate', provider: r.provider, model: r.model, usage: r.usage, meetingId, docType, projectId }),
+      );
+      // 프로젝트 1건 기록(멱등 upsert) — 섹션 여러 개여도 1건만 집계.
+      if (projectId) await recordUsage(auth.user.id, projectId, period, 'prd');
+      return NextResponse.json({ sectionId: prdSection, content: sectionContent });
     }
 
     let partialMissing: number | undefined;
