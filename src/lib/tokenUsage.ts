@@ -12,6 +12,7 @@ export type TokenOp =
   | 'edit-patch' // DocHelper 부분 수정
   | 'edit-rewrite' // DocHelper 전체 재작성
   | 'research' // DocHelper 리서치(검색)
+  | 'summarize' // 회의록 요약(summarize)
   | 'stt'; // Gemini 오디오 STT(원가 실측용, 과금 카운트 무관)
 
 export async function recordTokenUsage(params: {

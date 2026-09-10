@@ -22,14 +22,19 @@ export const openaiCompatAdapter: LLMAdapter = {
     messages.push({ role: 'user', content: req.prompt });
 
     const isGlm = ctx.model.includes('glm');
+    // OpenAI GPT-5 계열(추론 모델)은 max_tokens·temperature를 거부(400). max_completion_tokens + reasoning_effort 사용.
+    // reasoning 토큰은 출력 요금에 포함되므로 low로 고정(실측: 출력의 15~25%). 실측 스크립트: scripts/nano-test.mjs
+    const isGpt5 = ctx.id === 'openai' && /^gpt-5/.test(ctx.model);
     // 리서치 요청 + GLM일 때만 web_search 내장 도구 부착(추가 검색 API 키 불필요).
     // thinking 비활성화 시 도구호출이 막힐 수 있어, 검색 시엔 thinking을 끄지 않는다.
     const useWebSearch = !!req.enableWebSearch && isGlm;
     const params = {
       model: ctx.model,
       messages,
-      max_tokens: req.maxTokens,
-      ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
+      ...(isGpt5
+        ? { max_completion_tokens: req.maxTokens, reasoning_effort: 'low' }
+        : { max_tokens: req.maxTokens }),
+      ...(req.temperature !== undefined && !isGpt5 ? { temperature: req.temperature } : {}),
       // GLM 계열만 thinking 비활성화 (검색 시엔 유지 — 도구 사용 가능하게)
       ...(isGlm && !useWebSearch ? { thinking: { type: 'disabled' } } : {}),
       ...(useWebSearch

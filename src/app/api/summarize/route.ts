@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireUser } from '@/lib/apiAuth';
 import type { MeetingSummary } from '@/types';
-import { llmComplete } from '@/lib/llm';
+import { llmComplete, type LLMResult } from '@/lib/llm';
+import { recordTokenUsage } from '@/lib/tokenUsage';
 import { needsChunking, splitTranscript, mergeSummaries } from './chunkSummarize';
 
 export const runtime = 'nodejs';
@@ -9,7 +10,7 @@ export const runtime = 'nodejs';
 export const maxDuration = 300;
 
 // 코딩 플랜 GLM API를 통한 요약 생성
-async function summarizeWithGPT(text: string, context?: string): Promise<MeetingSummary> {
+async function summarizeWithGPT(text: string, context?: string, onTokens?: (r: LLMResult) => void): Promise<MeetingSummary> {
   const prompt = `당신은 회의록 전문가입니다. 다음 회의 내용을 **상세하게 분석**하여 구조화된 요약을 제공해주세요.
 
 ## 회의 녹취록 (전체)
@@ -52,11 +53,13 @@ ${context ? `## 추가 맥락\n${context}` : ''}
 분석하여 JSON만 반환해주세요.`;
 
   try {
-    const { text: rawText, provider, model } = await llmComplete({
+    const llmRes = await llmComplete({
       prompt,
       maxTokens: 8192,
       timeoutMs: 180000,
     });
+    onTokens?.(llmRes); // 요약 콜 토큰 실측 기록
+    const { text: rawText, provider, model } = llmRes;
     console.log('[API] 요약 응답 수신:', { provider, model, hasContent: !!rawText });
 
     const content = rawText || '{}';
@@ -166,7 +169,7 @@ export async function POST(request: NextRequest) {
 
     const partialSummaries: MeetingSummary[] = [];
     for (const chunk of chunks) {
-      partialSummaries.push(await summarizeWithGPT(chunk, context));
+      partialSummaries.push(await summarizeWithGPT(chunk, context, (r) => void recordTokenUsage({ userId: auth.user.id, op: 'summarize', provider: r.provider, model: r.model, usage: r.usage })));
     }
     const summary = chunks.length > 1 ? mergeSummaries(partialSummaries) : partialSummaries[0]!;
 
