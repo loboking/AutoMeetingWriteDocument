@@ -35,22 +35,12 @@ export const runtime = 'nodejs';
 // Vercel Hobby 플랜 상한 = 300초. PRD 병렬 청킹(~3.5분)이 이 안에 완성됨.
 export const maxDuration = 300;
 
-// 문서별 출력 토큰 차등: 긴 문서(표/엔드포인트 많음)는 16384 유지, 짧은 목록류는 축소 → 생성 시간 절감.
-// 출력이 상한에 닿는 문서에만 시간효과 있음. heavy는 절대 줄이지 않음(잘림 방지).
-const MAX_TOKENS_BY_TYPE: Partial<Record<DocType, number>> = {
-  // heavy (유지)
-  'api-spec': 16384, database: 16384, wbs: 16384, 'test-plan': 16384, deployment: 16384, prd: 16384,
-  // mid
-  wireframe: 12288, 'user-story': 12288, flowchart: 12288,
-  // list (축소)
-  'feature-list': 8192, 'screen-list': 8192, ia: 8192, storyboard: 8192, 'test-case': 8192,
-};
-function maxTokensFor(docType: DocType): number {
-  // 과거엔 isGlm 플래그로 비-GLM(gpt-4o)에 Math.min(base, 8192) 캡을 씌웠다 —
-  // gpt-4o 시절 16384 출력을 안정적으로 못 받아내던 잔재. zai(현행)·gemini(전향)·anthropic
-  // 모두 고출력 maxTokens를 안정 처리하므로 provider 분기 자체를 제거하고 base를 그대로 쓴다.
-  // gpt-4o 경로가 살아있더라도 provider 자체 응답 상한에서 자연 잘림 — 8192 강제보다 손실이 적거나 같다.
-  return MAX_TOKENS_BY_TYPE[docType] ?? 16384;
+// 출력 상한은 문서 종류와 무관하게 16384.
+// 과거 목록류 8192·중간 12288 차등은 속도 목적이었으나 GLM 실측에서 6종(기능목록·유저스토리·IA·와이어프레임·
+// 스토리보드·테스트케이스)이 상한에서 문장 중간 잘림 → 차등 제거. 16384 초과 문서(와이어프레임 등)는
+// 300s 안에 못 끝내므로 상한을 더 올리지 않는다(GLM 자체 상한은 131072).
+function maxTokensFor(_docType: DocType): number {
+  return 16384;
 }
 
 // 한국어 출력 강제 시스템 프롬프트 (GLM-5는 한/영/중 혼합 출력 경향 있음)

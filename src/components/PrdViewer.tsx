@@ -432,6 +432,14 @@ export function PrdViewer() {
       }
     }
 
+    // PRD는 15섹션을 서버 한 요청으로 돌리면 Vercel maxDuration 300s에 걸린다(실측 504, GLM·mini 모두).
+    // 전체생성이 쓰는 클라 섹션 오케스트레이션(regenerateDocs → generatePrdViaSections, 섹션당 1요청)으로 우회.
+    // 본문이 없는 첫 생성은 regenerateDocs가 걸러내므로 startGeneration(누락 문서 생성, PRD가 위상 최상위)으로.
+    if (docType === 'prd' && currentMeeting?.id) {
+      if (documents.prd) await regenerateDocs(currentMeeting.id, ['prd']);
+      else await startGeneration();
+      return;
+    }
     // 실패 시 정확 복원을 위해 진입 시점 상태를 스냅샷(outdated 하드코딩 금지).
     const prevStatus = currentMeeting?.id ? getDocStatus(currentMeeting.id, docType) : null;
 
