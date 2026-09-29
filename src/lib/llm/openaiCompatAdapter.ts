@@ -28,11 +28,15 @@ export const openaiCompatAdapter: LLMAdapter = {
     // 리서치 요청 + GLM일 때만 web_search 내장 도구 부착(추가 검색 API 키 불필요).
     // thinking 비활성화 시 도구호출이 막힐 수 있어, 검색 시엔 thinking을 끄지 않는다.
     const useWebSearch = !!req.enableWebSearch && isGlm;
+    // 침묵 소실 금지: 모델 교체 후 리서치가 검색 없이 도는 걸 로그로 드러낸다.
+    if (req.enableWebSearch && !isGlm) console.warn(`[llm] web_search는 GLM 전용 — '${ctx.model}'는 검색 없이 응답`);
     const params = {
       model: ctx.model,
       messages,
       ...(isGpt5
-        ? { max_completion_tokens: req.maxTokens, reasoning_effort: process.env.OPENAI_REASONING_EFFORT || 'low' }
+        // 추론 토큰도 max_completion_tokens에 포함된다. 호출부 maxTokens는 '본문' 예산이므로 추론 몫을 2배로 얹는다
+        // (실측: medium에서 출력의 ~50%가 추론). 과금은 실제 생성분만이라 상한 상향 자체는 무비용.
+        ? { max_completion_tokens: req.maxTokens * 2, reasoning_effort: process.env.OPENAI_REASONING_EFFORT || 'low' }
         : { max_tokens: req.maxTokens }),
       ...(req.temperature !== undefined && !isGpt5 ? { temperature: req.temperature } : {}),
       // GLM 계열만 thinking 비활성화 (검색 시엔 유지 — 도구 사용 가능하게)
@@ -67,6 +71,6 @@ export const openaiCompatAdapter: LLMAdapter = {
       ? { inputTokens: u.prompt_tokens ?? 0, outputTokens: u.completion_tokens ?? 0, totalTokens: u.total_tokens ?? 0 }
       : undefined;
 
-    return { text: extractContent(message), provider: ctx.id, model: ctx.model, usage };
+    return { text: extractContent(message), provider: ctx.id, model: response.model || ctx.model, usage };
   },
 };

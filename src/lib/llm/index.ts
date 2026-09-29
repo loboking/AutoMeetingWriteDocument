@@ -22,6 +22,9 @@ function resolveImplementedProvider(): ResolvedProvider {
   const providers = resolveAllProviders(); // 키 없으면 여기서 throw
   for (const ctx of providers) {
     if (ADAPTERS[ctx.id].implemented) return ctx;
+    if (process.env.LLM_PROVIDER?.trim()) {
+      throw new Error(`지정한 LLM provider '${ctx.id}' 어댑터가 구현되지 않았습니다.`);
+    }
     console.warn(
       `[llm] provider '${ctx.id}' 어댑터 미구현 → 다음 우선순위로 폴백`
     );
@@ -40,7 +43,17 @@ function resolveImplementedProvider(): ResolvedProvider {
 export async function llmComplete(req: LLMRequest): Promise<LLMResult> {
   const ctx = resolveImplementedProvider();
   const adapter = ADAPTERS[ctx.id];
-  return adapter.complete(req, ctx);
+  const startedAt = Date.now();
+  const result = await adapter.complete(req, ctx);
+  if (process.env.LLM_MEASUREMENT_LOGGING === 'true') {
+    console.log('[llm-measurement]', JSON.stringify({
+      provider: ctx.id, requestedModel: ctx.model, reportedModel: result.model,
+      reasoningEffort: ctx.id === 'openai' && /^gpt-5/.test(ctx.model)
+        ? process.env.OPENAI_REASONING_EFFORT || 'low' : null,
+      elapsedMs: Date.now() - startedAt, usage: result.usage ?? null,
+    }));
+  }
+  return result;
 }
 
 /**

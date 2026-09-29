@@ -1,4 +1,4 @@
-import { llmComplete, resolveProvider } from '@/lib/llm';
+import { llmComplete } from '@/lib/llm';
 import { DEPLOYMENT_SECTIONS, DeploymentChunkProgress, DeploymentGenerationResult } from './deploymentSections';
 import { SECTION_PROMPTS } from './sectionPrompts';
 import { postProcessGeneratedDocument } from './advancedGuards';
@@ -7,9 +7,9 @@ import type { MeetingSummary, MeetingMetadata } from '@/types';
 // Re-export types
 export type { DeploymentChunkProgress, DeploymentGenerationResult };
 
-// 섹션 출력 토큰: GLM 8192, 그 외(gpt-4o 등) 4096
+// 섹션 출력 토큰: provider 무관 8192 (prdChunkGenerator와 통일 — 비GLM 4096 캡은 모델 교체 시 섹션 잘림 유발)
 function sectionMaxTokens(): number {
-  return resolveProvider().id === 'zai' ? 8192 : 4096;
+  return 8192;
 }
 
 // 단일 섹션 생성

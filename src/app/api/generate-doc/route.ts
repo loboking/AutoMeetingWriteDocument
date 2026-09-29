@@ -20,6 +20,8 @@ import { getTestPlanPrompt } from '@/lib/testPlanTemplate';
 import { reviewDocument } from '@/lib/docReviewer';
 import type { MeetingSummary, MeetingMetadata } from '@/types';
 import { llmComplete } from '@/lib/llm';
+import { getSectionContext } from '@/lib/prd/sectionDependencies';
+import { DOCUMENT_GROUNDING_RULES } from '@/lib/documentGrounding';
 import type { LLMResult } from '@/lib/llm/types';
 import { recordTokenUsage } from '@/lib/tokenUsage';
 import {
@@ -39,7 +41,7 @@ export const maxDuration = 300;
 // 과거 목록류 8192·중간 12288 차등은 속도 목적이었으나 GLM 실측에서 6종(기능목록·유저스토리·IA·와이어프레임·
 // 스토리보드·테스트케이스)이 상한에서 문장 중간 잘림 → 차등 제거. 16384 초과 문서(와이어프레임 등)는
 // 300s 안에 못 끝내므로 상한을 더 올리지 않는다(GLM 자체 상한은 131072).
-function maxTokensFor(_docType: DocType): number {
+function maxTokensFor(): number {
   return 16384;
 }
 
@@ -122,7 +124,7 @@ async function generateDocument(
       // 품질 가드용 메타데이터 추론(콘셉트/핵심수치/컴플라이언스) → 섹션 프롬프트에 주입
       const metadata = inferMetadata(summary, transcript);
       // 핵심+파생 수치를 생성 전 1회 확정 → 전 섹션이 단일 출처를 따르게 (SaaS 수치 정합성)
-      metadata.coreMetrics = await resolveCoreMetrics(summary, transcript, metadata.coreMetrics);
+      metadata.coreMetrics = await resolveCoreMetrics(summary, transcript, metadata.coreMetrics, onTokens);
       const result = await generatePRDByChunks(summary, transcript, meetingInfo, undefined, metadata, onTokens);
       console.log('[generate-doc] PRD 병렬 청킹 완료', {
         sections: Object.keys(result.sections).length,
@@ -153,8 +155,8 @@ async function generateDocument(
     // 문서별 출력토큰 차등(목록류는 축소 → 생성 시간 절감, 긴 문서는 16384 유지)
     const llmRes = await llmComplete({
       prompt,
-      system: KOREAN_OUTPUT_SYSTEM_PROMPT,
-      maxTokens: maxTokensFor(docType),
+      system: KOREAN_OUTPUT_SYSTEM_PROMPT + DOCUMENT_GROUNDING_RULES,
+      maxTokens: maxTokensFor(),
       timeoutMs: 900000,
       maxRetries: 0,
     });
@@ -168,10 +170,9 @@ async function generateDocument(
     console.error('OpenAI API 오류:', error);
     // API 키가 아예 없으면(데모/개발) mock 허용. 키는 있는데 호출 실패면 throw해서
     // 클라가 mock을 '진짜 문서'로 저장하지 않고 실패로 집계·재시도하게 한다.
-    // TODO(llm-guard): hasKey가 ANTHROPIC/GEMINI를 안 본다. anthropic은 implemented:false라
-    //   실제 선택되지 않으므로 지금은 안 터지지만, 같은 뿌리. 가드와 동일 출처로 정리 필요(도현 보고됨).
-    const hasKey = !!process.env.OPENAI_API_KEY || !!process.env.ZAI_API_KEY;
-    if (hasKey) {
+    const hasKey = !!process.env.OPENAI_API_KEY || !!process.env.ZAI_API_KEY
+      || !!process.env.GEMINI_API_KEY || !!process.env.ANTHROPIC_API_KEY;
+    if (hasKey || process.env.LLM_PROVIDER?.trim()) {
       throw error instanceof Error ? error : new Error('문서 생성 실패');
     }
     return getMockDoc(docType, summary, meetingInfo);
@@ -796,18 +797,28 @@ export async function POST(request: NextRequest) {
     //   문서 미생성 → 과금 미집계(recordUsage는 첫 섹션 성공에서).
     if (docType === 'prd' && prdPhase === 'prepare') {
       const metadata = inferMetadata(summary, transcript || '');
-      metadata.coreMetrics = await resolveCoreMetrics(summary, transcript || '', metadata.coreMetrics);
+      metadata.coreMetrics = await resolveCoreMetrics(summary, transcript || '', metadata.coreMetrics,
+        (r) => recordTokenUsage({ userId: auth.user.id, op: 'doc-generate', provider: r.provider, model: r.model, usage: r.usage, meetingId, docType, projectId }));
       return NextResponse.json({ metadata });
     }
-    // 단일 섹션: generateSection은 내부적으로 실패를 삼켜 '생성 실패' 본문을 돌려주므로 throw 없음.
+    // 선행 본문이 없으면 모델 호출 전에 거절한다. 실패한 섹션은 성공 응답/사용량 건수로 기록하지 않는다.
     if (docType === 'prd' && typeof prdSection === 'string') {
-      const { content: sectionContent } = await generateSection(
-        prdSection, summary, transcript || '', meetingInfo, {}, undefined, clientMetadata,
+      let previousSections: Record<string, string>;
+      try {
+        previousSections = getSectionContext(prdSection, body.previousSections);
+      } catch (error) {
+        return NextResponse.json({ error: error instanceof Error ? error.message : '선행 섹션 확인 필요' }, { status: 400 });
+      }
+      const result = await generateSection(
+        prdSection, summary, transcript || '', meetingInfo, previousSections, undefined, clientMetadata,
         (r) => recordTokenUsage({ userId: auth.user.id, op: 'doc-generate', provider: r.provider, model: r.model, usage: r.usage, meetingId, docType, projectId }),
       );
+      if (result.status === 'error') {
+        return NextResponse.json({ error: 'PRD 섹션 생성에 실패했습니다.', sectionId: prdSection }, { status: 502 });
+      }
       // 프로젝트 1건 기록(멱등 upsert) — 섹션 여러 개여도 1건만 집계.
       if (projectId) await recordUsage(auth.user.id, projectId, period, 'prd');
-      return NextResponse.json({ sectionId: prdSection, content: sectionContent });
+      return NextResponse.json({ sectionId: prdSection, content: result.content });
     }
 
     let partialMissing: number | undefined;

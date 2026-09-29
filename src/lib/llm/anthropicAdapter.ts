@@ -8,6 +8,7 @@ export const anthropicAdapter: LLMAdapter = {
   implemented: true,
 
   async complete(req: LLMRequest, ctx: ResolvedProvider): Promise<LLMResult> {
+    if (req.enableWebSearch) console.warn(`[llm] web_search는 GLM 전용 — '${ctx.model}'는 검색 없이 응답`);
     const client = new Anthropic({
       apiKey: ctx.apiKey,
       timeout: req.timeoutMs ?? 900000,

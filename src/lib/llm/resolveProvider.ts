@@ -36,7 +36,7 @@ export function resolveAllProviders(): ResolvedProvider[] {
   if (gemini) {
     providers.push({
       id: 'gemini',
-      model: process.env.GEMINI_MODEL || 'gemini-2.5-flash',
+      model: process.env.GEMINI_MODEL || 'gemini-3.5-flash', // 2.5는 신규 사용자 404(단종)
       apiKey: gemini,
       baseURL:
         process.env.GEMINI_BASE_URL ||
@@ -71,7 +71,7 @@ export function resolveAllProviders(): ResolvedProvider[] {
   }
 
   // LLM_PROVIDER로 명시 지정 시 그 provider를 맨 앞으로(키 우선순위 무시).
-  // 지정 provider의 키가 없으면 무시하고 기본 우선순위 유지(침묵 폴백 방지 위해 warn).
+  // 명시한 provider의 키가 없거나 오타면 중단한다. 다른 모델로 실측/운영을 대체하지 않는다.
   // env 한 줄로 zai/openai/gemini/anthropic 전환 — 키 순서에 휘둘리지 않는 단일 노브.
   const preferred = process.env.LLM_PROVIDER?.trim().toLowerCase();
   if (preferred) {
@@ -80,9 +80,7 @@ export function resolveAllProviders(): ResolvedProvider[] {
       const [picked] = providers.splice(idx, 1);
       providers.unshift(picked);
     } else if (idx < 0) {
-      console.warn(
-        `[llm] LLM_PROVIDER='${preferred}' 이지만 해당 키가 없어 무시. 기본 우선순위 사용.`
-      );
+      throw new Error(`LLM_PROVIDER='${preferred}' 설정을 확인하세요. 지원하지 않는 공급자이거나 해당 API 키가 없습니다.`);
     }
   }
 

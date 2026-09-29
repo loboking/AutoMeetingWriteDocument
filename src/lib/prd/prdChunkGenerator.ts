@@ -6,6 +6,8 @@ import { mapWithConcurrency, withRetry } from '@/lib/concurrency';
 import { sanitizeSectionContent } from './sanitizeSection';
 import { postProcessGeneratedDocument } from './advancedGuards';
 import { assemblePRD } from './assemblePRD';
+import { getSectionLevels, getSectionContext } from './sectionDependencies';
+import { DOCUMENT_GROUNDING_RULES } from '@/lib/documentGrounding';
 import type { MeetingSummary, MeetingMetadata } from '@/types';
 
 // Re-export types
@@ -40,17 +42,11 @@ export async function generateSection(
   onProgress?: (progress: PRDChunkProgress) => void,
   metadata?: MeetingMetadata,
   onTokens?: (r: LLMResult) => void
-): Promise<{ sectionId: string; content: string }> {
+): Promise<{ sectionId: string; content: string; status: 'completed' | 'error' }> {
   const section = PRD_SECTIONS.find(s => s.id === sectionId);
   if (!section) {
     throw new Error(`섹션을 찾을 수 없습니다: ${sectionId}`);
   }
-
-  onProgress?.({
-    sectionId,
-    sectionTitle: section.title,
-    status: 'generating',
-  });
 
   try {
     const promptFn = SECTION_PROMPTS[sectionId];
@@ -58,13 +54,19 @@ export async function generateSection(
       throw new Error(`섹션 프롬프트를 찾을 수 없습니다: ${sectionId}`);
     }
 
-    const prompt = promptFn.getPrompt({
+    const context = getSectionContext(sectionId, previousSections);
+    onProgress?.({ sectionId, sectionTitle: section.title, status: 'generating' });
+    const sectionPrompt = promptFn.getPrompt({
       summary,
       transcript,
       meetingInfo,
-      previousSections,
+      previousSections: context,
       metadata,
     });
+    const additionalContext = Object.entries(context)
+      .filter(([, content]) => !sectionPrompt.includes(content))
+      .map(([id, content]) => `### 선행 섹션 ${id}\n${content}`).join('\n\n');
+    const prompt = `${sectionPrompt}\n\n${additionalContext}`;
 
     const maxTokens = sectionMaxTokens();
     console.log(`[PRD Chunk] 섹션 생성 시작: ${sectionId} (maxTokens=${maxTokens})`);
@@ -76,7 +78,7 @@ export async function generateSection(
       () =>
         llmComplete({
           prompt,
-          system: PRD_SECTION_SYSTEM,
+          system: PRD_SECTION_SYSTEM + DOCUMENT_GROUNDING_RULES,
           maxTokens,
           temperature: 0.7,
           timeoutMs: 300000, // Vercel maxDuration 300s 한계까지 대기. z.ai 단일 heavy(280s+) 정상 응답 기다림.
@@ -90,7 +92,8 @@ export async function generateSection(
     // 프롬프트 누출 제거 + 중국어(한자) 정리 → 일관성/비용/과장 후처리
     const cleaned = sanitizeSectionContent(extracted);
     const processed = cleaned ? postProcessGeneratedDocument(cleaned, metadata) : cleaned;
-    const content = processed || `## ${section.title}\n\n내용 생성 실패`;
+    if (!processed.trim()) throw new Error('빈 섹션 응답');
+    const content = processed;
 
     onProgress?.({
       sectionId,
@@ -99,7 +102,7 @@ export async function generateSection(
       content,
     });
 
-    return { sectionId, content };
+    return { sectionId, content, status: 'completed' };
   } catch (error) {
     console.error(`[PRD Chunk] 섹션 생성 실패: ${sectionId}`, error);
     onProgress?.({
@@ -113,6 +116,7 @@ export async function generateSection(
     return {
       sectionId,
       content: `## ${section.title}\n\n생성 실패: ${error instanceof Error ? error.message : '알 수 없는 오류'}`,
+      status: 'error',
     };
   }
 }
@@ -140,20 +144,19 @@ export async function generatePRDByChunks(
   const sections: Record<string, string> = {};
   const progressList: PRDChunkProgress[] = [];
 
-  const sortedSections = [...PRD_SECTIONS].sort((a, b) => a.order - b.order);
-
-  // 모든 섹션을 독립적으로 생성 (유기성은 공통 컨텍스트 summary+transcript로 확보).
-  // 동시 실행 수를 CONCURRENCY로 제한해 z.ai rate limit(429) 회피.
-  const results = await mapWithConcurrency(sortedSections, CONCURRENCY, (section) =>
-    generateSection(section.id, summary, transcript, meetingInfo, {}, (progress) => {
-      progressList.push(progress);
-      onProgress?.(progress);
-    }, metadata, onTokens)
-  );
-
-  for (const result of results) {
-    if (result) {
-      sections[result.sectionId] = result.content;
+  const report = (progress: PRDChunkProgress) => {
+    progressList.push(progress);
+    onProgress?.(progress);
+  };
+  for (const level of getSectionLevels()) {
+    const results = await mapWithConcurrency(level, CONCURRENCY, section =>
+      generateSection(section.id, summary, transcript, meetingInfo, sections, report, metadata, onTokens)
+    );
+    for (let index = 0; index < level.length; index++) {
+      const section = level[index];
+      const result = results[index];
+      if (!result) report({ sectionId: section.id, sectionTitle: section.title, status: 'error', error: '섹션 실행 실패' });
+      sections[section.id] = result?.content ?? `## ${section.title}\n\n생성 실패: 섹션 실행 실패`;
     }
   }
 

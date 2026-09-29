@@ -23,9 +23,10 @@ ${context ? `## 추가 맥락\n${context}` : ''}
 ## 분석 요구사항
 
 1. **개요 (overview)**: 회의 전체 맥락을 포함한 3-4문장 요약
-2. **핵심 사항 (keyPoints)**: 최소 5개 이상, 구체적 내용 포함
+2. **핵심 사항 (keyPoints)**: 원문에 실제로 있는 핵심 사항, 구체적 내용 포함
 3. **의사결정 (decisions)**: 최종 결정된 사항들, 결정 이유 포함
-4. **Action Items**: 담당자, 우선순위, 기한이 명확히 명시된 항목들
+4. **Action Items**: 회의에서 실제로 합의한 작업만 포함. 담당자·우선순위·기한이 명시되지 않았으면 해당 필드를 생략하고 추정하지 마세요.
+5. 제안·검토 중인 정책을 최종 결정으로 바꾸지 마세요. 최소 개수를 맞추기 위해 결정이나 작업을 추가하지 마세요. 해당 항목이 없으면 빈 배열을 반환하세요.
 
 ## 출력 형식 (JSON)
 {
@@ -33,12 +34,12 @@ ${context ? `## 추가 맥락\n${context}` : ''}
   "keyPoints": [
     "구체적인 핵심 논의 사항 1 (배경, 내용 포함)",
     "구체적인 핵심 논의 사항 2",
-    "최소 5개 이상 작성"
+    "원문에 있는 사항만 작성"
   ],
   "decisions": [
     "의사결정 1 (결정 이유 포함)",
     "의사결정 2",
-    "최소 3개 이상 작성"
+    "원문에서 확정한 결정만 작성"
   ],
   "actionItems": [
     {
@@ -108,8 +109,9 @@ ${context ? `## 추가 맥락\n${context}` : ''}
     // generate-doc/route.ts와 동일 원칙: 키가 아예 없으면(데모/개발) mock 허용.
     // 키는 있는데 호출이 실패하면 throw해서 진짜 실패로 처리 — 이전엔 무조건 mock을 반환해서
     // 실제 회의 내용과 무관한 가짜 요약("대시보드 기능 추가"...)이 진짜처럼 저장되던 버그(2026-08 확인).
-    const hasKey = !!process.env.OPENAI_API_KEY || !!process.env.ZAI_API_KEY;
-    if (hasKey) {
+    const hasKey = !!process.env.OPENAI_API_KEY || !!process.env.ZAI_API_KEY
+      || !!process.env.GEMINI_API_KEY || !!process.env.ANTHROPIC_API_KEY;
+    if (hasKey || process.env.LLM_PROVIDER?.trim()) {
       throw error instanceof Error ? error : new Error('요약 생성 실패');
     }
     return getMockSummary();

@@ -99,10 +99,16 @@ describe('resolveProvider', () => {
     expect(resolveProvider().id).toBe('anthropic');
   });
 
-  it('LLM_PROVIDER 지정 키가 없으면 무시하고 기본 우선순위', () => {
+  it('LLM_PROVIDER 지정 키가 없으면 다른 모델 대신 실패한다', () => {
     process.env.OPENAI_API_KEY = 'ok';
     process.env.ZAI_API_KEY = 'zk';
     process.env.LLM_PROVIDER = 'gemini'; // 키 없음
-    expect(resolveProvider().id).toBe('openai'); // 기본 우선순위 유지
+    expect(() => resolveProvider()).toThrow(/LLM_PROVIDER='gemini'/);
+  });
+
+  it('공급자 설정 오타를 실제 모델 교체로 오인하지 않는다', () => {
+    process.env.ZAI_API_KEY = 'zk';
+    process.env.LLM_PROVIDER = 'opeani';
+    expect(() => resolveProvider()).toThrow(/지원하지 않는 공급자/);
   });
 });
