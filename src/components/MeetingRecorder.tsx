@@ -1,7 +1,8 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { Mic, Square, Pause, Play, FileUp, AlertCircle, FileText, X } from 'lucide-react';
+import { saveAs } from 'file-saver';
+import { Mic, Square, Pause, Play, FileUp, AlertCircle, FileText, X, Download } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
@@ -37,7 +38,8 @@ function VoiceRecorder({ onResult }: VoiceRecorderProps = {}) {
     stopRecording,
     pauseRecording,
     resumeRecording,
-    getAudioBlob,
+    getAudioParts,
+    captureInterrupted,
     reset,
     clearBackup,
     listRecoverableSessions,
@@ -96,9 +98,19 @@ function VoiceRecorder({ onResult }: VoiceRecorderProps = {}) {
     hasAutoTranscribed.current = false;
   };
 
+  // 정지 후 원본을 기기에 저장 — 전사가 어떻게 되든 사용자 손에 파일이 남는 보험.
+  // 파트가 여럿(이어서 녹음)이면 파트별 파일(각각 완전한 webm).
+  const handleSaveAudio = () => {
+    const parts = getAudioParts();
+    const stamp = new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '');
+    const ext = (parts[0]?.type || 'audio/webm').includes('mp4') ? 'm4a' : 'webm';
+    parts.forEach((p, i) => saveAs(p, `recording-${stamp}${parts.length > 1 ? `-part${i + 1}` : ''}.${ext}`));
+  };
+
   const handleTranscribe = async () => {
-    const blob = getAudioBlob();
-    if (!blob) return;
+    // 파트마다 별도 webm 헤더라 하나로 합쳐 보내면 STT가 첫 파트만 읽는다 → 파트별 전사 후 텍스트 결합.
+    const parts = getAudioParts();
+    if (parts.length === 0) return;
 
     setIsUploading(true);
     setTranscribeError(null);
@@ -108,10 +120,18 @@ function VoiceRecorder({ onResult }: VoiceRecorderProps = {}) {
 
     try {
       // 저장소 업로드 → 서명URL → 서버 Whisper(키 없으면 브라우저 STT 폴백). 임시 사본은 헬퍼가 정리.
-      const result = await transcribeAudio(blob, 'ko', {
-        browserTranscribe: (b, lang) => browserSTT.transcribeBlob(b, lang),
+      const deps = {
+        browserTranscribe: (b: Blob, lang?: string) => browserSTT.transcribeBlob(b, lang),
         browserError: browserSTT.error,
-      });
+      };
+      const results = [];
+      for (const part of parts) results.push(await transcribeAudio(part, 'ko', deps));
+      const result = {
+        text: results.map((r) => r.text).join('\n\n'),
+        // 화자/타임스탬프 세그먼트는 파트 간 시간 오프셋을 모르므로 단일 파트일 때만 전달.
+        segments: results.length === 1 ? results[0].segments : undefined,
+        duration: results.reduce((sum, r) => sum + (r.duration || 0), 0) || undefined,
+      };
 
       stopSimulation();
       // 전사 성공 — IndexedDB 임시 백업은 이제 필요 없음.
@@ -150,7 +170,7 @@ function VoiceRecorder({ onResult }: VoiceRecorderProps = {}) {
 
   // 녹음 완료 후 자동으로 텍스트 변환 시작
   useEffect(() => {
-    if (audioUrl && !isRecording && !hasAutoTranscribed.current) {
+    if (audioUrl && !isRecording && !captureInterrupted && !hasAutoTranscribed.current) {
       hasAutoTranscribed.current = true;
       // 약간의 지연 후 변환 시작 (사용자가 완료를 인지할 수 있도록)
       const timer = setTimeout(() => {
@@ -158,7 +178,7 @@ function VoiceRecorder({ onResult }: VoiceRecorderProps = {}) {
       }, 500);
       return () => clearTimeout(timer);
     }
-  }, [audioUrl, isRecording]);
+  }, [audioUrl, isRecording, captureInterrupted]);
 
   return (
     <Card>
@@ -336,6 +356,25 @@ function VoiceRecorder({ onResult }: VoiceRecorderProps = {}) {
                     : 'AI가 음성을 텍스트로 변환하고 있습니다. 잠시만 기다려주세요...'}
                 </p>
               </div>
+            ) : captureInterrupted ? (
+              /* 마이크 끊김/녹음기 오류로 강제 중단 — 자동 전사를 보류하고 사용자가 고른다. */
+              <div className="space-y-3">
+                <div className="flex items-start gap-2 rounded-lg border border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/20 p-3 text-sm text-amber-800 dark:text-amber-300" role="alert">
+                  <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" aria-hidden="true" />
+                  <span className="flex-1">{captureInterrupted}</span>
+                </div>
+                <div className="flex gap-2">
+                  <Button onClick={continueRecording} size="lg" className="flex-1">
+                    이어서 녹음
+                  </Button>
+                  <Button onClick={handleTranscribe} variant="secondary" size="lg" className="flex-1">
+                    지금까지 변환
+                  </Button>
+                  <Button onClick={handleSaveAudio} variant="outline" size="lg" title="녹음 파일 저장">
+                    <Download className="w-4 h-4" aria-hidden="true" />
+                  </Button>
+                </div>
+              </div>
             ) : transcribeError ? (
               /* 전사 실패 — 오디오는 그대로 살아있음. 재시도/이어서 녹음/폐기 중 선택. */
               <div className="space-y-3">
@@ -369,6 +408,9 @@ function VoiceRecorder({ onResult }: VoiceRecorderProps = {}) {
                   >
                     버리고 다시 녹음
                   </Button>
+                  <Button onClick={handleSaveAudio} variant="outline" size="lg" title="녹음 파일 저장">
+                    <Download className="w-4 h-4" aria-hidden="true" />
+                  </Button>
                 </div>
               </div>
             ) : (
@@ -376,6 +418,10 @@ function VoiceRecorder({ onResult }: VoiceRecorderProps = {}) {
               <div className="flex gap-2">
                 <Button onClick={reset} variant="outline" size="lg" className="flex-1">
                   다시 녹음
+                </Button>
+                <Button onClick={handleSaveAudio} variant="outline" size="lg" className="flex-1">
+                  <Download className="w-4 h-4 mr-1" aria-hidden="true" />
+                  녹음 파일 저장
                 </Button>
               </div>
             )}
@@ -417,7 +463,8 @@ export function MeetingRecorder({ mode = 'meeting', onTranscriptReady }: Meeting
         </TabsTrigger>
       </TabsList>
 
-      <TabsContent value="voice">
+      {/* keepMounted: 녹음 중 다른 탭을 눌러도 VoiceRecorder가 언마운트돼 마이크가 끊기지 않게. */}
+      <TabsContent value="voice" keepMounted>
         <VoiceRecorder onResult={onResult} />
       </TabsContent>
 
