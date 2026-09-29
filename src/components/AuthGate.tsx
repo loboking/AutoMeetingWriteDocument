@@ -36,6 +36,9 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
   const debounceNoteTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   // onSignedIn 중복 실행 방지(같은 유저로 INITIAL_SESSION+SIGNED_IN 둘 다 올 수 있음)
   const syncedUserRef = useRef<string | null>(null);
+  // 로그아웃/계정 전환 후 도착한 이전 조회가 화면을 덮어쓰지 않도록 한다.
+  const syncEpochRef = useRef(0);
+  const applyingInitialDataRef = useRef(false);
 
   useEffect(() => {
     setMounted(true);
@@ -67,6 +70,9 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
   // 세션 초기 로드 + 인증 상태 변화 구독
   useEffect(() => {
     let active = true;
+    const meetingTimers = debounceTimers.current;
+    const noteTimers = debounceNoteTimers.current;
+    const cancelPendingSync = () => { syncEpochRef.current++; };
 
     // ★ 안전망: getSession이 느리거나 hang하면 무한 스피너에 갇힌다(타임아웃 부재).
     //   8초 내 응답 없으면 일단 비로그인으로 간주해 화면을 보여준다(로그인 폼).
@@ -81,6 +87,10 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
         setSession(data.session);
         setLoadingSession(false);
         clearTimeout(failsafe);
+        if (data.session && syncedUserRef.current !== data.session.user.id) {
+          syncedUserRef.current = data.session.user.id;
+          void onSignedIn(data.session);
+        }
       })
       .catch(() => {
         // 네트워크/인증서버 오류 → 스피너에 갇히지 않게 화면 표시
@@ -111,37 +121,25 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
 
     return () => {
       active = false;
+      cancelPendingSync();
+      syncedUserRef.current = null;
       clearTimeout(failsafe);
       sub.subscription.unsubscribe();
+      unsubscribeRef.current?.();
+      unsubscribeNotesRef.current?.();
+      meetingTimers.forEach(clearTimeout);
+      meetingTimers.clear();
+      noteTimers.forEach(clearTimeout);
+      noteTimers.clear();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // SIGNED_IN: 서버 fetch + 1회 마이그레이션 + 머지 → store, 이후 변경 디바운스 upsert
+  // 조회 중 입력도 저장하도록 구독부터 등록하고, 두 테이블은 독립적으로 조회한다.
   const onSignedIn = async (sess: Session) => {
-    const store = useMeetingStore.getState();
-    const local = store.meetings;
-
-    // Meeting 마이그레이션 (기존)
-    const server = await fetchMeetings();
-    await migrateLocalMeetings(sess.user.id, local, server);
-    // 마이그레이션 후 최신 서버 상태로 다시 가져와 머지
-    const serverAfter = await fetchMeetings();
-    const merged = mergeServer(local, serverAfter, useMeetingStore.getState().deletedIds);
-    store.setMeetings(merged);
-
-    // MeetingNote 마이그레이션 (localStorage → DB 1회 흡수, 멱등) — meetings와 독립 경로
-    const localNotes = store.meetingNotes;
-    const serverNotes = await fetchMeetingNotes();
-    await migrateLocalMeetingNotes(sess.user.id, localNotes, serverNotes);
-    // 마이그레이션 후 최신 서버 상태로 다시 가져와 머지(meetings 패턴과 동일)
-    const serverNotesAfter = await fetchMeetingNotes();
-    const mergedNotes = mergeMeetingNotes(
-      localNotes,
-      serverNotesAfter,
-      useMeetingStore.getState().deletedNoteIds
-    );
-    store.setMeetingNotes(mergedNotes);
+    const epoch = ++syncEpochRef.current;
+    const isCurrent = () => syncEpochRef.current === epoch;
+    useMeetingStore.setState({ isSyncing: true, isSyncingNotes: true, syncError: null, notesSyncError: null });
 
     // Meeting 런타임 변경 → 디바운스 upsert 등록 (중복 등록 방지)
     if (unsubscribeRef.current) unsubscribeRef.current();
@@ -152,7 +150,7 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
       // 변경/추가된 회의만 디바운스 upsert
       const prevById = new Map(prev.map((m) => [m.id, m]));
       for (const m of next) {
-        if (prevById.get(m.id) !== m) scheduleUpsert(m);
+        if (!applyingInitialDataRef.current && prevById.get(m.id) !== m) scheduleUpsert(m);
       }
       prev = next;
     });
@@ -165,10 +163,64 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
       if (next === prevNotes) return;
       const prevById = new Map(prevNotes.map((n) => [n.id, n]));
       for (const n of next) {
-        if (prevById.get(n.id) !== n) scheduleUpsertNote(n);
+        if (!applyingInitialDataRef.current && prevById.get(n.id) !== n) scheduleUpsertNote(n);
       }
       prevNotes = next;
     });
+
+    await Promise.allSettled([
+      (async () => {
+        try {
+          const server = await fetchMeetings();
+          if (!isCurrent()) return;
+          await migrateLocalMeetings(sess.user.id, useMeetingStore.getState().meetings, server);
+          if (!isCurrent()) return;
+          const serverAfter = await fetchMeetings();
+          if (!isCurrent()) return;
+          // 조회를 기다리는 동안 편집한 내용까지 포함해 병합한다.
+          const fresh = useMeetingStore.getState();
+          applyingInitialDataRef.current = true;
+          try {
+            fresh.setMeetings(mergeServer(fresh.meetings, serverAfter, fresh.deletedIds));
+          } finally {
+            applyingInitialDataRef.current = false;
+          }
+        } catch (error) {
+          if (isCurrent()) {
+            syncedUserRef.current = null;
+            useMeetingStore.setState({ syncError: '기획서 동기화에 실패했습니다. 연결을 확인한 뒤 다시 동기화해 주세요.' });
+            console.error('[AuthGate] 기획서 동기화 실패:', error);
+          }
+        } finally {
+          if (isCurrent()) useMeetingStore.setState({ isSyncing: false });
+        }
+      })(),
+      (async () => {
+        try {
+          const server = await fetchMeetingNotes();
+          if (!isCurrent()) return;
+          await migrateLocalMeetingNotes(sess.user.id, useMeetingStore.getState().meetingNotes, server);
+          if (!isCurrent()) return;
+          const serverAfter = await fetchMeetingNotes();
+          if (!isCurrent()) return;
+          const fresh = useMeetingStore.getState();
+          applyingInitialDataRef.current = true;
+          try {
+            fresh.setMeetingNotes(mergeMeetingNotes(fresh.meetingNotes, serverAfter, fresh.deletedNoteIds));
+          } finally {
+            applyingInitialDataRef.current = false;
+          }
+        } catch (error) {
+          if (isCurrent()) {
+            syncedUserRef.current = null;
+            useMeetingStore.setState({ notesSyncError: '회의록 동기화에 실패했습니다. 연결을 확인한 뒤 다시 동기화해 주세요.' });
+            console.error('[AuthGate] 회의록 동기화 실패:', error);
+          }
+        } finally {
+          if (isCurrent()) useMeetingStore.setState({ isSyncingNotes: false });
+        }
+      })(),
+    ]);
   };
 
   const scheduleUpsertNote = (note: { id: string }) => {
@@ -201,6 +253,7 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
 
   // SIGNED_OUT: 순서 보장 — 생성 취소 → 구독/타이머 정리 → persist 클리어 → 메모리 리셋
   const onSignedOut = () => {
+    syncEpochRef.current++;
     const store = useMeetingStore.getState();
     store.cancelGeneration(); // in-flight 생성/좀비 차단 (먼저)
 

@@ -15,7 +15,7 @@ export async function fetchMeetingNotes(): Promise<MeetingNote[]> {
 
   if (error) {
     console.error('[notesSync] fetch error:', error.message);
-    return [];
+    throw new Error(`회의록 조회 실패: ${error.message}`);
   }
   return (data || []).map(rowToMeetingNote);
 }

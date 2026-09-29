@@ -1,0 +1,68 @@
+{
+  "phase": "after",
+  "date": "2026-09-14T10:34:55.542Z",
+  "environment": "Pixel 7 emulation / local Chrome / mocked Supabase; not a physical Android device",
+  "userAgent": "Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.7827.55 Mobile Safari/537.36",
+  "results": [
+    {
+      "name": "수동 동기화가 회의록 원문과 요약을 함께 가져온다",
+      "passed": true
+    },
+    {
+      "name": "받아온 회의록 제목이 Android 화면에 표시된다",
+      "passed": true
+    },
+    {
+      "name": "조회 실패를 화면에 알린다",
+      "passed": true
+    },
+    {
+      "name": "조회 실패 후 받아온 원문을 보존한다",
+      "passed": true
+    },
+    {
+      "name": "연결 복구 후 재시도하면 오류가 해제된다",
+      "passed": true
+    },
+    {
+      "name": "기획서 14종의 본문을 빠짐없이 동기화한다",
+      "passed": true
+    },
+    {
+      "name": "회의록 탭에서 기획서를 열면 해당 문서 본문으로 이동한다",
+      "passed": true
+    },
+    {
+      "name": "MD 실제 다운로드 파일이 비어 있지 않고 본문을 포함한다",
+      "passed": true,
+      "bytes": 73
+    },
+    {
+      "name": "DOCX 실제 다운로드 파일이 비어 있지 않고 본문을 포함한다",
+      "passed": true,
+      "bytes": 8635
+    },
+    {
+      "name": "XLSX 실제 다운로드 파일이 비어 있지 않고 본문을 포함한다",
+      "passed": true,
+      "bytes": 16022
+    },
+    {
+      "name": "PPTX 실제 다운로드 파일이 비어 있지 않고 본문을 포함한다",
+      "passed": true,
+      "bytes": 56095
+    },
+    {
+      "name": "새 기기의 최초 조회 실패를 알리고 빈 내용을 업로드하지 않는다",
+      "passed": true
+    },
+    {
+      "name": "최초 조회가 실패해도 수동 재시도로 원문·요약을 복구한다",
+      "passed": true
+    }
+  ],
+  "noteReads": 14,
+  "meetingReads": 14,
+  "writes": 1,
+  "pageErrors": []
+}

@@ -48,7 +48,9 @@ export default function Home() {
   const currentMeeting = useMeetingStore(s => s.currentMeeting);
   const currentStep = useMeetingStore(s => s.currentStep);
   const syncFromServer = useMeetingStore(s => s.syncFromServer);
-  const isSyncing = useMeetingStore(s => s.isSyncing);
+  const syncMeetingNotesFromServer = useMeetingStore(s => s.syncMeetingNotesFromServer);
+  const isSyncing = useMeetingStore(s => s.isSyncing || s.isSyncingNotes);
+  const syncError = useMeetingStore(s => s.syncError || s.notesSyncError);
   // composite Project 진입점(② 기획서 탭 하단). 합성 결과 기획서 세트 목록.
   // hotfix(도현): 합성 Project는 meetings[]에 평탄화 동기화돼 DB 영속됨.
   // selector에서 filter(새 배열 반환)하지 않고 meetings 통째로 받아 컴포넌트 본문에서 filter
@@ -328,7 +330,10 @@ export default function Home() {
                 </Button>
               )}
               <Button
-                onClick={() => { void syncFromServer(); }}
+                onClick={() => {
+                  // 두 목록은 별도 테이블이다. 한쪽 실패가 다른 쪽 조회를 막지 않게 한다.
+                  void Promise.allSettled([syncFromServer(), syncMeetingNotesFromServer()]);
+                }}
                 disabled={isSyncing}
                 variant="outline"
                 size="sm"
@@ -363,6 +368,11 @@ export default function Home() {
             </div>
           </div>
         </header>
+        {syncError && (
+          <Alert variant="destructive" className="mb-4">
+            <AlertDescription>{syncError}</AlertDescription>
+          </Alert>
+        )}
 
         {/* 삭제 undo 인라인 배너 — pendingDelete가 있을 때만 표시. sonner(토스트) 없이 Alert 재사용(도현 설계). */}
         {pendingDelete && (
@@ -732,7 +742,7 @@ export default function Home() {
                     </h3>
                   </div>
                   {meetings.filter(m => !m.isComposite).map((m) => (
-                    <Card key={m.id} className="border-slate-200 dark:border-slate-700 hover:shadow-md transition-shadow cursor-pointer" onClick={() => { setCurrentMeeting(m); setShowDocsModal(false); }}>
+                    <Card key={m.id} className="border-slate-200 dark:border-slate-700 hover:shadow-md transition-shadow cursor-pointer" onClick={() => { setCurrentMeeting(m); setTopTab('meetings'); setShowDocsModal(false); }}>
                       <CardContent className="p-3 flex items-center justify-between gap-2">
                         <div className="flex-1 min-w-0">
                           <div className="font-medium truncate text-sm">{m.title}</div>
@@ -754,6 +764,7 @@ export default function Home() {
                             size="sm"
                             onClick={() => {
                               setCurrentMeeting(m);
+                              setTopTab('meetings');
                               setShowDocsModal(false);
                             }}
                             className="text-xs gap-1.5"

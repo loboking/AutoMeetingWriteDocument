@@ -14,7 +14,7 @@ export async function fetchMeetings(): Promise<Meeting[]> {
 
   if (error) {
     console.error('[meetingsSync] fetch error:', error.message);
-    return [];
+    throw new Error(`기획서 조회 실패: ${error.message}`);
   }
   return (data || []).map(rowToMeeting);
 }

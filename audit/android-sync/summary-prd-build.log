@@ -1,0 +1,62 @@
+
+> meeting-auto-docs@0.1.0 build
+> TURBOPACK=0 next build
+
+[@sentry/nextjs] DEPRECATION WARNING: disableLogger is deprecated and will be removed in a future version. Use webpack.treeshake.removeDebugLogging instead.
+▲ Next.js 16.2.2 (Turbopack)
+- Experiments (use with caution):
+  · clientTraceMetadata
+
+  Creating an optimized production build ...
+[@sentry/nextjs] DEPRECATION WARNING: disableLogger is deprecated and will be removed in a future version. Use webpack.treeshake.removeDebugLogging instead.
+✓ Compiled successfully in 19.6s
+  Running TypeScript ...
+  Finished TypeScript in 8.5s ...
+  Collecting page data using 7 workers ...
+  Generating static pages using 7 workers (0/30) ...
+⚠ metadataBase property in metadata export is not set for resolving social open graph or twitter images, using "http://localhost:3000". See https://nextjs.org/docs/app/api-reference/functions/generate-metadata#metadatabase
+  Generating static pages using 7 workers (7/30) 
+  Generating static pages using 7 workers (14/30) 
+  Generating static pages using 7 workers (22/30) 
+✓ Generating static pages using 7 workers (30/30) in 399ms
+  Finalizing page optimization ...
+
+Route (app)
+┌ ○ /
+├ ○ /_not-found
+├ ○ /about
+├ ○ /admin
+├ ƒ /api/admin/dashboard
+├ ƒ /api/admin/meetings/[id]
+├ ƒ /api/admin/payments
+├ ƒ /api/admin/subscriptions
+├ ƒ /api/admin/users
+├ ƒ /api/admin/users/[id]
+├ ƒ /api/admin/users/[id]/ban
+├ ƒ /api/admin/users/[id]/grant
+├ ƒ /api/billing/cancel
+├ ƒ /api/billing/issue
+├ ƒ /api/billing/status
+├ ƒ /api/billing/webhook
+├ ƒ /api/cron/renew
+├ ƒ /api/edit-doc
+├ ƒ /api/extract-metadata
+├ ƒ /api/extract-text
+├ ƒ /api/generate-doc
+├ ƒ /api/quality-check
+├ ƒ /api/refine-transcript
+├ ƒ /api/share
+├ ƒ /api/storage/sign
+├ ƒ /api/summarize
+├ ƒ /api/synthesize-notes
+├ ƒ /api/transcribe
+├ ○ /manifest.webmanifest
+├ ○ /pricing
+├ ○ /privacy
+├ ƒ /shared/[id]
+└ ○ /terms
+
+
+○  (Static)   prerendered as static content
+ƒ  (Dynamic)  server-rendered on demand
+

@@ -6,6 +6,7 @@ import { authedFetch } from '@/lib/authFetch';
 import { mapWithConcurrency } from '@/lib/concurrency';
 import { PRD_SECTIONS } from '@/lib/prd/prdSections';
 import { assemblePRD } from '@/lib/prd/assemblePRD';
+import { getSectionLevels, getSectionContext } from '@/lib/prd/sectionDependencies';
 import { deleteMeetingRow, fetchMeetings, mergeServer } from '@/lib/meetingsSync';
 import {
   deleteMeetingNoteRow,
@@ -394,20 +395,29 @@ async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
         : {});
       setSub();
 
-      const results = await mapWithConcurrency(sections, PRD_SECTION_CONCURRENCY, async (section) => {
-        if (genAbort.cancelled) return { id: section.id, content: '', failed: true };
-        try {
-          const body = await prdSectionFetch({ prdSection: section.id, metadata }, 320_000);
-          const c = typeof body.content === 'string' ? body.content : '';
-          return { id: section.id, content: c, failed: !c || c.includes('생성 실패') };
-        } catch (e) {
-          console.warn(`PRD 섹션 실패(${section.id}):`, e);
-          return { id: section.id, content: `## ${section.title}\n\n생성 실패`, failed: true };
-        } finally {
-          done++;
-          setSub();
+      const completedSections: Record<string, string> = {};
+      const results: ({ id: string; content: string; failed: boolean } | null)[] = [];
+      for (const level of getSectionLevels()) {
+        const batch = await mapWithConcurrency(level, PRD_SECTION_CONCURRENCY, async (section) => {
+          if (genAbort.cancelled) return { id: section.id, content: '', failed: true };
+          try {
+            const previousSections = getSectionContext(section.id, completedSections);
+            const body = await prdSectionFetch({ prdSection: section.id, metadata, previousSections }, 320_000);
+            const c = typeof body.content === 'string' ? body.content : '';
+            return { id: section.id, content: c, failed: !c || c.includes('생성 실패') };
+          } catch (e) {
+            console.warn(`PRD 섹션 실패(${section.id}):`, e);
+            return { id: section.id, content: `## ${section.title}\n\n생성 실패`, failed: true };
+          } finally {
+            done++;
+            setSub();
+          }
+        });
+        results.push(...batch);
+        for (const result of batch) {
+          if (result && !result.failed) completedSections[result.id] = result.content;
         }
-      });
+      }
 
       // subProgress 정리(다음 단계로 이월 방지)
       set((st) => st.generationProgress ? { generationProgress: { ...st.generationProgress, subProgress: undefined } } : {});
@@ -553,7 +563,8 @@ async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
     const levels = job.mode === 'regen' ? levelsFor(job.order) : topoSortLevels();
     for (const level of levels) {
       if (genAbort.cancelled) break;
-      const pending = level.filter((dt) => !doneSet.has(dt));
+      // 최초 생성도 대상이 지정되면 해당 문서만 실행한다.
+      const pending = level.filter((dt) => order.includes(dt) && !doneSet.has(dt));
       if (pending.length === 0) continue;
 
       // PRD는 섹션 오케스트레이션(동시 2콜)으로 z.ai 슬롯을 점유 → 단독 선행(다른 문서와 겹치면 429/500).
@@ -688,6 +699,7 @@ interface MeetingStore {
   // 회의록 DB 영속 — meetings 동기화와 독립(syncFromServer 무변경).
   setMeetingNotes: (notes: MeetingNote[]) => void;
   isSyncingNotes: boolean;
+  notesSyncError: string | null;
   syncMeetingNotesFromServer: () => Promise<void>;
 
   // 문서 상태 관리 (projectId -> docType -> status).
@@ -707,6 +719,7 @@ interface MeetingStore {
   setMeetings: (meetings: Meeting[]) => void; // 서버 동기화 결과로 교체 (로그인 시)
   // 서버에서 최신 데이터를 다시 받아와 머지(수동 "동기화" 버튼용). 로그인 후 재조회 수단.
   isSyncing: boolean;
+  syncError: string | null;
   syncFromServer: () => Promise<void>;
   // 로컬에서 삭제한 회의 id(tombstone). 서버 삭제 지연/실패 시 동기화가 부활시키지 않도록.
   deletedIds: string[];
@@ -735,7 +748,7 @@ interface MeetingStore {
   canRegenerateDoc: (meetingId: string, docType: DocType) => { can: boolean; reason?: string };
 
   // 전체 문서 생성 (백그라운드 지속 + 캔슬 + 새로고침 재개)
-  startGeneration: () => Promise<void>;
+  startGeneration: (targets?: DocType[]) => Promise<void>;
   // 합성 모드 전체 생성: 여러 회의 요약을 합성한 Project에서 14종 생성.
   startCompositeGeneration: (projectId: string) => Promise<void>;
   // C안 어댑터 — composite Project를 Meeting 형태로 평탄화해 currentMeeting에 주입.
@@ -1145,14 +1158,16 @@ export const useMeetingStore = create<MeetingStore>()(
       },
 
       isSyncingNotes: false,
+      notesSyncError: null,
       syncMeetingNotesFromServer: async () => {
         if (get().isSyncingNotes) return;
-        set({ isSyncingNotes: true });
+        set({ isSyncingNotes: true, notesSyncError: null });
         try {
           const server = await fetchMeetingNotes();
           const merged = mergeMeetingNotes(get().meetingNotes, server, get().deletedNoteIds);
           get().setMeetingNotes(merged);
         } catch (e) {
+          set({ notesSyncError: '회의록 동기화에 실패했습니다. 연결을 확인한 뒤 다시 동기화해 주세요.' });
           console.error('[syncMeetingNotesFromServer] 실패:', e instanceof Error ? e.message : e);
           throw e;
         } finally {
@@ -1161,14 +1176,16 @@ export const useMeetingStore = create<MeetingStore>()(
       },
 
       isSyncing: false,
+      syncError: null,
       syncFromServer: async () => {
         if (get().isSyncing) return;
-        set({ isSyncing: true });
+        set({ isSyncing: true, syncError: null });
         try {
           const server = await fetchMeetings();
           const merged = mergeServer(get().meetings, server, get().deletedIds);
           get().setMeetings(merged); // setMeetings가 currentMeeting도 최신본으로 갱신
         } catch (e) {
+          set({ syncError: '기획서 동기화에 실패했습니다. 연결을 확인한 뒤 다시 동기화해 주세요.' });
           console.error('[syncFromServer] 실패:', e instanceof Error ? e.message : e);
           throw e;
         } finally {
@@ -1211,6 +1228,10 @@ export const useMeetingStore = create<MeetingStore>()(
           isGenerating: false,
           generationProgress: null,
           generatingMeetingId: null,
+          isSyncing: false,
+          isSyncingNotes: false,
+          syncError: null,
+          notesSyncError: null,
         });
       },
 
@@ -1415,13 +1436,14 @@ export const useMeetingStore = create<MeetingStore>()(
       // 루프가 store(React 밖)에서 돌아 탭 이동에도 지속. 각 문서 완료 시 activeJob(persist)에
       // 체크포인트를 기록해, 새로고침/재방문 후에도 "남은 문서부터" 재개 가능.
       // single 모드: currentMeeting 기준 Project 자동 래핑(projectId === meetingId).
-      startGeneration: async () => {
-        if (get().isGenerating) return; // 중복 방지
+      startGeneration: async (targets) => {
+        if (get().isGenerating || get().activeJob?.status === 'running') return; // 중복 방지
         const meeting = get().currentMeeting;
         if (!meeting?.summary) return;
 
         const projectId = meeting.id; // single: Project.id === Meeting.id
-        const order = topoSortDocs();
+        const order = topoSortDocs().filter((dt) => !targets || targets.includes(dt));
+        if (order.length === 0) return;
         // 이미 생성된(완료로 간주) 문서를 시작 시점 completedDocs에 반영
         const preCompleted = order.filter((dt) => {
           const v = meeting[docTypeToField(dt) as keyof Meeting];

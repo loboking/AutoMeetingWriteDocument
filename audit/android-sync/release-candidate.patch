@@ -1,0 +1,471 @@
+diff --git a/src/app/page.tsx b/src/app/page.tsx
+index c9e7c3c..8f8193b 100644
+--- a/src/app/page.tsx
++++ b/src/app/page.tsx
+@@ -48,7 +48,9 @@ export default function Home() {
+   const currentMeeting = useMeetingStore(s => s.currentMeeting);
+   const currentStep = useMeetingStore(s => s.currentStep);
+   const syncFromServer = useMeetingStore(s => s.syncFromServer);
+-  const isSyncing = useMeetingStore(s => s.isSyncing);
++  const syncMeetingNotesFromServer = useMeetingStore(s => s.syncMeetingNotesFromServer);
++  const isSyncing = useMeetingStore(s => s.isSyncing || s.isSyncingNotes);
++  const syncError = useMeetingStore(s => s.syncError || s.notesSyncError);
+   // composite Project 진입점(② 기획서 탭 하단). 합성 결과 기획서 세트 목록.
+   // hotfix(도현): 합성 Project는 meetings[]에 평탄화 동기화돼 DB 영속됨.
+   // selector에서 filter(새 배열 반환)하지 않고 meetings 통째로 받아 컴포넌트 본문에서 filter
+@@ -328,7 +330,10 @@ export default function Home() {
+                 </Button>
+               )}
+               <Button
+-                onClick={() => { void syncFromServer(); }}
++                onClick={() => {
++                  // 두 목록은 별도 테이블이다. 한쪽 실패가 다른 쪽 조회를 막지 않게 한다.
++                  void Promise.allSettled([syncFromServer(), syncMeetingNotesFromServer()]);
++                }}
+                 disabled={isSyncing}
+                 variant="outline"
+                 size="sm"
+@@ -363,6 +368,11 @@ export default function Home() {
+             </div>
+           </div>
+         </header>
++        {syncError && (
++          <Alert variant="destructive" className="mb-4">
++            <AlertDescription>{syncError}</AlertDescription>
++          </Alert>
++        )}
+ 
+         {/* 삭제 undo 인라인 배너 — pendingDelete가 있을 때만 표시. sonner(토스트) 없이 Alert 재사용(도현 설계). */}
+         {pendingDelete && (
+@@ -732,7 +742,7 @@ export default function Home() {
+                     </h3>
+                   </div>
+                   {meetings.filter(m => !m.isComposite).map((m) => (
+-                    <Card key={m.id} className="border-slate-200 dark:border-slate-700 hover:shadow-md transition-shadow cursor-pointer" onClick={() => { setCurrentMeeting(m); setShowDocsModal(false); }}>
++                    <Card key={m.id} className="border-slate-200 dark:border-slate-700 hover:shadow-md transition-shadow cursor-pointer" onClick={() => { setCurrentMeeting(m); setTopTab('meetings'); setShowDocsModal(false); }}>
+                       <CardContent className="p-3 flex items-center justify-between gap-2">
+                         <div className="flex-1 min-w-0">
+                           <div className="font-medium truncate text-sm">{m.title}</div>
+@@ -754,6 +764,7 @@ export default function Home() {
+                             size="sm"
+                             onClick={() => {
+                               setCurrentMeeting(m);
++                              setTopTab('meetings');
+                               setShowDocsModal(false);
+                             }}
+                             className="text-xs gap-1.5"
+diff --git a/src/components/AuthGate.tsx b/src/components/AuthGate.tsx
+index 46f0b92..818a2fd 100644
+--- a/src/components/AuthGate.tsx
++++ b/src/components/AuthGate.tsx
+@@ -36,6 +36,9 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
+   const debounceNoteTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+   // onSignedIn 중복 실행 방지(같은 유저로 INITIAL_SESSION+SIGNED_IN 둘 다 올 수 있음)
+   const syncedUserRef = useRef<string | null>(null);
++  // 로그아웃/계정 전환 후 도착한 이전 조회가 화면을 덮어쓰지 않도록 한다.
++  const syncEpochRef = useRef(0);
++  const applyingInitialDataRef = useRef(false);
+ 
+   useEffect(() => {
+     setMounted(true);
+@@ -67,6 +70,9 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
+   // 세션 초기 로드 + 인증 상태 변화 구독
+   useEffect(() => {
+     let active = true;
++    const meetingTimers = debounceTimers.current;
++    const noteTimers = debounceNoteTimers.current;
++    const cancelPendingSync = () => { syncEpochRef.current++; };
+ 
+     // ★ 안전망: getSession이 느리거나 hang하면 무한 스피너에 갇힌다(타임아웃 부재).
+     //   8초 내 응답 없으면 일단 비로그인으로 간주해 화면을 보여준다(로그인 폼).
+@@ -81,6 +87,10 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
+         setSession(data.session);
+         setLoadingSession(false);
+         clearTimeout(failsafe);
++        if (data.session && syncedUserRef.current !== data.session.user.id) {
++          syncedUserRef.current = data.session.user.id;
++          void onSignedIn(data.session);
++        }
+       })
+       .catch(() => {
+         // 네트워크/인증서버 오류 → 스피너에 갇히지 않게 화면 표시
+@@ -111,37 +121,25 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
+ 
+     return () => {
+       active = false;
++      cancelPendingSync();
++      syncedUserRef.current = null;
+       clearTimeout(failsafe);
+       sub.subscription.unsubscribe();
++      unsubscribeRef.current?.();
++      unsubscribeNotesRef.current?.();
++      meetingTimers.forEach(clearTimeout);
++      meetingTimers.clear();
++      noteTimers.forEach(clearTimeout);
++      noteTimers.clear();
+     };
+     // eslint-disable-next-line react-hooks/exhaustive-deps
+   }, []);
+ 
+-  // SIGNED_IN: 서버 fetch + 1회 마이그레이션 + 머지 → store, 이후 변경 디바운스 upsert
++  // 조회 중 입력도 저장하도록 구독부터 등록하고, 두 테이블은 독립적으로 조회한다.
+   const onSignedIn = async (sess: Session) => {
+-    const store = useMeetingStore.getState();
+-    const local = store.meetings;
+-
+-    // Meeting 마이그레이션 (기존)
+-    const server = await fetchMeetings();
+-    await migrateLocalMeetings(sess.user.id, local, server);
+-    // 마이그레이션 후 최신 서버 상태로 다시 가져와 머지
+-    const serverAfter = await fetchMeetings();
+-    const merged = mergeServer(local, serverAfter, useMeetingStore.getState().deletedIds);
+-    store.setMeetings(merged);
+-
+-    // MeetingNote 마이그레이션 (localStorage → DB 1회 흡수, 멱등) — meetings와 독립 경로
+-    const localNotes = store.meetingNotes;
+-    const serverNotes = await fetchMeetingNotes();
+-    await migrateLocalMeetingNotes(sess.user.id, localNotes, serverNotes);
+-    // 마이그레이션 후 최신 서버 상태로 다시 가져와 머지(meetings 패턴과 동일)
+-    const serverNotesAfter = await fetchMeetingNotes();
+-    const mergedNotes = mergeMeetingNotes(
+-      localNotes,
+-      serverNotesAfter,
+-      useMeetingStore.getState().deletedNoteIds
+-    );
+-    store.setMeetingNotes(mergedNotes);
++    const epoch = ++syncEpochRef.current;
++    const isCurrent = () => syncEpochRef.current === epoch;
++    useMeetingStore.setState({ isSyncing: true, isSyncingNotes: true, syncError: null, notesSyncError: null });
+ 
+     // Meeting 런타임 변경 → 디바운스 upsert 등록 (중복 등록 방지)
+     if (unsubscribeRef.current) unsubscribeRef.current();
+@@ -152,7 +150,7 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
+       // 변경/추가된 회의만 디바운스 upsert
+       const prevById = new Map(prev.map((m) => [m.id, m]));
+       for (const m of next) {
+-        if (prevById.get(m.id) !== m) scheduleUpsert(m);
++        if (!applyingInitialDataRef.current && prevById.get(m.id) !== m) scheduleUpsert(m);
+       }
+       prev = next;
+     });
+@@ -165,10 +163,64 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
+       if (next === prevNotes) return;
+       const prevById = new Map(prevNotes.map((n) => [n.id, n]));
+       for (const n of next) {
+-        if (prevById.get(n.id) !== n) scheduleUpsertNote(n);
++        if (!applyingInitialDataRef.current && prevById.get(n.id) !== n) scheduleUpsertNote(n);
+       }
+       prevNotes = next;
+     });
++
++    await Promise.allSettled([
++      (async () => {
++        try {
++          const server = await fetchMeetings();
++          if (!isCurrent()) return;
++          await migrateLocalMeetings(sess.user.id, useMeetingStore.getState().meetings, server);
++          if (!isCurrent()) return;
++          const serverAfter = await fetchMeetings();
++          if (!isCurrent()) return;
++          // 조회를 기다리는 동안 편집한 내용까지 포함해 병합한다.
++          const fresh = useMeetingStore.getState();
++          applyingInitialDataRef.current = true;
++          try {
++            fresh.setMeetings(mergeServer(fresh.meetings, serverAfter, fresh.deletedIds));
++          } finally {
++            applyingInitialDataRef.current = false;
++          }
++        } catch (error) {
++          if (isCurrent()) {
++            syncedUserRef.current = null;
++            useMeetingStore.setState({ syncError: '기획서 동기화에 실패했습니다. 연결을 확인한 뒤 다시 동기화해 주세요.' });
++            console.error('[AuthGate] 기획서 동기화 실패:', error);
++          }
++        } finally {
++          if (isCurrent()) useMeetingStore.setState({ isSyncing: false });
++        }
++      })(),
++      (async () => {
++        try {
++          const server = await fetchMeetingNotes();
++          if (!isCurrent()) return;
++          await migrateLocalMeetingNotes(sess.user.id, useMeetingStore.getState().meetingNotes, server);
++          if (!isCurrent()) return;
++          const serverAfter = await fetchMeetingNotes();
++          if (!isCurrent()) return;
++          const fresh = useMeetingStore.getState();
++          applyingInitialDataRef.current = true;
++          try {
++            fresh.setMeetingNotes(mergeMeetingNotes(fresh.meetingNotes, serverAfter, fresh.deletedNoteIds));
++          } finally {
++            applyingInitialDataRef.current = false;
++          }
++        } catch (error) {
++          if (isCurrent()) {
++            syncedUserRef.current = null;
++            useMeetingStore.setState({ notesSyncError: '회의록 동기화에 실패했습니다. 연결을 확인한 뒤 다시 동기화해 주세요.' });
++            console.error('[AuthGate] 회의록 동기화 실패:', error);
++          }
++        } finally {
++          if (isCurrent()) useMeetingStore.setState({ isSyncingNotes: false });
++        }
++      })(),
++    ]);
+   };
+ 
+   const scheduleUpsertNote = (note: { id: string }) => {
+@@ -201,6 +253,7 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
+ 
+   // SIGNED_OUT: 순서 보장 — 생성 취소 → 구독/타이머 정리 → persist 클리어 → 메모리 리셋
+   const onSignedOut = () => {
++    syncEpochRef.current++;
+     const store = useMeetingStore.getState();
+     store.cancelGeneration(); // in-flight 생성/좀비 차단 (먼저)
+ 
+diff --git a/src/components/SummaryViewer.tsx b/src/components/SummaryViewer.tsx
+index 322012d..c7009f0 100644
+--- a/src/components/SummaryViewer.tsx
++++ b/src/components/SummaryViewer.tsx
+@@ -11,7 +11,7 @@ import { authedFetch } from '@/lib/authFetch';
+ 
+ export function SummaryViewer() {
+   const currentMeeting = useMeetingStore(s => s.currentMeeting);
+-  const { updateCurrentMeeting, updateMeetingStep } = useMeetingStore();
++  const { updateCurrentMeeting, updateMeetingStep, startGeneration, regenerateDocs } = useMeetingStore();
+   const summary = currentMeeting?.summary;
+   const [isGenerating, setIsGenerating] = useState(false);
+   const [isRegenerating, setIsRegenerating] = useState(false);
+@@ -77,26 +77,10 @@ export function SummaryViewer() {
+     updateMeetingStep('done');
+ 
+     try {
+-      const response = await authedFetch('/api/generate-doc', {
+-        method: 'POST',
+-        headers: { 'Content-Type': 'application/json' },
+-        body: JSON.stringify({
+-          docType: 'prd',
+-          summary,
+-          transcript: currentMeeting.transcript || '',
+-          meetingInfo: {
+-            title: currentMeeting.title,
+-            date: new Date(currentMeeting.createdAt).toLocaleDateString('ko-KR'),
+-          },
+-        }),
+-      });
+-
+-      if (!response.ok) throw new Error('PRD 생성 실패');
+-
+-      const { prd } = await response.json();
+-
+-      updateCurrentMeeting({ prd });
+-      updateMeetingStep('done');
++      // 첫 생성도 섹션별 요청·저장·진행률을 관리하는 공통 잡을 사용한다.
++      // 단일 요청은 300초에 끊길 수 있고 응답도 { prd }가 아닌 { content }다.
++      if (currentMeeting.prd) await regenerateDocs(currentMeeting.id, ['prd']);
++      else await startGeneration(['prd']);
+     } catch (error) {
+       console.error('PRD generation error:', error);
+       alert('PRD 생성에 실패했습니다.');
+diff --git a/src/lib/meetingsSync.ts b/src/lib/meetingsSync.ts
+index eb30c8b..659c80d 100644
+--- a/src/lib/meetingsSync.ts
++++ b/src/lib/meetingsSync.ts
+@@ -14,7 +14,7 @@ export async function fetchMeetings(): Promise<Meeting[]> {
+ 
+   if (error) {
+     console.error('[meetingsSync] fetch error:', error.message);
+-    return [];
++    throw new Error(`기획서 조회 실패: ${error.message}`);
+   }
+   return (data || []).map(rowToMeeting);
+ }
+diff --git a/src/lib/notesSync.ts b/src/lib/notesSync.ts
+index 943db2c..8c17c8b 100644
+--- a/src/lib/notesSync.ts
++++ b/src/lib/notesSync.ts
+@@ -15,7 +15,7 @@ export async function fetchMeetingNotes(): Promise<MeetingNote[]> {
+ 
+   if (error) {
+     console.error('[notesSync] fetch error:', error.message);
+-    return [];
++    throw new Error(`회의록 조회 실패: ${error.message}`);
+   }
+   return (data || []).map(rowToMeetingNote);
+ }
+diff --git a/src/store/meetingStore.ts b/src/store/meetingStore.ts
+index c76352d..533e3b1 100644
+--- a/src/store/meetingStore.ts
++++ b/src/store/meetingStore.ts
+@@ -553,7 +553,8 @@ async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
+     const levels = job.mode === 'regen' ? levelsFor(job.order) : topoSortLevels();
+     for (const level of levels) {
+       if (genAbort.cancelled) break;
+-      const pending = level.filter((dt) => !doneSet.has(dt));
++      // 최초 생성도 대상이 지정되면 해당 문서만 실행한다.
++      const pending = level.filter((dt) => order.includes(dt) && !doneSet.has(dt));
+       if (pending.length === 0) continue;
+ 
+       // PRD는 섹션 오케스트레이션(동시 2콜)으로 z.ai 슬롯을 점유 → 단독 선행(다른 문서와 겹치면 429/500).
+@@ -688,6 +689,7 @@ interface MeetingStore {
+   // 회의록 DB 영속 — meetings 동기화와 독립(syncFromServer 무변경).
+   setMeetingNotes: (notes: MeetingNote[]) => void;
+   isSyncingNotes: boolean;
++  notesSyncError: string | null;
+   syncMeetingNotesFromServer: () => Promise<void>;
+ 
+   // 문서 상태 관리 (projectId -> docType -> status).
+@@ -707,6 +709,7 @@ interface MeetingStore {
+   setMeetings: (meetings: Meeting[]) => void; // 서버 동기화 결과로 교체 (로그인 시)
+   // 서버에서 최신 데이터를 다시 받아와 머지(수동 "동기화" 버튼용). 로그인 후 재조회 수단.
+   isSyncing: boolean;
++  syncError: string | null;
+   syncFromServer: () => Promise<void>;
+   // 로컬에서 삭제한 회의 id(tombstone). 서버 삭제 지연/실패 시 동기화가 부활시키지 않도록.
+   deletedIds: string[];
+@@ -735,7 +738,7 @@ interface MeetingStore {
+   canRegenerateDoc: (meetingId: string, docType: DocType) => { can: boolean; reason?: string };
+ 
+   // 전체 문서 생성 (백그라운드 지속 + 캔슬 + 새로고침 재개)
+-  startGeneration: () => Promise<void>;
++  startGeneration: (targets?: DocType[]) => Promise<void>;
+   // 합성 모드 전체 생성: 여러 회의 요약을 합성한 Project에서 14종 생성.
+   startCompositeGeneration: (projectId: string) => Promise<void>;
+   // C안 어댑터 — composite Project를 Meeting 형태로 평탄화해 currentMeeting에 주입.
+@@ -1145,14 +1148,16 @@ export const useMeetingStore = create<MeetingStore>()(
+       },
+ 
+       isSyncingNotes: false,
++      notesSyncError: null,
+       syncMeetingNotesFromServer: async () => {
+         if (get().isSyncingNotes) return;
+-        set({ isSyncingNotes: true });
++        set({ isSyncingNotes: true, notesSyncError: null });
+         try {
+           const server = await fetchMeetingNotes();
+           const merged = mergeMeetingNotes(get().meetingNotes, server, get().deletedNoteIds);
+           get().setMeetingNotes(merged);
+         } catch (e) {
++          set({ notesSyncError: '회의록 동기화에 실패했습니다. 연결을 확인한 뒤 다시 동기화해 주세요.' });
+           console.error('[syncMeetingNotesFromServer] 실패:', e instanceof Error ? e.message : e);
+           throw e;
+         } finally {
+@@ -1161,14 +1166,16 @@ export const useMeetingStore = create<MeetingStore>()(
+       },
+ 
+       isSyncing: false,
++      syncError: null,
+       syncFromServer: async () => {
+         if (get().isSyncing) return;
+-        set({ isSyncing: true });
++        set({ isSyncing: true, syncError: null });
+         try {
+           const server = await fetchMeetings();
+           const merged = mergeServer(get().meetings, server, get().deletedIds);
+           get().setMeetings(merged); // setMeetings가 currentMeeting도 최신본으로 갱신
+         } catch (e) {
++          set({ syncError: '기획서 동기화에 실패했습니다. 연결을 확인한 뒤 다시 동기화해 주세요.' });
+           console.error('[syncFromServer] 실패:', e instanceof Error ? e.message : e);
+           throw e;
+         } finally {
+@@ -1211,6 +1218,10 @@ export const useMeetingStore = create<MeetingStore>()(
+           isGenerating: false,
+           generationProgress: null,
+           generatingMeetingId: null,
++          isSyncing: false,
++          isSyncingNotes: false,
++          syncError: null,
++          notesSyncError: null,
+         });
+       },
+ 
+@@ -1415,13 +1426,14 @@ export const useMeetingStore = create<MeetingStore>()(
+       // 루프가 store(React 밖)에서 돌아 탭 이동에도 지속. 각 문서 완료 시 activeJob(persist)에
+       // 체크포인트를 기록해, 새로고침/재방문 후에도 "남은 문서부터" 재개 가능.
+       // single 모드: currentMeeting 기준 Project 자동 래핑(projectId === meetingId).
+-      startGeneration: async () => {
+-        if (get().isGenerating) return; // 중복 방지
++      startGeneration: async (targets) => {
++        if (get().isGenerating || get().activeJob?.status === 'running') return; // 중복 방지
+         const meeting = get().currentMeeting;
+         if (!meeting?.summary) return;
+ 
+         const projectId = meeting.id; // single: Project.id === Meeting.id
+-        const order = topoSortDocs();
++        const order = topoSortDocs().filter((dt) => !targets || targets.includes(dt));
++        if (order.length === 0) return;
+         // 이미 생성된(완료로 간주) 문서를 시작 시점 completedDocs에 반영
+         const preCompleted = order.filter((dt) => {
+           const v = meeting[docTypeToField(dt) as keyof Meeting];
+diff --git a/src/lib/syncFailures.test.ts b/src/lib/syncFailures.test.ts
+new file mode 100644
+index 0000000..701b85c
+--- /dev/null
++++ b/src/lib/syncFailures.test.ts
+@@ -0,0 +1,67 @@
++import { beforeEach, describe, expect, it, vi } from 'vitest';
++import type { Meeting, MeetingNote } from '@/types';
++
++const { query } = vi.hoisted(() => ({ query: vi.fn() }));
++vi.mock('@/lib/supabase', async (importOriginal) => {
++  const actual = await importOriginal<typeof import('@/lib/supabase')>();
++  return {
++    ...actual,
++    supabase: { from: () => ({ select: () => ({ order: query }) }) },
++  };
++});
++
++import { fetchMeetings } from './meetingsSync';
++import { fetchMeetingNotes } from './notesSync';
++import { useMeetingStore } from '@/store/meetingStore';
++
++const meeting: Meeting = {
++  id: 'local-meeting', title: '기존 기획서', createdAt: new Date(), step: 'done',
++  prd: '# 원본 설계\n\n이 내용은 조회 실패 시에도 보존되어야 한다.',
++};
++const note: MeetingNote = {
++  id: 'local-note', title: '기존 회의록', createdAt: new Date(),
++  transcript: '보존할 녹취록',
++  summary: { overview: '보존할 요약', keyPoints: [], decisions: [], actionItems: [] },
++};
++
++beforeEach(() => {
++  query.mockReset();
++  useMeetingStore.setState({
++    meetings: [meeting], currentMeeting: meeting, meetingNotes: [note],
++    isSyncing: false, isSyncingNotes: false, syncError: null, notesSyncError: null,
++  });
++});
++
++describe('조회 실패를 빈 동기화 결과로 처리하지 않는다', () => {
++  it.each([
++    ['기획서', fetchMeetings], ['회의록', fetchMeetingNotes],
++  ])('%s 조회 실패는 호출자에게 전달한다', async (_label, fetch) => {
++    query.mockResolvedValue({ data: null, error: { message: 'connection unavailable' } });
++    await expect(fetch()).rejects.toThrow('connection unavailable');
++  });
++
++  it('정상적으로 비어 있는 계정은 빈 결과를 반환한다', async () => {
++    query.mockResolvedValue({ data: [], error: null });
++    await expect(fetchMeetings()).resolves.toEqual([]);
++    await expect(fetchMeetingNotes()).resolves.toEqual([]);
++  });
++
++  it('기획서 동기화 실패를 알리고 열린 문서와 목록을 그대로 보존한다', async () => {
++    query.mockResolvedValue({ data: null, error: { message: 'meeting read failed' } });
++    await expect(useMeetingStore.getState().syncFromServer()).rejects.toThrow('meeting read failed');
++    const state = useMeetingStore.getState();
++    expect(state.currentMeeting).toBe(meeting);
++    expect(state.meetings).toEqual([meeting]);
++    expect(state.isSyncing).toBe(false);
++    expect(state.syncError).toContain('동기화에 실패');
++  });
++
++  it('회의록 동기화 실패를 알리고 원문·요약을 그대로 보존한다', async () => {
++    query.mockResolvedValue({ data: null, error: { message: 'note read failed' } });
++    await expect(useMeetingStore.getState().syncMeetingNotesFromServer()).rejects.toThrow('note read failed');
++    const state = useMeetingStore.getState();
++    expect(state.meetingNotes).toEqual([note]);
++    expect(state.isSyncingNotes).toBe(false);
++    expect(state.notesSyncError).toContain('동기화에 실패');
++  });
++});
