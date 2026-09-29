@@ -11,7 +11,7 @@ import { authedFetch } from '@/lib/authFetch';
 
 export function SummaryViewer() {
   const currentMeeting = useMeetingStore(s => s.currentMeeting);
-  const { updateCurrentMeeting, updateMeetingStep } = useMeetingStore();
+  const { updateCurrentMeeting, updateMeetingStep, startGeneration, regenerateDocs } = useMeetingStore();
   const summary = currentMeeting?.summary;
   const [isGenerating, setIsGenerating] = useState(false);
   const [isRegenerating, setIsRegenerating] = useState(false);
@@ -77,26 +77,10 @@ export function SummaryViewer() {
     updateMeetingStep('done');
 
     try {
-      const response = await authedFetch('/api/generate-doc', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          docType: 'prd',
-          summary,
-          transcript: currentMeeting.transcript || '',
-          meetingInfo: {
-            title: currentMeeting.title,
-            date: new Date(currentMeeting.createdAt).toLocaleDateString('ko-KR'),
-          },
-        }),
-      });
-
-      if (!response.ok) throw new Error('PRD 생성 실패');
-
-      const { prd } = await response.json();
-
-      updateCurrentMeeting({ prd });
-      updateMeetingStep('done');
+      // 첫 생성도 섹션별 요청·저장·진행률을 관리하는 공통 잡을 사용한다.
+      // 단일 요청은 300초에 끊길 수 있고 응답도 { prd }가 아닌 { content }다.
+      if (currentMeeting.prd) await regenerateDocs(currentMeeting.id, ['prd']);
+      else await startGeneration(['prd']);
     } catch (error) {
       console.error('PRD generation error:', error);
       alert('PRD 생성에 실패했습니다.');

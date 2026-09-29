@@ -9,6 +9,15 @@ describe('ensureSectionHeading', () => {
     const c = '## 9. 기술 요구사항\n\n내용';
     expect(ensureSectionHeading(c, '9. 기술 요구사항')).toBe(c);
   });
+  it('H1(# N.)로 쓰면 H2로 바꾸고 제목을 중복시키지 않는다', () => {
+    const out = ensureSectionHeading('# 6. 기능 요구사항 (Functional Requirements)\n\n### 6.1 필수\n본문', '6. 기능 요구사항 (Functional Requirements)');
+    expect(out.startsWith('## 6. 기능 요구사항')).toBe(true);
+    expect(out.match(/6\. 기능 요구사항/g)?.length).toBe(1);
+  });
+  it('H3(### N.1)만 있으면 그 줄을 건드리지 않고 H2를 앞에 붙인다', () => {
+    const out = ensureSectionHeading('### 6.1 필수 기능\n본문', '6. 기능 요구사항');
+    expect(out).toBe('## 6. 기능 요구사항\n\n### 6.1 필수 기능\n본문');
+  });
   it('H3로 시작하면 H2 대제목을 앞에 붙인다', () => {
     const out = ensureSectionHeading('### 9.1 기술 스택\n표', '9. 기술 요구사항');
     expect(out.startsWith('## 9. 기술 요구사항')).toBe(true);

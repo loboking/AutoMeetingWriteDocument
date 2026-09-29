@@ -7,7 +7,7 @@ import { saveAs } from 'file-saver';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { sanitizeHtml } from '@/lib/sanitize';
-import { extractMermaidCode, docTypeToField, canGenerateDoc, getAllDependents, getDirectParentTitles, getStaleParents, DOCUMENTS, DEPENDENCIES, type DocType } from '@/lib/documentUtils';
+import { normalizeCheckboxes, extractMermaidCode, docTypeToField, canGenerateDoc, getAllDependents, getDirectParentTitles, getStaleParents, DOCUMENTS, DEPENDENCIES, type DocType } from '@/lib/documentUtils';
 import { prerenderMermaid } from '@/lib/mermaidExport';
 import { contentToHtml, buildDocxBlob, buildXlsxBlob, buildPptxBlob, buildPdfBlob } from '@/lib/exportFormatters';
 import { Button } from '@/components/ui/button';
@@ -106,7 +106,9 @@ export function PrdViewer() {
   }, [activeDoc, setActiveDocType]);
 
   // currentMeeting에서 문서들을 초기화
-  const getDocumentsFromMeeting = (): Record<DocType, string> => ({
+  // 표시·인쇄·다운로드·ZIP이 전부 이 객체를 읽으므로 여기서 한 번 정규화(과거 저장 문서의 '-[]'도 치유).
+  const getDocumentsFromMeeting = (): Record<DocType, string> => {
+    const raw: Record<DocType, string> = {
     prd: currentMeeting?.prd || '',
     'feature-list': currentMeeting?.featureList || '',
     'screen-list': currentMeeting?.screenList || '',
@@ -121,7 +123,10 @@ export function PrdViewer() {
     'test-case': currentMeeting?.testCase || '',
     database: currentMeeting?.database || '',
     deployment: currentMeeting?.deployment || '',
-  });
+    };
+    for (const k of Object.keys(raw) as DocType[]) raw[k] = normalizeCheckboxes(raw[k]);
+    return raw;
+  };
 
   const [documents, setDocuments] = useState<Record<DocType, string>>(getDocumentsFromMeeting);
   // 전체 생성 상태는 store에서 구독 (백그라운드 지속 — PrdViewer 언마운트와 무관)
@@ -434,10 +439,11 @@ export function PrdViewer() {
 
     // PRD는 15섹션을 서버 한 요청으로 돌리면 Vercel maxDuration 300s에 걸린다(실측 504, GLM·mini 모두).
     // 전체생성이 쓰는 클라 섹션 오케스트레이션(regenerateDocs → generatePrdViaSections, 섹션당 1요청)으로 우회.
-    // 본문이 없는 첫 생성은 regenerateDocs가 걸러내므로 startGeneration(누락 문서 생성, PRD가 위상 최상위)으로.
+    // 본문이 없는 첫 생성은 regenerateDocs가 걸러내므로 startGeneration(['prd'])로 — 대상 없이 부르면
+    // 14종 전체 생성이 시작돼 "PRD만 생성" 버튼이 전체 생성 버튼처럼 동작하던 버그(SummaryViewer와 동일 수정).
     if (docType === 'prd' && currentMeeting?.id) {
       if (documents.prd) await regenerateDocs(currentMeeting.id, ['prd']);
-      else await startGeneration();
+      else await startGeneration(['prd']);
       return;
     }
     // 실패 시 정확 복원을 위해 진입 시점 상태를 스냅샷(outdated 하드코딩 금지).

@@ -1,3 +1,5 @@
+import { normalizeCheckboxes } from '@/lib/documentUtils';
+
 // PRD 섹션 후처리: 프롬프트 누출 제거 + 중국어(한자) 정리
 // GLM은 중국 모델이라 한국어 출력 중 한자가 섞이거나(예: 上述, 心理)
 // 프롬프트 지시어("작성 가이드" 등)가 그대로 누출될 수 있어 조립 전에 정리한다.
@@ -59,7 +61,10 @@ export function sanitizeSectionContent(content: string): string {
 
   // 3-1) 한자 제거로 생긴 이중 공백 정리 (줄 앞 들여쓰기·표 정렬은 보존하려고
   //      "글자 사이" 이중 공백만 단일 공백으로, 구두점 앞 공백 제거)
-  out = out.replace(/(\S) {2,}(\S)/g, '$1 $2').replace(/ +([,.)\]}])/g, '$1');
+  //      단, 체크박스 "[ ]" 안의 공백은 지우면 안 됨((?<!\[) — 지우면 "- []"로 깨져 뷰어에 글자 그대로 보임)
+  out = out.replace(/(\S) {2,}(\S)/g, '$1 $2').replace(/(?<!\[) +([,.)\]}])/g, '$1');
+  // 3-2) 모델이 낸 체크박스 변형(-[], - [], -[ ], -[x]) → GFM 정본 "- [ ]" / "- [x]"
+  out = normalizeCheckboxes(out);
 
   // 4) 앞뒤 공백 라인 정리 (중간 빈 줄은 마크다운 단락 구분이라 보존)
   return out.replace(/^\s*\n/g, '').replace(/\n\s*$/g, '').trim();

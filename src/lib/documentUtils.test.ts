@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { docTypeToField, DEPENDENCIES, DOCUMENTS, getDirectParentTitles, getStaleParents, type DocType } from './documentUtils';
+import { normalizeCheckboxes, docTypeToField, DEPENDENCIES, DOCUMENTS, getDirectParentTitles, getStaleParents, type DocType } from './documentUtils';
 
 describe('docTypeToField', () => {
   it('하이픈 docType을 camelCase Meeting 필드로 매핑한다', () => {
@@ -91,5 +91,12 @@ describe('getStaleParents', () => {
     const docs = { ...emptyDocs, 'feature-list': '내용' };
     const getStatus = () => 'latest';
     expect(getStaleParents('api-spec', docs, getStatus)).toEqual([]);
+  });
+});
+
+describe('normalizeCheckboxes', () => {
+  it('체크박스 변형을 GFM 정본으로 통일하고 정상 형태는 그대로 둔다', () => {
+    expect(normalizeCheckboxes('-[] a\n- [] b\n-[ ] c\n-[X] d\n* [x] e\n  - [ ] f\n- 일반 항목'))
+      .toBe('- [ ] a\n- [ ] b\n- [ ] c\n- [x] d\n- [x] e\n  - [ ] f\n- 일반 항목');
   });
 });

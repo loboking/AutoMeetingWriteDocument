@@ -376,3 +376,9 @@ export function orderCoreFirst(order: DocType[], core: DocType[] = CORE_DOCS): D
   }
   return reordered;
 }
+
+// 체크박스 변형(-[], - [], -[ ], -[X]) → GFM 정본 "- [ ]" / "- [x]".
+// 모델 출력·과거 저장 문서 모두에 섞여 있어 표시/내보내기 직전(뷰어 로딩)과 PRD 정리 양쪽에서 호출.
+export function normalizeCheckboxes(md: string): string {
+  return md.replace(/^(\s*)[-*+]\s*\[( ?|[xX])\]/gm, (_, ind: string, mark: string) => `${ind}- [${mark.trim() ? 'x' : ' '}]`);
+}

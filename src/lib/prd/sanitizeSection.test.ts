@@ -36,6 +36,10 @@ F-001 로그인`;
     expect(sanitizeSectionContent(input)).toBe(input);
   });
 
+  it('체크박스 "- [ ]"의 안쪽 공백을 지우지 않고 변형(-[], -[x])을 정본으로 맞춘다', () => {
+    const out = sanitizeSectionContent('- [ ] 항목1\n-[] 항목2\n- [] 항목3\n-[X] 완료\n  - [ ] 들여쓰기');
+    expect(out).toBe('- [ ] 항목1\n- [ ] 항목2\n- [ ] 항목3\n- [x] 완료\n  - [ ] 들여쓰기');
+  });
   it('앞뒤 공백 라인을 정리한다', () => {
     const input = `\n\n## 4. 목표\n내용\n\n\n`;
     const out = sanitizeSectionContent(input);
