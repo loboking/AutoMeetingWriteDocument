@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-vi.mock('@/lib/authFetch', () => ({ authedFetch: vi.fn() }));
-import { authedFetch } from '@/lib/authFetch';
+vi.mock('@/lib/authFetch', () => ({ cachedGenerationFetch: vi.fn() }));
+import { cachedGenerationFetch } from '@/lib/authFetch';
 import { useMeetingStore, type ActiveGenerationJob } from './meetingStore';
 import { PRD_SECTIONS } from '@/lib/prd/prdSections';
 import { getSectionLevels } from '@/lib/prd/sectionDependencies';
@@ -23,7 +23,7 @@ async function resume(manual = false) {
 beforeEach(() => {
   vi.useFakeTimers();
   vi.stubGlobal('navigator', {});
-  vi.mocked(authedFetch).mockReset();
+  vi.mocked(cachedGenerationFetch).mockReset();
   useMeetingStore.setState({ meetings: [structuredClone(meeting)], projects: [], activeJob: job(),
     isGenerating: false, generationProgress: null, currentMeeting: null });
 });
@@ -34,7 +34,7 @@ describe('PRD 로컬 체크포인트', () => {
     const failedId = getSectionLevels().at(-1)![0].id;
     let fail = true;
     const requested: string[] = [];
-    vi.mocked(authedFetch).mockImplementation(async (_url, init) => {
+    vi.mocked(cachedGenerationFetch).mockImplementation(async (_url, init) => {
       const body = JSON.parse(init!.body as string);
       if (body.prdPhase) return Response.json({ metadata: {} });
       requested.push(body.prdSection);
@@ -49,10 +49,10 @@ describe('PRD 로컬 체크포인트', () => {
     useMeetingStore.setState({ activeJob: JSON.parse(JSON.stringify(saved)) });
     fail = false;
     requested.length = 0;
-    vi.mocked(authedFetch).mockClear();
+    vi.mocked(cachedGenerationFetch).mockClear();
     await resume(true);
     expect(requested).toEqual([failedId]);
-    expect(authedFetch).toHaveBeenCalledTimes(1);
+    expect(cachedGenerationFetch).toHaveBeenCalledTimes(1);
     expect(useMeetingStore.getState().activeJob).toBeNull();
     expect(useMeetingStore.getState().meetings[0].prd).toContain('완성된 본문');
   });
@@ -60,20 +60,20 @@ describe('PRD 로컬 체크포인트', () => {
   it('입력이 바뀌면 이전 섹션을 재사용하지 않고 새로 생성한다', async () => {
     useMeetingStore.setState({ activeJob: { ...job(), resumeAttempts: 3,
       prdCheckpoint: { input: '이전 입력', metadata: {}, sections: { [PRD_SECTIONS[0].id]: '이전 본문' } } } as ActiveGenerationJob });
-    vi.mocked(authedFetch).mockImplementation(async (_url, init) => {
+    vi.mocked(cachedGenerationFetch).mockImplementation(async (_url, init) => {
       const body = JSON.parse(init!.body as string);
       return Response.json(body.prdPhase ? { metadata: {} } : { content: '## 새 본문' });
     });
     await resume();
-    expect(authedFetch).not.toHaveBeenCalled();
+    expect(cachedGenerationFetch).not.toHaveBeenCalled();
     expect(useMeetingStore.getState().activeJob).not.toBeNull();
     await resume(true);
-    expect(authedFetch).toHaveBeenCalledTimes(PRD_SECTIONS.length + 1);
+    expect(cachedGenerationFetch).toHaveBeenCalledTimes(PRD_SECTIONS.length + 1);
     expect(useMeetingStore.getState().meetings[0].prd).not.toContain('이전 본문');
   });
   it('취소 뒤 늦게 온 응답은 체크포인트와 문서를 되살리지 않는다', async () => {
     const deliveries: ((response: Response) => void)[] = [];
-    vi.mocked(authedFetch).mockImplementation(async (_url, init) => {
+    vi.mocked(cachedGenerationFetch).mockImplementation(async (_url, init) => {
       const body = JSON.parse(init!.body as string);
       if (body.prdPhase) return Response.json({ metadata: {} });
       return new Promise<Response>((resolve) => { deliveries.push(resolve); });

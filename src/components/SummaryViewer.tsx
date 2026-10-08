@@ -7,7 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { useBeforeUnload } from '@/hooks/useBeforeUnload';
 import { useMeetingStore } from '@/store/meetingStore';
-import { authedFetch } from '@/lib/authFetch';
+import { cachedGenerationFetch } from '@/lib/authFetch';
 
 export function SummaryViewer() {
   const currentMeeting = useMeetingStore(s => s.currentMeeting);
@@ -34,14 +34,14 @@ export function SummaryViewer() {
 
       setRegenerateProgress('AI 모델에 요청 전송 중...');
 
-      const response = await authedFetch('/api/summarize', {
+      const response = await cachedGenerationFetch('/api/summarize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           text: currentMeeting.transcript,
           context: `${currentMeeting.title} 회의`,
         }),
-      });
+      }, true);
 
       console.log('[Frontend] 요약 재생성 응답', {
         status: response.status,

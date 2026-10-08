@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { Meeting, MeetingNote, MeetingStep, DocType, DocStatus, DocVersion, DocVersionSource, Project, ProjectMode, MeetingSummary, MeetingMetadata } from '@/types';
 import { DOCUMENTS, DEPENDENCIES, docTypeToField, getAllDependents, topoSortLevels, levelsFor, topoSortDocs, CORE_DOCS, orderCoreFirst } from '@/lib/documentUtils';
-import { authedFetch } from '@/lib/authFetch';
+import { authedFetch, cachedGenerationFetch } from '@/lib/authFetch';
 import { mapWithConcurrency } from '@/lib/concurrency';
 import { PRD_SECTIONS } from '@/lib/prd/prdSections';
 import { assemblePRD } from '@/lib/prd/assemblePRD';
@@ -319,14 +319,14 @@ async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
       requestDeadlines.set(controller, Date.now() + TIMEOUT_MS);
       const to = setTimeout(() => controller.abort(new DOMException('timeout', 'TimeoutError')), TIMEOUT_MS);
       try {
-        const res = await authedFetch('/api/generate-doc', {
+        const res = await cachedGenerationFetch('/api/generate-doc', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           // projectId: 과금 카운팅 멱등키. single은 Meeting.id === projectId로 동일.
           // meetingId: single 레거시 호환(서버 recordTokenUsage가 씀). composite는 projectId만 의미.
           body: JSON.stringify({ docType, summary, transcript, meetingInfo, contextDocs, review: false, meetingId: projectId, projectId }),
           signal: controller.signal,
-        });
+        }, isRegen);
         if (!res.ok) {
           // 서버에서 reason을 body에 실어줬으면 꺼내서 err에 실음
           let bodyReason: GenErrorReason | undefined;
@@ -362,12 +362,12 @@ async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
         requestDeadlines.set(controller, Date.now() + timeoutMs);
         const to = setTimeout(() => controller.abort(new DOMException('timeout', 'TimeoutError')), timeoutMs);
         try {
-          const res = await authedFetch('/api/generate-doc', {
+          const res = await cachedGenerationFetch('/api/generate-doc', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ docType: 'prd', summary, transcript, meetingInfo, meetingId: projectId, projectId, ...extra }),
             signal: controller.signal,
-          });
+          }, isRegen);
           if (!res.ok) {
             const e = new Error('PRD 요청 실패') as Error & { status?: number };
             e.status = res.status;

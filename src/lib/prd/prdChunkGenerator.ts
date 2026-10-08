@@ -1,3 +1,4 @@
+import { withSharedTranscript } from '@/lib/generationPrompt';
 import { llmComplete } from '@/lib/llm';
 import type { LLMResult } from '@/lib/llm/types';
 import { PRD_SECTIONS, PRDChunkProgress, PRDGenerationResult } from './prdSections';
@@ -77,7 +78,7 @@ export async function generateSection(
     const llmRes = await withRetry(
       () =>
         llmComplete({
-          prompt,
+          ...withSharedTranscript(prompt, transcript),
           system: PRD_SECTION_SYSTEM + DOCUMENT_GROUNDING_RULES,
           maxTokens,
           temperature: 0.7,

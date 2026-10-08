@@ -23,3 +23,17 @@ describe('GPT 문서 응답 검증', () => {
   await expect(openaiCompatAdapter.complete({ prompt: '문서', maxTokens: 500 }, ctx)).rejects.toThrow('본문이 비어');
  });
 });
+describe('cache boundaries and usage accounting', () => {
+ it('marks the shared source only and records cache/reasoning counts', async () => {
+  create.mockResolvedValue({ choices: [{ finish_reason: 'stop', message: { content: '본문' } }], usage: { prompt_tokens: 2000, completion_tokens: 100, total_tokens: 2100, prompt_tokens_details: { cached_tokens: 1500, cache_write_tokens: 100 }, completion_tokens_details: { reasoning_tokens: 40 } } });
+  const result = await openaiCompatAdapter.complete({ system: '공통 지침', sharedContext: '원문 전체', prompt: '문서별 작업', maxTokens: 500 }, ctx);
+  expect(create.mock.lastCall?.[0]).toMatchObject({ prompt_cache_options: { mode: 'explicit', ttl: '30m' }, messages: [{ role: 'system', content: '공통 지침' }, { role: 'user', content: [{ type: 'text', text: '원문 전체', prompt_cache_breakpoint: { mode: 'explicit' } }] }, { role: 'user', content: '문서별 작업' }] });
+  expect(result.usage).toMatchObject({ inputTokens: 2000, outputTokens: 100, totalTokens: 2100, cachedInputTokens: 1500, cacheWriteInputTokens: 100, reasoningTokens: 40 });
+ });
+ it.each(['gpt-5.4', 'gemini-2.5-flash'])('omits explicit cache fields for %s', async model => {
+  create.mockResolvedValue({ choices: [{ finish_reason: 'stop', message: { content: '본문' } }] });
+  await openaiCompatAdapter.complete({ sharedContext: '원문', prompt: '작업', maxTokens: 500 }, { ...ctx, model });
+  expect(create.mock.lastCall?.[0]).not.toHaveProperty('prompt_cache_options');
+  expect(create.mock.lastCall?.[0].messages[0].content).toBe('원문');
+ });
+});

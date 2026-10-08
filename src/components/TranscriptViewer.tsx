@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Textarea } from '@/components/ui/textarea';
 import { useMeetingStore } from '@/store/meetingStore';
-import { authedFetch } from '@/lib/authFetch';
+import { authedFetch, cachedGenerationFetch } from '@/lib/authFetch';
 
 // 최대 권장 텍스트 길이 (토큰 제한 고려)
 const MAX_RECOMMENDED_LENGTH = 15000;
@@ -104,7 +104,7 @@ export function TranscriptViewer() {
 
       setSummarizeProgress('AI 모델에 요청 전송 중...');
 
-      const response = await authedFetch('/api/summarize', {
+      const response = await cachedGenerationFetch('/api/summarize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

@@ -18,8 +18,16 @@ export const openaiCompatAdapter: LLMAdapter = {
       maxRetries: req.maxRetries ?? 0,
     });
 
+    // Explicit prefix caching is supported on GPT-5.6+ only. Never send these
+    // OpenAI-specific fields to compatible providers or older models.
+    const version = ctx.model.match(/^gpt-(\d+)(?:\.(\d+))?(?:-|$)/);
+    const explicitCache = !!req.sharedContext && ctx.id === 'openai' && !!version
+      && (+version[1] >= 6 || (+version[1] === 5 && +(version[2] || 0) >= 6));
+    const sharedPart = { type: 'text' as const, text: req.sharedContext || '',
+      ...(explicitCache ? { prompt_cache_breakpoint: { mode: 'explicit' } } : {}) };
     const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [];
     if (req.system) messages.push({ role: 'system', content: req.system });
+    if (req.sharedContext) messages.push({ role: 'user', content: explicitCache ? [sharedPart] : req.sharedContext });
     messages.push({ role: 'user', content: req.prompt });
 
     const isGlm = ctx.model.includes('glm');
@@ -34,6 +42,7 @@ export const openaiCompatAdapter: LLMAdapter = {
     const params = {
       model: ctx.model,
       messages,
+      ...(explicitCache ? { prompt_cache_options: { mode: 'explicit', ttl: '30m' } } : {}),
       ...(isGpt5
         // 추론 토큰도 max_completion_tokens에 포함된다. 호출부 maxTokens는 '본문' 예산이므로 추론 몫을 2배로 얹는다
         // (실측: medium에서 출력의 ~50%가 추론). 과금은 실제 생성분만이라 상한 상향 자체는 무비용.
@@ -78,7 +87,10 @@ export const openaiCompatAdapter: LLMAdapter = {
     // 토큰 실측(과금 설계용). OpenAI 호환은 usage.prompt_tokens/completion_tokens 제공.
     const u = response.usage;
     const usage = u
-      ? { inputTokens: u.prompt_tokens ?? 0, outputTokens: u.completion_tokens ?? 0, totalTokens: u.total_tokens ?? 0 }
+      ? { inputTokens: u.prompt_tokens ?? 0, outputTokens: u.completion_tokens ?? 0, totalTokens: u.total_tokens ?? 0,
+          cachedInputTokens: u.prompt_tokens_details?.cached_tokens,
+          cacheWriteInputTokens: (u.prompt_tokens_details as { cache_write_tokens?: number } | undefined)?.cache_write_tokens,
+          reasoningTokens: u.completion_tokens_details?.reasoning_tokens }
       : undefined;
 
     return { text: extractContent(message), provider: ctx.id, model: response.model || ctx.model, usage };

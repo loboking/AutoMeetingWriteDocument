@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
@@ -17,9 +17,12 @@ import { DateFormat } from '@/components/DateFormat';
 import { formatTime } from '@/lib/timeUtils';
 import { cn } from '@/lib/utils';
 import { useMeetingStore } from '@/store/meetingStore';
-import { authedFetch } from '@/lib/authFetch';
+import { authedFetch, cachedGenerationFetch } from '@/lib/authFetch';
 import MeetingRecorder from './MeetingRecorder';
+import { summarizeOnDevice } from '@/lib/localSummary';
 import type { MeetingNote, MeetingSummary, TranscriptSegment } from '@/types';
+
+type NoteInput = { text: string; segments?: TranscriptSegment[]; duration?: number; audioUrl?: string };
 
 // 회의록 모드(① 회의록 탭). Meeting(② 기획서)과 별개 엔티티 — 가벼운 산출.
 // 흐름: 3入口(녹음/업로드/텍스트) → /api/summarize → createMeetingNote → 리스트.
@@ -112,6 +115,16 @@ export function MeetingNotePanel({ onViewComposite }: MeetingNotePanelProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [summarizing, setSummarizing] = useState(false);
   const [summarizeError, setSummarizeError] = useState('');
+  const [useLocalSummary, setUseLocalSummary] = useState(false);
+  const [localProgress, setLocalProgress] = useState('');
+  const [retryPayload, setRetryPayload] = useState<NoteInput | null>(null);
+  const [localDraft, setLocalDraft] = useState<{ payload: NoteInput; summary: MeetingSummary } | null>(null);
+  const localAbort = useRef<AbortController | null>(null);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; localAbort.current?.abort(); };
+  }, []);
 
   // 다중 선택(합성) 모드 — 카드 체크박스. 단일 클릭(상세 뷰)과 독립.
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -161,20 +174,39 @@ export function MeetingNotePanel({ onViewComposite }: MeetingNotePanelProps) {
 
   // 전사 결과 → /api/summarize → createMeetingNote → 리스트 복귀.
   // 텍스트 모드는 STT 건너뛰고 transcript 바로 요약.
-  const handleTranscriptReady = async (payload: {
-    text: string;
-    segments?: TranscriptSegment[];
-    duration?: number;
-    audioUrl?: string;
-  }) => {
+  const saveSummary = (payload: NoteInput, summary: MeetingSummary) => {
+    const title = payload.text.trim().split('\n')[0].slice(0, 40) || `회의록 ${new Date().toLocaleDateString('ko-KR')}`;
+    createMeetingNote({
+      id: generateId(),
+      title,
+      transcript: payload.text,
+      transcriptSegments: payload.segments,
+      summary,
+      audioUrl: payload.audioUrl,
+      duration: payload.duration,
+      source: payload.audioUrl ? 'recording' : (payload.segments && payload.segments.length > 0 ? 'file' : 'text'),
+    });
+    setView('list');
+    setLocalDraft(null);
+    setRetryPayload(null);
+  };
+
+  const handleTranscriptReady = async (payload: NoteInput) => {
     if (!payload.text.trim()) {
       setSummarizeError('전사 결과가 비어있습니다.');
       return;
     }
     setSummarizing(true);
     setSummarizeError('');
+    setRetryPayload(payload);
     try {
-      const res = await authedFetch('/api/summarize', {
+      if (useLocalSummary) {
+        localAbort.current = new AbortController();
+        const summary = await summarizeOnDevice(payload.text, message => { if (mounted.current) setLocalProgress(message); }, localAbort.current.signal);
+        if (mounted.current) setLocalDraft({ payload, summary });
+        return;
+      }
+      const res = await cachedGenerationFetch('/api/summarize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: payload.text, context: '회의록' }),
@@ -185,23 +217,13 @@ export function MeetingNotePanel({ onViewComposite }: MeetingNotePanelProps) {
       const body = await res.json() as { summary?: MeetingSummary };
       if (!body.summary) throw new Error('빈 요약 응답');
 
-      const title = payload.text.trim().split('\n')[0].slice(0, 40) || `회의록 ${new Date().toLocaleDateString('ko-KR')}`;
-      createMeetingNote({
-        id: generateId(),
-        title,
-        transcript: payload.text,
-        transcriptSegments: payload.segments,
-        summary: body.summary,
-        audioUrl: payload.audioUrl,
-        duration: payload.duration,
-        source: payload.audioUrl ? 'recording' : (payload.segments && payload.segments.length > 0 ? 'file' : 'text'),
-      });
-      setView('list');
+      if (mounted.current) saveSummary(payload, body.summary);
     } catch (e) {
       console.error('[MeetingNotePanel] 요약 실패:', e);
-      setSummarizeError(e instanceof Error ? e.message : '요약에 실패했습니다.');
+      if (mounted.current) setSummarizeError(e instanceof Error ? e.message : '요약에 실패했습니다.');
     } finally {
-      setSummarizing(false);
+      localAbort.current = null;
+      if (mounted.current) setSummarizing(false);
     }
   };
 
@@ -286,11 +308,19 @@ export function MeetingNotePanel({ onViewComposite }: MeetingNotePanelProps) {
     return (
       <div className="space-y-4">
         <div className="flex items-center justify-between">
-          <Button variant="ghost" size="sm" onClick={() => setView('list')} className="gap-1.5">
+          <Button variant="ghost" size="sm" onClick={() => setView('list')} disabled={summarizing} className="gap-1.5">
             <ArrowLeft className="w-4 h-4" aria-hidden="true" />
             목록으로
           </Button>
         </div>
+
+        {process.env.NEXT_PUBLIC_ENABLE_LOCAL_SUMMARY === 'true' && <div className="rounded-lg border p-4 space-y-2">
+          <label className="flex items-center gap-2 text-sm font-medium">
+            <input type="checkbox" checked={useLocalSummary} disabled={summarizing || !!localDraft} onChange={e => setUseLocalSummary(e.target.checked)} />
+            이 기기에서 요약하기 (시험)
+          </label>
+          <p className="text-xs text-slate-500">최대 10,000자. 최초 실행 시 수백 MB의 모델을 내려받습니다. 요약하는 동안 화면을 열어두세요. 결과는 검토 후 저장하며, 실패해도 API 요약으로 자동 전환하지 않습니다.</p>
+        </div>}
 
         {summarizeError && (
           <Alert variant="destructive">
@@ -299,10 +329,39 @@ export function MeetingNotePanel({ onViewComposite }: MeetingNotePanelProps) {
           </Alert>
         )}
 
-        {summarizing ? (
+        {localDraft && (
+          <Card>
+            <CardHeader><CardTitle>기기 요약 검토</CardTitle></CardHeader>
+            <CardContent className="space-y-4">
+              <p className="text-sm text-amber-700">시험 모델의 결과입니다. 결정사항·담당자·기한을 원문과 비교한 뒤 저장해주세요.</p>
+              <details><summary className="cursor-pointer">회의 원문 보기</summary><p className="whitespace-pre-wrap text-sm max-h-64 overflow-auto">{localDraft.payload.text}</p></details>
+              <p className="whitespace-pre-wrap">{localDraft.summary.overview}</p>
+              <h4 className="font-semibold">핵심 사항</h4>
+              <ul className="list-disc pl-5">{localDraft.summary.keyPoints.map((v,i) => <li key={i}>{v}</li>)}</ul>
+              <h4 className="font-semibold">의사결정</h4>
+              <ul className="list-disc pl-5">{localDraft.summary.decisions.map((v,i) => <li key={i}>{v}</li>)}</ul>
+              <h4 className="font-semibold">할 일</h4>
+              <ul className="list-disc pl-5">{localDraft.summary.actionItems.map((v,i) => <li key={i}>{v.task} · 담당: {v.assignee || '미정'} · 기한: {v.deadline || '미정'}{v.priority ? ` · 우선순위: ${v.priority}` : ''}</li>)}</ul>
+              <div className="flex gap-2">
+                <Button onClick={() => saveSummary(localDraft.payload, localDraft.summary)}>검토 완료 · 저장</Button>
+                <Button variant="outline" onClick={() => setLocalDraft(null)}>원문 유지 · 다시 선택</Button>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+        {!summarizing && !localDraft && retryPayload && (
+          <div className="flex flex-wrap gap-2 items-center">
+            <span className="text-sm">입력한 원문이 유지되어 있습니다.</span>
+            <Button onClick={() => void handleTranscriptReady(retryPayload)}>선택한 방식으로 다시 요약</Button>
+            <Button variant="outline" onClick={() => { setRetryPayload(null); setSummarizeError(''); }}>원문 지우고 새로 입력</Button>
+          </div>
+        )}
+
+        {localDraft || retryPayload && !summarizing ? null : summarizing ? (
           <Card>
             <CardContent className="py-12 text-center space-y-3">
               <Loader2 className="w-8 h-8 mx-auto animate-spin text-blue-500" aria-hidden="true" />
+              {useLocalSummary && <><p className="text-sm">{localProgress}</p><Button variant="outline" onClick={() => localAbort.current?.abort()}>요약 취소</Button></>}
               <p className="text-sm font-medium text-slate-700 dark:text-slate-300">
                 회의록을 요약하는 중...
               </p>
@@ -361,6 +420,7 @@ export function MeetingNotePanel({ onViewComposite }: MeetingNotePanelProps) {
         <Card>
           <CardContent className="py-10 text-center space-y-3">
             <Loader2 className="w-8 h-8 mx-auto animate-spin text-blue-500" aria-hidden="true" />
+              {useLocalSummary && <><p className="text-sm">{localProgress}</p><Button variant="outline" onClick={() => localAbort.current?.abort()}>요약 취소</Button></>}
             <p className="text-sm font-medium text-slate-700 dark:text-slate-300">
               AI가 {selectedIds.length}개 회의록을 합성해 PRD를 생성하는 중...
             </p>

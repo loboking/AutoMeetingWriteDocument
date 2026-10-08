@@ -1,0 +1,222 @@
+{
+  "totalSec": 1381.337,
+  "transcriptChars": 67451,
+  "timing": {
+    "summarize": 166.615,
+    "prd": 73.803,
+    "user-story": 90.132,
+    "feature-list": 105.676,
+    "flowchart": 119.946,
+    "screen-list": 102.918,
+    "database": 126.304,
+    "storyboard": 86.757,
+    "ia": 99.422,
+    "api-spec": 127.651,
+    "test-plan": 0.625,
+    "wireframe": 91.163,
+    "deployment": 85.955,
+    "wbs": 112.654,
+    "test-case": 149.189
+  },
+  "status": {
+    "prd": "partial(9)",
+    "user-story": "ok",
+    "feature-list": "ok",
+    "flowchart": "ok",
+    "screen-list": "ok",
+    "database": "ok",
+    "storyboard": "ok",
+    "ia": "ok",
+    "api-spec": "ok",
+    "test-plan": "HTTP 500 {\"error\":\"문서 생성에 실패했습니다.\",\"reason\":\"429\"}",
+    "wireframe": "ok",
+    "deployment": "ok",
+    "wbs": "ok",
+    "test-case": "ok"
+  },
+  "usageLog": [
+    {
+      "docType": "_transcript",
+      "model": "gpt-6-luna",
+      "inputTokens": 172,
+      "outputTokens": 18629
+    },
+    {
+      "docType": "_transcript",
+      "model": "gpt-6-luna",
+      "inputTokens": 172,
+      "outputTokens": 19191
+    },
+    {
+      "docType": "summarize",
+      "model": "gpt-6-luna",
+      "inputTokens": 6033,
+      "outputTokens": 2156
+    },
+    {
+      "docType": "summarize",
+      "model": "gpt-6-luna",
+      "inputTokens": 5927,
+      "outputTokens": 3477
+    },
+    {
+      "docType": "summarize",
+      "model": "gpt-6-luna",
+      "inputTokens": 6024,
+      "outputTokens": 3043
+    },
+    {
+      "docType": "summarize",
+      "model": "gpt-6-luna",
+      "inputTokens": 5992,
+      "outputTokens": 2853
+    },
+    {
+      "docType": "summarize",
+      "model": "gpt-6-luna",
+      "inputTokens": 6019,
+      "outputTokens": 3216
+    },
+    {
+      "docType": "summarize",
+      "model": "gpt-6-luna",
+      "inputTokens": 5868,
+      "outputTokens": 3644
+    },
+    {
+      "docType": "summarize",
+      "model": "gpt-6-luna",
+      "inputTokens": 4684,
+      "outputTokens": 3200
+    },
+    {
+      "docType": "prd",
+      "model": "gpt-6-luna",
+      "inputTokens": 56540,
+      "outputTokens": 1335
+    },
+    {
+      "docType": "prd",
+      "model": "gpt-6-luna",
+      "inputTokens": 833,
+      "outputTokens": 119
+    },
+    {
+      "docType": "prd",
+      "model": "gpt-6-luna",
+      "inputTokens": 52533,
+      "outputTokens": 884
+    },
+    {
+      "docType": "prd",
+      "model": "gpt-6-luna",
+      "inputTokens": 54289,
+      "outputTokens": 2303
+    },
+    {
+      "docType": "prd",
+      "model": "gpt-6-luna",
+      "inputTokens": 54698,
+      "outputTokens": 2485
+    },
+    {
+      "docType": "prd",
+      "model": "gpt-6-luna",
+      "inputTokens": 58236,
+      "outputTokens": 1462
+    },
+    {
+      "docType": "prd",
+      "model": "gpt-6-luna",
+      "inputTokens": 57055,
+      "outputTokens": 3050
+    },
+    {
+      "docType": "user-story",
+      "model": "gpt-6-luna",
+      "inputTokens": 56775,
+      "outputTokens": 13673
+    },
+    {
+      "docType": "feature-list",
+      "model": "gpt-6-luna",
+      "inputTokens": 55901,
+      "outputTokens": 15106
+    },
+    {
+      "docType": "flowchart",
+      "model": "gpt-6-luna",
+      "inputTokens": 57155,
+      "outputTokens": 16844
+    },
+    {
+      "docType": "screen-list",
+      "model": "gpt-6-luna",
+      "inputTokens": 71151,
+      "outputTokens": 16010
+    },
+    {
+      "docType": "database",
+      "model": "gpt-6-luna",
+      "inputTokens": 71942,
+      "outputTokens": 20650
+    },
+    {
+      "docType": "storyboard",
+      "model": "gpt-6-luna",
+      "inputTokens": 72811,
+      "outputTokens": 12927
+    },
+    {
+      "docType": "ia",
+      "model": "gpt-6-luna",
+      "inputTokens": 72399,
+      "outputTokens": 16306
+    },
+    {
+      "docType": "api-spec",
+      "model": "gpt-6-luna",
+      "inputTokens": 87565,
+      "outputTokens": 21684
+    },
+    {
+      "docType": "wireframe",
+      "model": "gpt-6-luna",
+      "inputTokens": 89607,
+      "outputTokens": 15986
+    },
+    {
+      "docType": "deployment",
+      "model": "gpt-6-luna",
+      "inputTokens": 101866,
+      "outputTokens": 12865
+    },
+    {
+      "docType": "wbs",
+      "model": "gpt-6-luna",
+      "inputTokens": 109506,
+      "outputTokens": 19532
+    },
+    {
+      "docType": "test-case",
+      "model": "gpt-6-luna",
+      "inputTokens": 93312,
+      "outputTokens": 23902
+    }
+  ],
+  "chars": {
+    "prd": 18118,
+    "user-story": 25407,
+    "feature-list": 26766,
+    "flowchart": 31770,
+    "screen-list": 31258,
+    "database": 53590,
+    "storyboard": 23468,
+    "ia": 34145,
+    "api-spec": 46762,
+    "wireframe": 35773,
+    "deployment": 24239,
+    "wbs": 33911,
+    "test-case": 45455
+  }
+}

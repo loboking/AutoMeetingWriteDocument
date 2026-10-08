@@ -19,7 +19,7 @@ export const anthropicAdapter: LLMAdapter = {
       model: ctx.model, // 예: 'claude-opus-4-8'
       max_tokens: req.maxTokens,
       ...(req.system ? { system: req.system } : {}),
-      messages: [{ role: 'user', content: req.prompt }],
+      messages: [{ role: 'user', content: [req.sharedContext, req.prompt].filter(Boolean).join('\n\n') }],
     });
 
     // refusal 시 빈 text → 라우트가 mock/원문 fallback (침묵 실패 방지).
@@ -34,7 +34,7 @@ export const anthropicAdapter: LLMAdapter = {
     // 토큰 실측(과금 설계용). Anthropic은 usage.input_tokens/output_tokens.
     const u = res.usage;
     const usage = u
-      ? { inputTokens: u.input_tokens ?? 0, outputTokens: u.output_tokens ?? 0, totalTokens: (u.input_tokens ?? 0) + (u.output_tokens ?? 0) }
+      ? { inputTokens: (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0), cachedInputTokens: u.cache_read_input_tokens ?? 0, cacheWriteInputTokens: u.cache_creation_input_tokens ?? 0, outputTokens: u.output_tokens ?? 0, totalTokens: (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.output_tokens ?? 0) }
       : undefined;
 
     return { text, provider: ctx.id, model: ctx.model, usage };

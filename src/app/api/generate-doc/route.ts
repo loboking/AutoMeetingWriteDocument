@@ -1,3 +1,4 @@
+import { withSharedTranscript, compactReferenceDocument } from '@/lib/generationPrompt';
 import { NextRequest, NextResponse } from 'next/server';
 import { requireUser } from '@/lib/apiAuth';
 import { getPRDPrompt } from '@/lib/prdTemplate';
@@ -156,7 +157,7 @@ async function generateDocument(
     // 문서별 출력토큰 차등(목록류는 축소 → 생성 시간 절감, 긴 문서는 16384 유지)
     // 429(TPM)·5xx는 서버 권장 대기 후 재시도 — 단일 호출 문서가 한도 한 번에 통째로 실패하지 않게.
     const llmRes = await withRetry(() => llmComplete({
-      prompt,
+      ...withSharedTranscript(prompt, transcript),
       system: KOREAN_OUTPUT_SYSTEM_PROMPT + DOCUMENT_GROUNDING_RULES,
       maxTokens: maxTokensFor(),
       timeoutMs: 900000,
@@ -236,7 +237,7 @@ function getPromptForDocType(
       const injected =
         docType === 'api-spec' && key === 'database' && content.length > 6000
           ? slimDatabaseForApiSpec(content)
-          : content;
+          : compactReferenceDocument(content);
       contextSection += `### ${title}\n\n${injected}\n\n---\n\n`;
     }
   }

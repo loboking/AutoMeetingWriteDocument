@@ -4,6 +4,7 @@
 export type ProviderId = 'zai' | 'openai' | 'gemini' | 'anthropic';
 
 export interface LLMRequest {
+  sharedContext?: string; // Stable source prefix; preserve source in all providers.
   prompt: string; // user content
   system?: string; // system prompt (예: 한국어 출력 강제)
   maxTokens: number; // 호출부가 자기 값 전달 (현행 4096~16384 보존)
@@ -15,6 +16,9 @@ export interface LLMRequest {
 
 // 토큰 사용량 (과금 설계 실측용). provider가 안 주면 undefined.
 export interface LLMUsage {
+  cachedInputTokens?: number;
+  cacheWriteInputTokens?: number;
+  reasoningTokens?: number;
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;

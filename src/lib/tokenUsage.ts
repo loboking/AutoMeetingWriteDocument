@@ -28,7 +28,7 @@ export async function recordTokenUsage(params: {
   if (!supabaseAdmin) return;
   if (!params.usage) return; // provider가 토큰을 안 주면 기록 생략
   const { userId, op, provider, model, usage, meetingId, docType, projectId } = params;
-  const { error } = await supabaseAdmin.from('token_usage').insert({
+  const row = {
     user_id: userId,
     period: getCurrentPeriod(),
     op,
@@ -40,7 +40,18 @@ export async function recordTokenUsage(params: {
     meeting_id: meetingId ?? null,
     project_id: projectId ?? null,
     doc_type: docType ?? null,
-  });
+  };
+  const details = {
+    cached_input_tokens: usage.cachedInputTokens ?? null,
+    cache_write_input_tokens: usage.cacheWriteInputTokens ?? null,
+    reasoning_tokens: usage.reasoningTokens ?? null,
+  };
+  let { error } = await supabaseAdmin.from('token_usage').insert({ ...row, ...details });
+  if (error && (error.code === 'PGRST204' || error.code === '42703')) {
+    // Rolling deployments: retain the original accounting until the additive migration runs.
+    console.info('[tokenUsage/cache-details]', { provider, model, ...details });
+    ({ error } = await supabaseAdmin.from('token_usage').insert(row));
+  }
   if (error) {
     console.error('[tokenUsage] insert error:', error.message);
   }
