@@ -1,0 +1,62 @@
+{
+  "provider": "openai",
+  "requestedModel": "gpt-6-luna",
+  "results": [
+    {
+      "docType": "prd",
+      "status": 200,
+      "seconds": 17.345,
+      "chars": 2674,
+      "partial": null,
+      "error": null
+    },
+    {
+      "docType": "flowchart",
+      "status": 200,
+      "seconds": 87.252,
+      "chars": 19273,
+      "partial": null,
+      "error": null
+    },
+    {
+      "docType": "test-plan",
+      "status": 200,
+      "seconds": 85.036,
+      "chars": 17532,
+      "partial": null,
+      "error": null
+    }
+  ],
+  "usage": [
+    {
+      "model": "gpt-6-luna",
+      "provider": "openai",
+      "usage": {
+        "inputTokens": 1772,
+        "outputTokens": 1555,
+        "totalTokens": 3327
+      },
+      "docType": "prd"
+    },
+    {
+      "model": "gpt-6-luna",
+      "provider": "openai",
+      "usage": {
+        "inputTokens": 5844,
+        "outputTokens": 9978,
+        "totalTokens": 15822
+      },
+      "docType": "flowchart"
+    },
+    {
+      "model": "gpt-6-luna",
+      "provider": "openai",
+      "usage": {
+        "inputTokens": 5513,
+        "outputTokens": 9412,
+        "totalTokens": 14925
+      },
+      "docType": "test-plan"
+    }
+  ]
+}

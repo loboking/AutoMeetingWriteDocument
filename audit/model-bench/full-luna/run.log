@@ -1,0 +1,9 @@
+
+ RUN  v4.1.7 /Users/doubled.soft/orca/workspaces/AutoMeetingWriteDocument/android-sync-release
+
+
+ Test Files  1 passed (1)
+      Tests  1 passed (1)
+   Start at  10:34:43
+   Duration  1381.92s (transform 239ms, setup 0ms, import 414ms, tests 1381.34s, environment 0ms)
+

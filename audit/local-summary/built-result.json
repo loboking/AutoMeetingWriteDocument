@@ -1,0 +1,18 @@
+{
+  "result": {
+    "type": "complete",
+    "summary": {
+      "overview": "디자인 개편 보류 및 추가 개발 작업 확정",
+      "keyPoints": [
+        "유나: 디자인 개편 보류",
+        "준호: 추가 개발 작업 확정"
+      ],
+      "decisions": [
+        "유나: 디자인 개편 보류"
+      ],
+      "actionItems": []
+    },
+    "ms": 141655
+  },
+  "apiCalls": 0
+}

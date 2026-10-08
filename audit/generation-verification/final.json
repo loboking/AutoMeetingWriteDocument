@@ -1,0 +1,349 @@
+{
+  "diagrams": [
+    {
+      "name": "api-spec.md",
+      "index": 0,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "database.md",
+      "index": 0,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "feature-list.md",
+      "index": 0,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "feature-list.md",
+      "index": 1,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "feature-list.md",
+      "index": 2,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "flowchart.md",
+      "index": 0,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "flowchart.md",
+      "index": 1,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "flowchart.md",
+      "index": 2,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "flowchart.md",
+      "index": 3,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "flowchart.md",
+      "index": 4,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "flowchart.md",
+      "index": 5,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "flowchart.md",
+      "index": 6,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "flowchart.md",
+      "index": 7,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "flowchart.md",
+      "index": 8,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "flowchart.md",
+      "index": 9,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "ia.md",
+      "index": 0,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "ia.md",
+      "index": 1,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "ia.md",
+      "index": 2,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "ia.md",
+      "index": 3,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "ia.md",
+      "index": 4,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "ia.md",
+      "index": 5,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "ia.md",
+      "index": 6,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "ia.md",
+      "index": 7,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "screen-list.md",
+      "index": 0,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "screen-list.md",
+      "index": 1,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "screen-list.md",
+      "index": 2,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "screen-list.md",
+      "index": 3,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "screen-list.md",
+      "index": 4,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "screen-list.md",
+      "index": 5,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "storyboard.md",
+      "index": 0,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "wbs.md",
+      "index": 0,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "wbs.md",
+      "index": 1,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "wireframe.md",
+      "index": 0,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "wireframe.md",
+      "index": 1,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "wireframe.md",
+      "index": 2,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "wireframe.md",
+      "index": 3,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "wireframe.md",
+      "index": 4,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "wireframe.md",
+      "index": 5,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "live-flowchart.md",
+      "index": 0,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "live-flowchart.md",
+      "index": 1,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "live-flowchart.md",
+      "index": 2,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "live-flowchart.md",
+      "index": 3,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "live-flowchart.md",
+      "index": 4,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "live-flowchart.md",
+      "index": 5,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "live-flowchart.md",
+      "index": 6,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "live-flowchart.md",
+      "index": 7,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "live-flowchart.md",
+      "index": 8,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "live-flowchart.md",
+      "index": 9,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "live-test-plan.md",
+      "index": 0,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "live-test-plan.md",
+      "index": 1,
+      "parse": true,
+      "png": true
+    }
+  ],
+  "screen": {
+    "TB": {
+      "outcome": {
+        "ok": true
+      },
+      "svg": 1,
+      "text": "시작\n완료"
+    },
+    "BT": {
+      "outcome": {
+        "ok": true
+      },
+      "svg": 1,
+      "text": "시작\n완료"
+    },
+    "invalid": {
+      "outcome": {
+        "error": "Parse error on line 3:\n...wchart TD A[broken\n---------------------^\nExpecting 'SQE', 'DOUBLECIRCLEEND', 'PE', '-)', 'STADIUMEND', 'SUBROUTINEEND', 'PIPE', 'CYLINDEREND', 'DIAMOND_STOP', 'TAGEND', 'TRAPEND', 'INVTRAPEND', 'UNICODE_TEXT', 'TEXT', 'TAGSTART', got '1'"
+      },
+      "svg": 0,
+      "text": "다이어그램을 표시하지 못했습니다.\n\n오류와 원본 코드 보기"
+    }
+  },
+  "document": {
+    "screen": {
+      "outcome": {
+        "ok": true
+      },
+      "svg": 10
+    },
+    "htmlImages": 10,
+    "files": {
+      "docx": {
+        "bytes": 3538081,
+        "images": 10
+      },
+      "pptx": {
+        "bytes": 6548978,
+        "images": 10
+      },
+      "pdf": {
+        "bytes": 9735394
+      }
+    }
+  }
+}

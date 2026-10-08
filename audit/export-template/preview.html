@@ -1,0 +1,14 @@
+<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>문서 다운로드 기준 시안</title></head><body><script type="module">
+import { buildDocumentHtml, PDF_EXPORT_CSS, buildDocxBlob, buildPdfBlob } from '/src/lib/exportFormatters.ts';
+import { prerenderMermaid } from '/src/lib/mermaidExport.ts';
+const content = await (await fetch('./sample.md')).text();
+const options = { title: '제품 요구사항 정의서', projectTitle: '회의 문서 관리 서비스 · 디자인 검증용 예시' };
+const diagrams = await prerenderMermaid(content);
+document.head.insertAdjacentHTML('beforeend', `<style>${PDF_EXPORT_CSS} @media screen { body { max-width: 642px; margin: 40px auto; } }</style>`);
+document.body.insertAdjacentHTML('beforeend', buildDocumentHtml(content, diagrams, options));
+window.exportSample = async (format) => {
+ const blob = format === 'docx' ? await buildDocxBlob(content, options) : await buildPdfBlob(content, options);
+ return Array.from(new Uint8Array(await blob.arrayBuffer()));
+};
+window.sampleReady = true;
+</script></body></html>

@@ -1,0 +1,251 @@
+{
+  "diagrams": [
+    {
+      "name": "api-spec.md",
+      "index": 0,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "database.md",
+      "index": 0,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "feature-list.md",
+      "index": 0,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "feature-list.md",
+      "index": 1,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "feature-list.md",
+      "index": 2,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "flowchart.md",
+      "index": 0,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "flowchart.md",
+      "index": 1,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "flowchart.md",
+      "index": 2,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "flowchart.md",
+      "index": 3,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "flowchart.md",
+      "index": 4,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "flowchart.md",
+      "index": 5,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "flowchart.md",
+      "index": 6,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "flowchart.md",
+      "index": 7,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "flowchart.md",
+      "index": 8,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "flowchart.md",
+      "index": 9,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "ia.md",
+      "index": 0,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "ia.md",
+      "index": 1,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "ia.md",
+      "index": 2,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "ia.md",
+      "index": 3,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "ia.md",
+      "index": 4,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "ia.md",
+      "index": 5,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "ia.md",
+      "index": 6,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "ia.md",
+      "index": 7,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "screen-list.md",
+      "index": 0,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "screen-list.md",
+      "index": 1,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "screen-list.md",
+      "index": 2,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "screen-list.md",
+      "index": 3,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "screen-list.md",
+      "index": 4,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "screen-list.md",
+      "index": 5,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "storyboard.md",
+      "index": 0,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "wbs.md",
+      "index": 0,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "wbs.md",
+      "index": 1,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "wireframe.md",
+      "index": 0,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "wireframe.md",
+      "index": 1,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "wireframe.md",
+      "index": 2,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "wireframe.md",
+      "index": 3,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "wireframe.md",
+      "index": 4,
+      "parse": true,
+      "png": true
+    },
+    {
+      "name": "wireframe.md",
+      "index": 5,
+      "parse": true,
+      "png": true
+    }
+  ],
+  "screen": {
+    "TB": {
+      "outcome": null,
+      "svg": 0,
+      "text": ""
+    },
+    "BT": {
+      "outcome": null,
+      "svg": 0,
+      "text": ""
+    },
+    "invalid": {
+      "outcome": {
+        "error": "Parse error on line 3:\n...wchart TD A[broken\n---------------------^\nExpecting 'SQE', 'DOUBLECIRCLEEND', 'PE', '-)', 'STADIUMEND', 'SUBROUTINEEND', 'PIPE', 'CYLINDEREND', 'DIAMOND_STOP', 'TAGEND', 'TRAPEND', 'INVTRAPEND', 'UNICODE_TEXT', 'TEXT', 'TAGSTART', got '1'"
+      },
+      "svg": 0,
+      "text": "⚠️ 다이어그램 렌더링 실패\n\nParse error on line 3: ...wchart TD A[broken ---------------------^ Expecting 'SQE', 'DOUBLECIRCLEEND', 'PE', '-)', 'STADIUMEND', 'SUBROUTINEEND', 'PIPE', 'CYLINDEREND', 'DIAMOND_STOP', 'TAGEND', 'TRAPEND', 'INVTRAPEND', 'UNICODE_TEXT', 'TEXT', 'TAGSTART', got '1'\n\n원본 코드 보기"
+    }
+  }
+}

@@ -1,0 +1,11 @@
+<!doctype html><html lang="ko"><head><meta charset="utf-8"></head><body><script type="module">
+import {contentToPlainText,buildDocxBlob,buildPdfBlob,buildPptxBlob,buildXlsxBlob} from '/src/lib/exportFormatters.ts';
+import {extractAllMermaid} from '/src/lib/mermaidSource.ts';
+window.makeExport = async ({content,format,title,projectTitle}) => {
+ if(format==='txt') return {text:contentToPlainText(content)};
+ const builders={docx:buildDocxBlob,pdf:buildPdfBlob,pptx:buildPptxBlob,xlsx:buildXlsxBlob};
+ const blob=await builders[format](content,{title,projectTitle});
+ return {bytes:Array.from(new Uint8Array(await blob.arrayBuffer())),diagrams:extractAllMermaid(content).length};
+};
+window.ready=true;
+</script></body></html>

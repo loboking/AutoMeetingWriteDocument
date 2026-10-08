@@ -1,0 +1,658 @@
+[
+  {
+    "group": "01_식단앱_기존GPT실측",
+    "document": "시나리오정의서",
+    "format": "docx",
+    "bytes": 37166,
+    "sourceDiagrams": 0,
+    "images": 0,
+    "tables": 27,
+    "ok": true
+  },
+  {
+    "group": "01_식단앱_기존GPT실측",
+    "document": "시나리오정의서",
+    "format": "pdf",
+    "bytes": 8801748,
+    "sourceDiagrams": 0,
+    "pages": 29,
+    "ok": true
+  },
+  {
+    "group": "01_식단앱_기존GPT실측",
+    "document": "시나리오정의서",
+    "format": "pptx",
+    "bytes": 2447281,
+    "sourceDiagrams": 0,
+    "images": 0,
+    "slides": 88,
+    "ok": true
+  },
+  {
+    "group": "01_식단앱_기존GPT실측",
+    "document": "시나리오정의서",
+    "format": "xlsx",
+    "bytes": 29487,
+    "sourceDiagrams": 0,
+    "sheets": [
+      "Document"
+    ],
+    "rows": 590,
+    "ok": true
+  },
+  {
+    "group": "01_식단앱_기존GPT실측",
+    "document": "PRD_미완성9섹션",
+    "format": "docx",
+    "bytes": 28362,
+    "sourceDiagrams": 0,
+    "images": 0,
+    "tables": 6,
+    "ok": true
+  },
+  {
+    "group": "01_식단앱_기존GPT실측",
+    "document": "PRD_미완성9섹션",
+    "format": "pdf",
+    "bytes": 6727099,
+    "sourceDiagrams": 0,
+    "pages": 19,
+    "ok": true
+  },
+  {
+    "group": "01_식단앱_기존GPT실측",
+    "document": "PRD_미완성9섹션",
+    "format": "pptx",
+    "bytes": 1204321,
+    "sourceDiagrams": 0,
+    "images": 0,
+    "slides": 76,
+    "ok": true
+  },
+  {
+    "group": "01_식단앱_기존GPT실측",
+    "document": "PRD_미완성9섹션",
+    "format": "xlsx",
+    "bytes": 22589,
+    "sourceDiagrams": 0,
+    "sheets": [
+      "Document"
+    ],
+    "rows": 329,
+    "ok": true
+  },
+  {
+    "group": "01_식단앱_기존GPT실측",
+    "document": "기능목록",
+    "format": "docx",
+    "bytes": 371174,
+    "sourceDiagrams": 3,
+    "images": 3,
+    "tables": 27,
+    "ok": true
+  },
+  {
+    "group": "01_식단앱_기존GPT실측",
+    "document": "기능목록",
+    "format": "pdf",
+    "bytes": 9156285,
+    "sourceDiagrams": 3,
+    "pages": 32,
+    "ok": true
+  },
+  {
+    "group": "01_식단앱_기존GPT실측",
+    "document": "기능목록",
+    "format": "pptx",
+    "bytes": 2571909,
+    "sourceDiagrams": 3,
+    "images": 3,
+    "slides": 94,
+    "ok": true
+  },
+  {
+    "group": "01_식단앱_기존GPT실측",
+    "document": "기능목록",
+    "format": "xlsx",
+    "bytes": 365384,
+    "sourceDiagrams": 3,
+    "sheets": [
+      "Document"
+    ],
+    "rows": 682,
+    "ok": true
+  },
+  {
+    "group": "01_식단앱_기존GPT실측",
+    "document": "화면목록",
+    "format": "docx",
+    "bytes": 541415,
+    "sourceDiagrams": 6,
+    "images": 6,
+    "tables": 30,
+    "ok": true
+  },
+  {
+    "group": "01_식단앱_기존GPT실측",
+    "document": "화면목록",
+    "format": "pdf",
+    "bytes": 45842,
+    "sourceDiagrams": 6,
+    "pages": 42,
+    "ok": true
+  },
+  {
+    "group": "01_식단앱_기존GPT실측",
+    "document": "화면목록",
+    "format": "pptx",
+    "bytes": 3652464,
+    "sourceDiagrams": 6,
+    "images": 6,
+    "slides": 151,
+    "ok": true
+  },
+  {
+    "group": "01_식단앱_기존GPT실측",
+    "document": "화면목록",
+    "format": "xlsx",
+    "bytes": 537416,
+    "sourceDiagrams": 6,
+    "sheets": [
+      "Document"
+    ],
+    "rows": 1183,
+    "ok": true
+  },
+  {
+    "group": "01_식단앱_기존GPT실측",
+    "document": "정보구조도",
+    "format": "docx",
+    "bytes": 1422240,
+    "sourceDiagrams": 8,
+    "images": 8,
+    "tables": 36,
+    "ok": true
+  },
+  {
+    "group": "01_식단앱_기존GPT실측",
+    "document": "정보구조도",
+    "format": "pdf",
+    "bytes": 52414,
+    "sourceDiagrams": 8,
+    "pages": 41,
+    "ok": true
+  },
+  {
+    "group": "01_식단앱_기존GPT실측",
+    "document": "정보구조도",
+    "format": "pptx",
+    "bytes": 5032086,
+    "sourceDiagrams": 8,
+    "images": 8,
+    "slides": 109,
+    "ok": true
+  },
+  {
+    "group": "01_식단앱_기존GPT실측",
+    "document": "정보구조도",
+    "format": "xlsx",
+    "bytes": 1411088,
+    "sourceDiagrams": 8,
+    "sheets": [
+      "Document"
+    ],
+    "rows": 865,
+    "ok": true
+  },
+  {
+    "group": "01_식단앱_기존GPT실측",
+    "document": "DB설계",
+    "format": "docx",
+    "bytes": 1005817,
+    "sourceDiagrams": 1,
+    "images": 1,
+    "tables": 29,
+    "ok": true
+  },
+  {
+    "group": "01_식단앱_기존GPT실측",
+    "document": "DB설계",
+    "format": "pdf",
+    "bytes": 51603,
+    "sourceDiagrams": 1,
+    "pages": 50,
+    "ok": true
+  },
+  {
+    "group": "01_식단앱_기존GPT실측",
+    "document": "DB설계",
+    "format": "pptx",
+    "bytes": 4999411,
+    "sourceDiagrams": 1,
+    "images": 1,
+    "slides": 156,
+    "ok": true
+  },
+  {
+    "group": "01_식단앱_기존GPT실측",
+    "document": "DB설계",
+    "format": "xlsx",
+    "bytes": 997774,
+    "sourceDiagrams": 1,
+    "sheets": [
+      "Document"
+    ],
+    "rows": 1300,
+    "ok": true
+  },
+  {
+    "group": "01_식단앱_기존GPT실측",
+    "document": "API명세",
+    "format": "docx",
+    "bytes": 215599,
+    "sourceDiagrams": 1,
+    "images": 1,
+    "tables": 45,
+    "ok": true
+  },
+  {
+    "group": "01_식단앱_기존GPT실측",
+    "document": "API명세",
+    "format": "pdf",
+    "bytes": 55877,
+    "sourceDiagrams": 1,
+    "pages": 61,
+    "ok": true
+  },
+  {
+    "group": "01_식단앱_기존GPT실측",
+    "document": "API명세",
+    "format": "pptx",
+    "bytes": 4284448,
+    "sourceDiagrams": 1,
+    "images": 1,
+    "slides": 246,
+    "ok": true
+  },
+  {
+    "group": "01_식단앱_기존GPT실측",
+    "document": "API명세",
+    "format": "xlsx",
+    "bytes": 213700,
+    "sourceDiagrams": 1,
+    "sheets": [
+      "Document"
+    ],
+    "rows": 1751,
+    "ok": true
+  },
+  {
+    "group": "01_식단앱_기존GPT실측",
+    "document": "플로우차트",
+    "format": "docx",
+    "bytes": 3538026,
+    "sourceDiagrams": 10,
+    "images": 10,
+    "tables": 12,
+    "ok": true
+  },
+  {
+    "group": "01_식단앱_기존GPT실측",
+    "document": "플로우차트",
+    "format": "pdf",
+    "bytes": 9780726,
+    "sourceDiagrams": 10,
+    "pages": 33,
+    "ok": true
+  },
+  {
+    "group": "01_식단앱_기존GPT실측",
+    "document": "플로우차트",
+    "format": "pptx",
+    "bytes": 6542063,
+    "sourceDiagrams": 10,
+    "images": 10,
+    "slides": 100,
+    "ok": true
+  },
+  {
+    "group": "01_식단앱_기존GPT실측",
+    "document": "플로우차트",
+    "format": "xlsx",
+    "bytes": 3528396,
+    "sourceDiagrams": 10,
+    "sheets": [
+      "Document"
+    ],
+    "rows": 587,
+    "ok": true
+  },
+  {
+    "group": "01_식단앱_기존GPT실측",
+    "document": "스토리보드",
+    "format": "docx",
+    "bytes": 94514,
+    "sourceDiagrams": 1,
+    "images": 1,
+    "tables": 25,
+    "ok": true
+  },
+  {
+    "group": "01_식단앱_기존GPT실측",
+    "document": "스토리보드",
+    "format": "pdf",
+    "bytes": 8197887,
+    "sourceDiagrams": 1,
+    "pages": 27,
+    "ok": true
+  },
+  {
+    "group": "01_식단앱_기존GPT실측",
+    "document": "스토리보드",
+    "format": "pptx",
+    "bytes": 2043861,
+    "sourceDiagrams": 1,
+    "images": 1,
+    "slides": 75,
+    "ok": true
+  },
+  {
+    "group": "01_식단앱_기존GPT실측",
+    "document": "스토리보드",
+    "format": "xlsx",
+    "bytes": 88359,
+    "sourceDiagrams": 1,
+    "sheets": [
+      "Document"
+    ],
+    "rows": 554,
+    "ok": true
+  },
+  {
+    "group": "01_식단앱_기존GPT실측",
+    "document": "와이어프레임",
+    "format": "docx",
+    "bytes": 636820,
+    "sourceDiagrams": 6,
+    "images": 6,
+    "tables": 22,
+    "ok": true
+  },
+  {
+    "group": "01_식단앱_기존GPT실측",
+    "document": "와이어프레임",
+    "format": "pdf",
+    "bytes": 49227,
+    "sourceDiagrams": 6,
+    "pages": 44,
+    "ok": true
+  },
+  {
+    "group": "01_식단앱_기존GPT실측",
+    "document": "와이어프레임",
+    "format": "pptx",
+    "bytes": 3151693,
+    "sourceDiagrams": 6,
+    "images": 6,
+    "slides": 141,
+    "ok": true
+  },
+  {
+    "group": "01_식단앱_기존GPT실측",
+    "document": "와이어프레임",
+    "format": "xlsx",
+    "bytes": 635762,
+    "sourceDiagrams": 6,
+    "sheets": [
+      "Document"
+    ],
+    "rows": 1224,
+    "ok": true
+  },
+  {
+    "group": "01_식단앱_기존GPT실측",
+    "document": "WBS",
+    "format": "docx",
+    "bytes": 182100,
+    "sourceDiagrams": 2,
+    "images": 2,
+    "tables": 26,
+    "ok": true
+  },
+  {
+    "group": "01_식단앱_기존GPT실측",
+    "document": "WBS",
+    "format": "pdf",
+    "bytes": 47787,
+    "sourceDiagrams": 2,
+    "pages": 42,
+    "ok": true
+  },
+  {
+    "group": "01_식단앱_기존GPT실측",
+    "document": "WBS",
+    "format": "pptx",
+    "bytes": 3089954,
+    "sourceDiagrams": 2,
+    "images": 2,
+    "slides": 123,
+    "ok": true
+  },
+  {
+    "group": "01_식단앱_기존GPT실측",
+    "document": "WBS",
+    "format": "xlsx",
+    "bytes": 177311,
+    "sourceDiagrams": 2,
+    "sheets": [
+      "Document"
+    ],
+    "rows": 923,
+    "ok": true
+  },
+  {
+    "group": "01_식단앱_기존GPT실측",
+    "document": "테스트케이스",
+    "format": "docx",
+    "bytes": 52187,
+    "sourceDiagrams": 0,
+    "images": 0,
+    "tables": 44,
+    "ok": true
+  },
+  {
+    "group": "01_식단앱_기존GPT실측",
+    "document": "테스트케이스",
+    "format": "pdf",
+    "bytes": 58120,
+    "sourceDiagrams": 0,
+    "pages": 55,
+    "ok": true
+  },
+  {
+    "group": "01_식단앱_기존GPT실측",
+    "document": "테스트케이스",
+    "format": "pptx",
+    "bytes": 3847531,
+    "sourceDiagrams": 0,
+    "images": 0,
+    "slides": 190,
+    "ok": true
+  },
+  {
+    "group": "01_식단앱_기존GPT실측",
+    "document": "테스트케이스",
+    "format": "xlsx",
+    "bytes": 49948,
+    "sourceDiagrams": 0,
+    "sheets": [
+      "Document"
+    ],
+    "rows": 1545,
+    "ok": true
+  },
+  {
+    "group": "01_식단앱_기존GPT실측",
+    "document": "배포가이드",
+    "format": "docx",
+    "bytes": 34157,
+    "sourceDiagrams": 0,
+    "images": 0,
+    "tables": 11,
+    "ok": true
+  },
+  {
+    "group": "01_식단앱_기존GPT실측",
+    "document": "배포가이드",
+    "format": "pdf",
+    "bytes": 8859710,
+    "sourceDiagrams": 0,
+    "pages": 29,
+    "ok": true
+  },
+  {
+    "group": "01_식단앱_기존GPT실측",
+    "document": "배포가이드",
+    "format": "pptx",
+    "bytes": 1698517,
+    "sourceDiagrams": 0,
+    "images": 0,
+    "slides": 129,
+    "ok": true
+  },
+  {
+    "group": "01_식단앱_기존GPT실측",
+    "document": "배포가이드",
+    "format": "xlsx",
+    "bytes": 31174,
+    "sourceDiagrams": 0,
+    "sheets": [
+      "Document"
+    ],
+    "rows": 741,
+    "ok": true
+  },
+  {
+    "group": "02_문서관리MVP_최신GPT실측",
+    "document": "PRD_개요섹션만",
+    "format": "docx",
+    "bytes": 13314,
+    "sourceDiagrams": 0,
+    "images": 0,
+    "tables": 1,
+    "ok": true
+  },
+  {
+    "group": "02_문서관리MVP_최신GPT실측",
+    "document": "PRD_개요섹션만",
+    "format": "pdf",
+    "bytes": 1041680,
+    "sourceDiagrams": 0,
+    "pages": 3,
+    "ok": true
+  },
+  {
+    "group": "02_문서관리MVP_최신GPT실측",
+    "document": "PRD_개요섹션만",
+    "format": "pptx",
+    "bytes": 195004,
+    "sourceDiagrams": 0,
+    "images": 0,
+    "slides": 14,
+    "ok": true
+  },
+  {
+    "group": "02_문서관리MVP_최신GPT실측",
+    "document": "PRD_개요섹션만",
+    "format": "xlsx",
+    "bytes": 8637,
+    "sourceDiagrams": 0,
+    "sheets": [
+      "Document"
+    ],
+    "rows": 37,
+    "ok": true
+  },
+  {
+    "group": "02_문서관리MVP_최신GPT실측",
+    "document": "플로우차트",
+    "format": "docx",
+    "bytes": 2388765,
+    "sourceDiagrams": 10,
+    "images": 10,
+    "tables": 12,
+    "ok": true
+  },
+  {
+    "group": "02_문서관리MVP_최신GPT실측",
+    "document": "플로우차트",
+    "format": "pdf",
+    "bytes": 6230373,
+    "sourceDiagrams": 10,
+    "pages": 24,
+    "ok": true
+  },
+  {
+    "group": "02_문서관리MVP_최신GPT실측",
+    "document": "플로우차트",
+    "format": "pptx",
+    "bytes": 4243438,
+    "sourceDiagrams": 10,
+    "images": 10,
+    "slides": 69,
+    "ok": true
+  },
+  {
+    "group": "02_문서관리MVP_최신GPT실측",
+    "document": "플로우차트",
+    "format": "xlsx",
+    "bytes": 2382138,
+    "sourceDiagrams": 10,
+    "sheets": [
+      "Document"
+    ],
+    "rows": 475,
+    "ok": true
+  },
+  {
+    "group": "02_문서관리MVP_최신GPT실측",
+    "document": "테스트계획",
+    "format": "docx",
+    "bytes": 200301,
+    "sourceDiagrams": 2,
+    "images": 2,
+    "tables": 20,
+    "ok": true
+  },
+  {
+    "group": "02_문서관리MVP_최신GPT실측",
+    "document": "테스트계획",
+    "format": "pdf",
+    "bytes": 5960349,
+    "sourceDiagrams": 2,
+    "pages": 20,
+    "ok": true
+  },
+  {
+    "group": "02_문서관리MVP_최신GPT실측",
+    "document": "테스트계획",
+    "format": "pptx",
+    "bytes": 1910079,
+    "sourceDiagrams": 2,
+    "images": 2,
+    "slides": 69,
+    "ok": true
+  },
+  {
+    "group": "02_문서관리MVP_최신GPT실측",
+    "document": "테스트계획",
+    "format": "xlsx",
+    "bytes": 192585,
+    "sourceDiagrams": 2,
+    "sheets": [
+      "Document"
+    ],
+    "rows": 342,
+    "ok": true
+  }
+]

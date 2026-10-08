@@ -1,0 +1,46 @@
+<!doctype html><html lang="ko"><body><div id="root"></div><script type="module">
+import React from 'react';
+import { createRoot } from 'react-dom/client';
+import mermaid from 'mermaid';
+import JSZip from 'jszip';
+import { buildDocxBlob, buildPptxBlob, buildDocumentHtml, buildPdfBlob } from '/src/lib/exportFormatters.ts';
+import { prerenderMermaid } from '/src/lib/mermaidExport.ts';
+import { DocumentDiagrams } from '/src/components/DocumentDiagrams.tsx';
+import { MermaidDiagram } from '/src/components/MermaidDiagram.tsx';
+import { extractAllMermaid, mermaidToPng } from '/src/lib/mermaidExport.ts';
+window.React = React;
+const root = createRoot(document.getElementById('root'));
+window.checkDiagrams = async (docs) => {
+ const results = [];
+ for (const [name, content] of Object.entries(docs)) {
+  const blocks = extractAllMermaid(content);
+  for (let i=0;i<blocks.length;i++) {
+   try { await mermaid.parse(blocks[i].code); results.push({name,index:i,parse:true,png:!!await mermaidToPng(blocks[i].code)}); }
+   catch(e) { results.push({name,index:i,parse:false,error:String(e).slice(0,350)}); }
+  }
+ }
+ return results;
+};
+window.checkScreen = async (chart) => {
+ let outcome = null;
+ root.render(React.createElement(MermaidDiagram,{key:chart, chart, onRenderError: e=>outcome={error:e}, onRenderSuccess:()=>outcome={ok:true}}));
+ for(let i=0;i<50&&!outcome;i++) await new Promise(r=>setTimeout(r,100));
+ return {outcome,svg:document.querySelectorAll('#root svg').length,text:document.getElementById('root').innerText};
+};
+window.checkDocument = async (content) => {
+ let outcome=null;
+ root.render(React.createElement(DocumentDiagrams,{content,onError:()=>outcome={error:true},onSuccess:()=>outcome={ok:true}}));
+ for(let i=0;i<150&&!outcome;i++) await new Promise(r=>setTimeout(r,100));
+ const screen={outcome,svg:document.querySelectorAll('#root svg').length};
+ const diagrams=await prerenderMermaid(content);
+ const html=buildDocumentHtml(content,diagrams);
+ const files={};
+ for(const [name,build] of [['docx',buildDocxBlob],['pptx',buildPptxBlob]]) {
+   const blob=await build(content);const zip=await JSZip.loadAsync(await blob.arrayBuffer());
+   files[name]={bytes:blob.size,images:Object.keys(zip.files).filter(path=>/media\/.*\.png$/.test(path)).length};
+ }
+ const pdf=await buildPdfBlob(content);files.pdf={bytes:pdf.size};
+ return {screen,htmlImages:(html.match(/<img /g)||[]).length,files};
+};
+window.ready=true;
+</script></body></html>
