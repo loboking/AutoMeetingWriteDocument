@@ -14,6 +14,7 @@ const LLM_KEYS = [
   'GEMINI_MODEL',
   'OPENAI_MODEL',
   'ZAI_MODEL',
+  'ZAI_FALLBACK_MODEL',
   'ZAI_BASE_URL',
   'GEMINI_BASE_URL',
   'LLM_PROVIDER',
@@ -79,13 +80,28 @@ describe('llm index — 미구현 어댑터 폴백 가드', () => {
     const adapters = await import('./openaiCompatAdapter');
     const spy = vi
       .spyOn(adapters.openaiCompatAdapter, 'complete')
-      .mockResolvedValue({ text: 'ok', provider: 'zai', model: 'glm-5-turbo' });
+      .mockResolvedValue({ text: 'ok', provider: 'zai', model: 'glm-5.3-flash' });
 
     const res = await llmComplete({ prompt: 'hi', maxTokens: 16 });
 
     expect(spy).toHaveBeenCalledTimes(1);
     expect(spy.mock.calls[0][1].id).toBe('zai'); // LLM_PROVIDER가 고른 provider
     expect(res.text).toBe('ok');
+  });
+
+  it('zai 기본 glm-5.3-flash 실패 시 glm-5.3으로 1회 폴백', async () => {
+    process.env.ZAI_API_KEY = 'zk';
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const adapters = await import('./openaiCompatAdapter');
+    const spy = vi
+      .spyOn(adapters.openaiCompatAdapter, 'complete')
+      .mockRejectedValueOnce(new Error('429'))
+      .mockResolvedValueOnce({ text: 'ok', provider: 'zai', model: 'glm-5.3' });
+
+    const res = await llmComplete({ prompt: 'hi', maxTokens: 16 });
+
+    expect(spy.mock.calls.map((c) => c[1].model)).toEqual(['glm-5.3-flash', 'glm-5.3']);
+    expect(res.model).toBe('glm-5.3');
   });
 
   it('LLM_PROVIDER=anthropic면 anthropic 어댑터로 위임', async () => {

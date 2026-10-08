@@ -2,169 +2,106 @@
 // content: string만 받고 컴포넌트 state/props/hook을 읽지 않는 순수함수.
 // handleDownload(state 읽음)는 PrdViewer에 남기고 build* 함수만 import해서 호출.
 
-import * as XLSX from 'xlsx';
+export { buildXlsxBlob } from './xlsxExport';
+import { parseMarkdownToBlocks } from './docgen/astParser';
 import PptxGenJS from 'pptxgenjs';
 import {
   Document as DocxDocument, Packer, Paragraph, TextRun, HeadingLevel,
   Table as DocxTable, TableRow, TableCell, WidthType, ShadingType,
+  Footer, Header, PageNumber, AlignmentType, BorderStyle, ImageRun, VerticalAlign,
 } from 'docx';
 import { prerenderMermaid, lookupDiagram, type PrerenderResult } from './mermaidExport';
 import { groupSemanticSections, dropEmptySections } from './docgen/semanticSection';
 import { planSlides, itemsToLines } from './docgen/pptPlanner';
-import { parseInlineRuns } from './docgen/inlineRuns';
+import { parseInlineRuns, plainInlineText } from './docgen/inlineRuns';
+import { DOCUMENT_TEMPLATE as THEME, DOCUMENT_TEMPLATE_CSS, documentOutline, escapeDocumentHtml, tableColumnWidths, type DocumentExportOptions } from './documentTemplate';
 import type { SlidePlan } from './docgen/types';
 
 // PDF 내보내기(html2pdf)용 스타일. 인쇄(handlePrint)와 동일 톤의 컬러 헤더/표 디자인.
-export const PDF_EXPORT_CSS = `
-  body, div { font-family: 'NanumGothic', 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif; line-height: 1.7; color: #333; }
-  h1 { font-size: 24px; color: #1e3a8a; border-bottom: 3px solid #2563eb; padding-bottom: 6px; margin: 18px 0 12px; }
-  h2 { font-size: 19px; color: #1e40af; border-left: 5px solid #2563eb; padding-left: 10px; margin: 16px 0 10px; }
-  h3 { font-size: 16px; color: #1f2937; margin: 14px 0 8px; }
-  h4, h5, h6 { font-size: 14px; color: #374151; margin: 12px 0 6px; }
-  ul, ol { margin: 8px 0; padding-left: 22px; }
-  li { margin: 3px 0; }
-  p { margin: 6px 0; }
-  table { border-collapse: collapse; width: 100%; margin: 12px 0; }
-  th, td { border: 1px solid #d1d5db; padding: 6px 10px; text-align: left; font-size: 13px; }
-  th, tr:first-child td { background-color: #2563eb; color: #fff; font-weight: 600; }
-  tbody tr:nth-child(even) { background-color: #f9fafb; }
-  code { background: #f3f4f6; padding: 1px 5px; border-radius: 3px; font-size: 0.9em; }
-  pre { background: #1f2937; color: #f9fafb; padding: 12px; border-radius: 6px; overflow-x: auto; }
-  pre code { background: transparent; color: inherit; padding: 0; }
-  blockquote { border-left: 4px solid #6b7280; padding-left: 12px; color: #6b7280; margin: 12px 0; }
-  hr { border: none; border-top: 1px solid #e5e7eb; margin: 18px 0; }
-  .diagram { text-align: center; margin: 16px 0; }
-  .diagram img { max-width: 100%; height: auto; }
-`;
+export const PDF_EXPORT_CSS = DOCUMENT_TEMPLATE_CSS;
 
 // 마크다운 → HTML (인쇄/PDF용). fence·표·리스트를 상태머신으로 묶어 깨짐 방지.
 // diagrams: 사전 래스터화된 mermaid PNG 맵. mermaid 블록은 <img>로, 실패 시 코드로 폴백.
 export function contentToHtml(content: string, diagrams?: PrerenderResult): string {
-  const esc = (s: string) =>
-    s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  // 인라인 마크다운 최소 변환 (이미 esc된 문자열에 적용)
-  const inline = (s: string) =>
-    esc(s)
-      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-      .replace(/`([^`]+?)`/g, '<code>$1</code>');
-
-  const lines = content.split('\n');
-  const out: string[] = [];
-  let inFence = false;
-  let fenceLang = '';
-  let fenceBuf: string[] = [];
-  let inList = false;
-  let tableBuf: string[][] = [];
-
-  const flushList = () => {
-    if (inList) {
-      out.push('</ul>');
-      inList = false;
-    }
-  };
-  const flushTable = () => {
-    if (tableBuf.length === 0) return;
-    const rows = tableBuf
-      .map((cells, ri) => {
-        const tag = ri === 0 ? 'th' : 'td';
-        return `<tr>${cells.map((c) => `<${tag}>${inline(c.trim())}</${tag}>`).join('')}</tr>`;
-      })
-      .join('');
-    out.push(`<table>${rows}</table>`);
-    tableBuf = [];
-  };
-
-  for (const line of lines) {
-    const trimmed = line.trim();
-
-    // 코드펜스 토글
-    if (trimmed.startsWith('```')) {
-      if (!inFence) {
-        inFence = true;
-        fenceLang = trimmed.slice(3).trim().toLowerCase();
-        fenceBuf = [];
-      } else {
-        flushList();
-        flushTable();
-        if (fenceLang === 'mermaid') {
-          const img = diagrams ? lookupDiagram(diagrams, fenceBuf.join('\n')) : null;
-          out.push(
-            img
-              ? `<div class="diagram"><img src="${img.dataUrl}" alt="diagram" /></div>`
-              : `<pre><code>${esc(fenceBuf.join('\n'))}</code></pre>`
-          );
-        } else {
-          out.push(`<pre><code>${esc(fenceBuf.join('\n'))}</code></pre>`);
-        }
-        inFence = false;
-        fenceLang = '';
+  const esc = escapeDocumentHtml;
+  const inline = (text: string) => parseInlineRuns(text).map(run => {
+    let html = esc(run.text).replace(/\n/g, '<br>');
+    if (run.code) html = `<code>${html}</code>`;
+    if (run.bold) html = `<strong>${html}</strong>`;
+    if (run.italic) html = `<em>${html}</em>`;
+    if (run.strike) html = `<del>${html}</del>`;
+    return html;
+  }).join('');
+  return parseMarkdownToBlocks(content).map(block => {
+    switch (block.type) {
+      case 'heading': return `<h${block.level}>${inline(block.text ?? '')}</h${block.level}>`;
+      case 'paragraph': return `<p>${inline(block.text ?? '')}</p>`;
+      case 'quote': return `<blockquote>${inline(block.text ?? '')}</blockquote>`;
+      case 'thematicBreak': return '<hr>';
+      case 'list': {
+        const items = block.items ?? [];
+        let index = 0;
+        const renderList = (level: number): string => {
+          let html = '';
+          while (index < items.length && items[index].level === level) {
+            const ordered = !!items[index].ordered;
+            const tag = ordered ? 'ol' : 'ul';
+            html += ordered ? `<ol start="${items[index].ordinal ?? 1}">` : '<ul>';
+            while (index < items.length && items[index].level === level && !!items[index].ordered === ordered) {
+              const item = items[index++];
+              const task = item.text.match(/^\[([ xX])\]\s+([\s\S]*)$/);
+              const text = task ? `${task[1].toLowerCase() === 'x' ? '☑' : '☐'} ${task[2]}` : item.text;
+              html += task ? `<li style="list-style:none">${inline(text)}` : `<li>${inline(text)}`;
+              if (index < items.length && items[index].level > level) html += renderList(items[index].level);
+              html += '</li>';
+            }
+            html += `</${tag}>`;
+          }
+          return html;
+        };
+        return items.length ? renderList(items[0].level) : '';
       }
-      continue;
-    }
-    if (inFence) {
-      fenceBuf.push(line);
-      continue;
-    }
-
-    // 표 누적
-    if (trimmed.includes('|') && !trimmed.match(/^#/)) {
-      if (trimmed.replace(/[|\s:-]/g, '') === '') continue; // 구분행 제외
-      const cells = trimmed.split('|').filter((_, i, arr) => i > 0 && i < arr.length - 1);
-      if (cells.length > 0) {
-        flushList();
-        tableBuf.push(cells);
-        continue;
+      case 'table': {
+        const rows = block.rows ?? [];
+        const columns = tableColumnWidths(rows).map(width => `<col style="width:${width}%">`).join('');
+        const renderRow = (row: string[], tag: string) => `<tr>${row.map(cell => `<${tag}>${inline(cell)}</${tag}>`).join('')}</tr>`;
+        return `<table><colgroup>${columns}</colgroup><thead>${renderRow(rows[0] ?? [], 'th')}</thead><tbody>${rows.slice(1).map(row => renderRow(row, 'td')).join('')}</tbody></table>`;
       }
-    } else if (tableBuf.length) {
-      flushTable();
-    }
-
-    if (!trimmed) {
-      flushList();
-      continue;
-    }
-
-    // 헤더
-    const headerMatch = trimmed.match(/^(#{1,6})\s+(.+)$/);
-    if (headerMatch) {
-      flushList();
-      const level = headerMatch[1].length;
-      out.push(`<h${level}>${inline(headerMatch[2])}</h${level}>`);
-      continue;
-    }
-
-    // 리스트 (ul 래핑)
-    if (trimmed.match(/^[\-\*+]\s/) || trimmed.match(/^\d+\.\s/)) {
-      if (!inList) {
-        out.push('<ul>');
-        inList = true;
+      case 'mermaid': {
+        const img = diagrams ? lookupDiagram(diagrams, block.code ?? '') : null;
+        if (img) return `<div class="diagram"><img src="${img.dataUrl}" alt="diagram" /></div>`;
+        return `<pre><code>${esc(block.code ?? '')}</code></pre>`;
       }
-      out.push(`<li>${inline(trimmed.replace(/^[\-\*+\d.]+\s/, ''))}</li>`);
-      continue;
+      case 'code': return `<pre><code>${esc(block.code ?? '')}</code></pre>`;
+      default: return '';
     }
-    flushList();
+  }).join('\n');
+}
 
-    // 수평선
-    if (trimmed === '---' || trimmed === '***') {
-      out.push('<hr>');
-      continue;
-    }
-    // 인용문
-    if (trimmed.startsWith('>')) {
-      out.push(`<blockquote>${inline(trimmed.substring(1).trim())}</blockquote>`);
-      continue;
-    }
-    out.push(`<p>${inline(trimmed)}</p>`);
-  }
-  flushList();
-  flushTable();
-  return out.join('\n');
+/** Text downloads retain all words and code, but not markdown delimiters. */
+export function contentToPlainText(content: string): string {
+  return parseMarkdownToBlocks(content).map(block => {
+    if (block.type === 'list') return itemsToLines(block.items).map(plainInlineText).join('\n');
+    if (block.type === 'table') return (block.rows ?? []).map(row => row.map(plainInlineText).join('\t')).join('\n');
+    if (block.type === 'code' || block.type === 'mermaid') return block.code ?? '';
+    if (block.type === 'thematicBreak') return '────────────────';
+    return plainInlineText(block.text ?? '');
+  }).join('\n\n');
+}
+
+/** One template for print, individual PDF, and ZIP PDF exports. */
+export function buildDocumentHtml(content: string, diagrams?: PrerenderResult, options: DocumentExportOptions = {}): string {
+  const outline = documentOutline(content, options);
+  const esc = escapeDocumentHtml;
+  const toc = outline.entries.length > 1
+    ? `<section class="document-toc"><h2>목차</h2>${outline.entries.map(h => `<p style="padding-left:${h.level === 2 ? 12 : 0}pt">${esc(h.text)}</p>`).join('')}</section>` : '';
+  return `<article class="document-export"><section class="document-cover"><h1>${esc(outline.title)}</h1>${outline.projectTitle ? `<p class="document-project">${esc(outline.projectTitle)}</p>` : ''}</section>${toc}<main>${contentToHtml(content, diagrams)}</main></article>`;
 }
 
 // Blob 생성(ZIP 묶기 + 개별 다운로드 공용). saveAs는 호출부에서.
 // SemanticSection(docgen AST) 기반 → docx Table API로 진짜 표, 코드블록 모노스페이스 렌더.
 // 기존 라인 직역은 표를 "a | b" 텍스트 한 줄로 평탄화하고 코드 내용을 평문으로 떨어뜨렸음(치명).
-const DOCX_BRAND = '2563EB';
+const DOCX_BRAND = THEME.accent;
 
 function docxHeadingLevel(level: number): (typeof HeadingLevel)[keyof typeof HeadingLevel] {
   switch (level) {
@@ -179,7 +116,7 @@ function docxHeadingLevel(level: number): (typeof HeadingLevel)[keyof typeof Hea
 }
 
 // 인라인 마커(**/`/*/~~)를 docx TextRun(bold/italic/strike/code 폰트)로 복원.
-function richRuns(text: string): TextRun[] {
+function richRuns(text: string, options: { color?: string; size?: number; bold?: boolean } = {}): TextRun[] {
   return parseInlineRuns(text).map(
     (r) =>
       new TextRun({
@@ -188,6 +125,7 @@ function richRuns(text: string): TextRun[] {
         italics: r.italic,
         strike: r.strike,
         font: r.code ? 'Consolas' : undefined,
+        ...options,
       })
   );
 }
@@ -195,13 +133,18 @@ function richRuns(text: string): TextRun[] {
 // 마크다운 표(rows[][]) → docx Table. 헤더 행 브랜드 강조 + 본문 줄무늬.
 function tableFromRows(rows: string[][]): DocxTable {
   const [header, ...body] = rows;
+  const widths = tableColumnWidths(rows).map(percent => Math.round((THEME.pageWidth - THEME.margin * 2) * percent / 100));
   const headerCells = (header ?? []).map(
-    (c) =>
+    (c, column) =>
       new TableCell({
+        width: { size: widths[column], type: WidthType.DXA },
+        verticalAlign: VerticalAlign.CENTER,
+        margins: { top: 100, bottom: 100, left: 120, right: 120 },
         shading: { fill: DOCX_BRAND, type: ShadingType.CLEAR, color: 'auto' },
         children: [
           new Paragraph({
-            children: [new TextRun({ text: c.trim(), bold: true, color: 'FFFFFF' })],
+            children: richRuns(c.trim(), { bold: true, color: 'FFFFFF', size: 18 }),
+            spacing: { after: 0, line: 280 },
           }),
         ],
       })
@@ -211,19 +154,24 @@ function tableFromRows(rows: string[][]): DocxTable {
     (row, ri) =>
       new TableRow({
         children: row.map(
-          (c) =>
+          (c, column) =>
             new TableCell({
+              width: { size: widths[column], type: WidthType.DXA },
+              verticalAlign: VerticalAlign.CENTER,
+              margins: { top: 100, bottom: 100, left: 120, right: 120 },
               shading: ri % 2
-                ? { fill: 'F3F4F6', type: ShadingType.CLEAR, color: 'auto' }
+                ? { fill: THEME.stripe, type: ShadingType.CLEAR, color: 'auto' }
                 : undefined,
-              children: [new Paragraph({ children: richRuns(c.trim()) })],
+              children: [new Paragraph({ children: richRuns(c.trim(), { size: 18 }), spacing: { after: 0, line: 280 } })],
             })
         ),
       })
   );
   return new DocxTable({
     rows: [headerRow, ...bodyRows],
-    width: { size: 9000, type: WidthType.DXA }, // A4 본문 폭(twips) — PERCENTAGE size:100은 2%로 폭 붕괴
+    columnWidths: widths,
+    borders: Object.fromEntries(['top', 'bottom', 'left', 'right', 'insideHorizontal', 'insideVertical'].map(edge => [edge, { color: THEME.border, style: BorderStyle.SINGLE, size: 4 }])),
+    width: { size: THEME.pageWidth - THEME.margin * 2, type: WidthType.DXA }, // A4 본문 폭(twips) — PERCENTAGE size:100은 2%로 폭 붕괴
   });
 }
 
@@ -238,15 +186,17 @@ function codeParagraphs(code: string, isMermaid: boolean, lang?: string): Paragr
   }
   return lines.map((ln) =>
     new Paragraph({
-      children: [new TextRun({ text: ln || ' ', font: 'Consolas', color: 'F9FAFB' })],
-      shading: { fill: '1F2937', type: ShadingType.CLEAR, color: 'auto' },
+      children: [new TextRun({ text: ln || ' ', font: 'Consolas', color: THEME.ink, size: 18 })],
+      shading: { fill: THEME.stripe, type: ShadingType.CLEAR, color: 'auto' },
       spacing: { after: 0, line: 276 },
     })
   );
 }
 
-export async function buildDocxBlob(content: string): Promise<Blob> {
+export async function buildDocxBlob(content: string, options: DocumentExportOptions = {}): Promise<Blob> {
   const sections = dropEmptySections(groupSemanticSections(content));
+  const outline = documentOutline(content, options);
+  const diagrams = typeof window !== 'undefined' ? await prerenderMermaid(content) : undefined;
   const children: Array<Paragraph | DocxTable> = [];
 
   for (const section of sections) {
@@ -255,6 +205,7 @@ export async function buildDocxBlob(content: string): Promise<Blob> {
         new Paragraph({
           children: richRuns(section.heading.text),
           heading: docxHeadingLevel(section.heading.level),
+          keepNext: true,
           spacing: { before: 240, after: 100 },
         })
       );
@@ -276,7 +227,7 @@ export async function buildDocxBlob(content: string): Promise<Blob> {
         case 'quote':
           children.push(
             new Paragraph({
-              children: [new TextRun({ text: block.text ?? '', italics: true, color: '4B5563' })],
+              children: richRuns(block.text ?? '', { color: '4B5563' }),
               indent: { left: 360 },
               spacing: { after: 100 },
             })
@@ -291,9 +242,16 @@ export async function buildDocxBlob(content: string): Promise<Blob> {
           if (block.rows && block.rows.length > 0) children.push(tableFromRows(block.rows));
           break;
         case 'code':
-        case 'mermaid':
-          children.push(...codeParagraphs(block.code ?? '', block.type === 'mermaid', block.lang));
+        case 'mermaid': {
+          const diagram = block.type === 'mermaid' && diagrams ? lookupDiagram(diagrams, block.code ?? '') : null;
+          if (diagram) {
+            const scale = Math.min(640 / diagram.w, 780 / diagram.h, 1);
+            children.push(new Paragraph({ alignment: AlignmentType.CENTER,
+              children: [new ImageRun({ type: 'png', data: Uint8Array.from(atob(diagram.dataUrl.split(',')[1]), c => c.charCodeAt(0)),
+                transformation: { width: diagram.w * scale, height: diagram.h * scale } })], spacing: { before: 160, after: 160 } }));
+          } else children.push(...codeParagraphs(block.code ?? '', block.type === 'mermaid', block.lang));
           break;
+        }
         case 'thematicBreak':
           children.push(
             new Paragraph({
@@ -314,65 +272,30 @@ export async function buildDocxBlob(content: string): Promise<Blob> {
     children.push(new Paragraph({ text: '(내용 없음)', heading: HeadingLevel.HEADING_1 }));
   }
 
+  const cover = [new Paragraph({ text: outline.title, heading: HeadingLevel.TITLE, spacing: { before: 2700, after: 400 } }),
+    ...(outline.projectTitle ? [new Paragraph({ children: [new TextRun({ text: outline.projectTitle, size: 30, color: THEME.muted })] })] : [])];
+  if (outline.entries.length > 1) {
+    cover.push(new Paragraph({ text: '목차', pageBreakBefore: true, spacing: { after: 300 }, children: undefined }));
+    cover.push(...outline.entries.map(h => new Paragraph({ text: h.text, indent: { left: h.level === 2 ? 240 : 0 }, spacing: { after: 140 } })));
+  }
+  children.unshift(...cover, new Paragraph({ pageBreakBefore: true }));
+  const heading = (size: number) => ({ run: { font: THEME.font, size, color: THEME.heading, bold: true }, paragraph: { keepNext: true, spacing: { before: 320, after: 160 } } });
   const doc = new DocxDocument({
-    sections: [{ properties: {}, children }],
+    title: outline.title,
+    styles: { default: {
+      document: { run: { font: THEME.font, size: 21, color: THEME.ink }, paragraph: { spacing: { after: 140, line: 340 } } },
+      title: heading(64), heading1: heading(44), heading2: heading(32), heading3: heading(25), heading4: heading(22), heading5: heading(22), heading6: heading(22),
+    } },
+    sections: [{ properties: { titlePage: true, page: { size: { width: THEME.pageWidth, height: THEME.pageHeight }, margin: { top: THEME.margin, bottom: THEME.margin, left: THEME.margin, right: THEME.margin } } },
+      headers: { default: new Header({ children: [new Paragraph({ children: [new TextRun({ text: outline.title, color: THEME.heading, size: 18 })] })] }) },
+      footers: { default: new Footer({ children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ children: [PageNumber.CURRENT], size: 18, color: THEME.muted })] })] }) },
+      children }],
   });
   return Packer.toBlob(doc);
 }
 
-export function buildXlsxBlob(content: string): Blob {
-  // 마크다운을 파싱하여 테이블과 텍스트로 변환
-  const lines = content.split('\n');
-  const worksheetData: (string | { v: string; s: { font: { bold: boolean } } })[][] = [];
-
-  lines.forEach(line => {
-    // 헤더 처리 (# ## ###)
-    if (line.startsWith('#')) {
-      const text = line.replace(/^#+\s*/, '');
-      worksheetData.push([{ v: text, s: { font: { bold: true } } }]);
-      worksheetData.push([]); // 빈 줄
-    }
-    // 리스트 처리 (-, *, 1.)
-    else if (line.match(/^[\-\*\+]\s/) || line.match(/^\d+\.\s/)) {
-      worksheetData.push([{ v: line.trim().replace(/^[\-\*\+\d\.]\s/, '• '), s: { font: { bold: false } } }]);
-    }
-    // 테이블 처리 (|)
-    else if (line.includes('|') && !line.match(/^#{1,6}\s/)) {
-      const cells = line.split('|').filter((_, i, arr) => i > 0 && i < arr.length - 1);
-      if (cells.length > 0) {
-        worksheetData.push(cells.map(c => c.trim()));
-      }
-    }
-    // 빈 줄
-    else if (line.trim() === '') {
-      worksheetData.push([]);
-    }
-    // 일반 텍스트
-    else {
-      worksheetData.push([line.trim()]);
-    }
-  });
-
-  const worksheet = XLSX.utils.aoa_to_sheet(worksheetData);
-
-  // 열 너비 자동 조정
-  const colWidths = worksheetData.reduce((max: number[], row) => {
-    row.forEach((cell, i) => {
-      const len = String(cell).length;
-      if (!max[i] || len > max[i]) max[i] = len;
-    });
-    return max;
-  }, []);
-  worksheet['!cols'] = colWidths.map(w => ({ wch: Math.min(Math.max(w, 15), 50) }));
-
-  const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, worksheet, 'Document');
-  const buf = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' }); // ArrayBuffer
-  return new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-}
-
 // PPT 브랜드 색 — Word/docx와 동일 톤 유지.
-const PPTX_BRAND = '2563EB';
+const PPTX_BRAND = THEME.accent;
 const PPTX_INK = '1F2937';
 const PPTX_SUB = '4B5563';
 
@@ -411,17 +334,19 @@ function renderPptxSlide(
     x: 0.5, y: 1.18, w: 3, h: 0.045, fill: { color: PPTX_BRAND },
   });
 
+  const pptRuns = (text: string) => parseInlineRuns(text).map(run => ({ text: run.text, options: { bold: run.bold, italic: run.italic, strike: run.strike, fontFace: run.code ? 'Courier New' : undefined } }));
+
   // 표 슬라이드. colW(열 균등분할) + autoPage(셀 텍스트 길 래핑 시 다음 슬라이드로)로 footer 넘침 방지.
   if (plan.kind === 'table' && plan.table) {
-    const colCount = Math.max(1, plan.table.headers.length);
+    const widths = tableColumnWidths([plan.table.headers, ...plan.table.rows]);
     const rows: PptxGenJS.TableRow[] = [
       plan.table.headers.map((h) => ({
-        text: h,
+        text: pptRuns(h),
         options: { bold: true, color: 'FFFFFF', fill: { color: PPTX_BRAND }, fontSize: 12 },
       })),
       ...plan.table.rows.map((r, ri) =>
         r.map((c) => ({
-          text: c,
+          text: pptRuns(c),
           options: {
             color: PPTX_INK,
             fill: { color: ri % 2 ? 'F3F4F6' : 'FFFFFF' },
@@ -432,7 +357,7 @@ function renderPptxSlide(
     ];
     slide.addTable(rows, {
       x: 0.5, y: 1.5, w: 9,
-      colW: Array(colCount).fill(9 / colCount),
+      colW: widths.map(width => width * 9 / 100),
       autoPage: true, autoPageRepeatHeader: true,
       border: { type: 'solid', pt: 0.5, color: 'E5E7EB' }, valign: 'middle',
     });
@@ -471,6 +396,7 @@ function renderPptxSlide(
             breakLine: i === runs.length - 1,
             bold: r.bold,
             italic: r.italic,
+            strike: r.strike,
             fontSize: 16,
             color: PPTX_SUB,
             fontFace: r.code ? 'Courier New' : undefined,
@@ -515,23 +441,45 @@ export async function buildPptxBlob(content: string): Promise<Blob> {
 
 // PDF Blob 생성 (ZIP용). html2pdf로 HTML을 래스터화 → 시스템 한글 폰트 렌더.
 // 단일 PDF 다운로드는 handlePrint(인쇄 다이얼로그)를 그대로 사용.
-export async function buildPdfBlob(content: string): Promise<Blob> {
+export async function buildPdfBlob(content: string, options: DocumentExportOptions = {}): Promise<Blob> {
   const html2pdf = (await import('html2pdf.js')).default;
   const diagrams = await prerenderMermaid(content); // mermaid 사전 래스터화
   const el = document.createElement('div');
-  el.innerHTML = `<style>${PDF_EXPORT_CSS}</style>` + contentToHtml(content, diagrams);
-  el.style.cssText = 'position:fixed;left:-99999px;top:0;width:794px;'; // A4 px폭, 화면 밖
-  document.body.appendChild(el);
+  el.innerHTML = `<style>${PDF_EXPORT_CSS}</style>` + buildDocumentHtml(content, diagrams, options);
+  // html2pdf does not honor CSS break-after:avoid. Keep each heading with its first block.
+  for (const heading of Array.from(el.querySelectorAll('main h1, main h2, main h3, main h4, main h5, main h6')).reverse()) {
+    const next = heading.nextElementSibling;
+    if (!next) continue;
+    const group = document.createElement('div');
+    group.className = 'document-heading-group';
+    heading.before(group);
+    group.append(heading, next);
+  }
+  el.style.cssText = 'width:642px;';
+  const host = document.createElement('div');
+  host.style.cssText = 'position:fixed;left:-99999px;top:0;';
+  host.appendChild(el);
+  document.body.appendChild(host);
   try {
-    return await html2pdf()
+    await document.fonts.ready;
+    const worker = html2pdf()
       .set({
-        margin: 10,
+        margin: [20, 20, 20, 20],
+        ...{ pagebreak: { mode: ['css', 'legacy'], avoid: ['.document-heading-group', 'p', 'li', 'blockquote', 'pre', 'table', 'tr', '.diagram', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'] } },
         html2canvas: { useCORS: true, scale: 2, backgroundColor: '#ffffff' },
         jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
       })
-      .from(el)
-      .outputPdf('blob');
+      .from(el).toPdf();
+    const pdf = await worker.get('pdf');
+    const pages = pdf.internal.getNumberOfPages();
+    for (let page = 1; page <= pages; page++) {
+      pdf.setPage(page);
+      pdf.setFontSize(9);
+      pdf.setTextColor(101, 115, 134);
+      pdf.text(String(page), 105, 287, { align: 'center' });
+    }
+    return pdf.output('blob');
   } finally {
-    document.body.removeChild(el); // 누수 방지
+    host.remove(); // 화면 밖 컨테이너까지 정리
   }
 }

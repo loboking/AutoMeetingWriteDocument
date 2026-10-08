@@ -7,9 +7,11 @@
 // 검증된 함정 회피:
 // - htmlLabels:false : 라벨을 <foreignObject>(HTML) 대신 SVG <text>로 → canvas 래스터화 시 라벨 보존
 // - useMaxWidth:false : SVG에 고정 px width/height 부여 → canvas 크기 0 방지
-// - Blob URL : 한글 SVG를 btoa()하면 throw → Blob URL로 Image 로드
+// - UTF-8 data URL: 한글을 보존하고 Chromium canvas 오염을 방지
 // - 흰 배경 fillRect : mermaid SVG 배경 투명 → 일부 변환기에서 검게 나오는 것 방지
-import mermaid from 'mermaid';
+import { renderMermaid } from './mermaidRenderer';
+import { extractAllMermaid, decodeMermaid } from './mermaidSource';
+export { extractAllMermaid } from './mermaidSource';
 
 export interface RenderedDiagram {
   dataUrl: string; // image/png
@@ -17,45 +19,11 @@ export interface RenderedDiagram {
   h: number;
 }
 
-let exportInit = false;
-function initForExport() {
-  mermaid.initialize({
-    startOnLoad: false,
-    theme: 'default',
-    securityLevel: 'loose',
-    logLevel: 'fatal',
-    flowchart: { useMaxWidth: false, htmlLabels: false },
-    themeVariables: { fontFamily: 'NanumGothic, Arial, sans-serif' },
-  });
-  exportInit = true;
-}
-
-function decodeEntities(code: string): string {
-  return code
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&amp;/g, '&')
-    .replace(/--&gt;/g, '-->');
-}
-
-// 본문의 모든 ```mermaid 블록 추출 (extractMermaidCode는 첫 1개만 → 여기선 전체).
-export function extractAllMermaid(content: string): { raw: string; code: string }[] {
-  const out: { raw: string; code: string }[] = [];
-  const re = /```mermaid\n([\s\S]+?)```/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(content)) !== null) {
-    out.push({ raw: m[0], code: decodeEntities(m[1].trim()) });
-  }
-  return out;
-}
-
 // mermaid code → PNG dataURL. 실패 시 null(호출부는 코드 텍스트로 폴백).
 export async function mermaidToPng(code: string, scale = 2): Promise<RenderedDiagram | null> {
   if (typeof window === 'undefined') return null;
-  if (!exportInit) initForExport();
   try {
-    const id = `exp-${Date.now()}-${Math.floor(performance.now())}-${code.length}`;
-    const { svg } = await mermaid.render(id, code);
+    const { svg } = await renderMermaid(decodeMermaid(code), 'export');
 
     // 픽셀 크기 산출: width/height 속성 우선, 없으면 viewBox
     let w = 800;
@@ -77,10 +45,10 @@ export async function mermaidToPng(code: string, scale = 2): Promise<RenderedDia
       h = 600;
     }
 
-    // SVG → Image (Blob URL — 한글 안전)
-    const blob = new Blob([svg], { type: 'image/svg+xml;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    try {
+    // SVG → Image (UTF-8 data URL)
+    // SVG Blob URLs can taint canvases in Chromium. UTF-8 data URLs preserve Korean labels.
+    const url = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+    {
       const img = new Image();
       img.width = w;
       img.height = h;
@@ -101,8 +69,6 @@ export async function mermaidToPng(code: string, scale = 2): Promise<RenderedDia
       ctx.drawImage(img, 0, 0, w, h);
 
       return { dataUrl: canvas.toDataURL('image/png'), w, h };
-    } finally {
-      URL.revokeObjectURL(url);
     }
   } catch (e) {
     console.warn('mermaidToPng failed:', e);
@@ -118,7 +84,7 @@ export interface PrerenderResult {
 }
 
 function normalizeCode(code: string): string {
-  return decodeEntities(code)
+  return decodeMermaid(code)
     .split('\n')
     .map((l) => l.trimEnd())
     .filter((l) => l.trim())

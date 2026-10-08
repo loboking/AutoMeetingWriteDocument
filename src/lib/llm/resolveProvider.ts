@@ -7,7 +7,7 @@ import type { ResolvedProvider } from './types';
 //   1. ANTHROPIC_API_KEY → Claude (어댑터는 2차에 연결)
 //   2. GEMINI_API_KEY    → Gemini (OpenAI 호환 모드)
 //   3. OPENAI_API_KEY    → OpenAI gpt-4o  (현행 호환: z.ai보다 위)
-//   4. ZAI_API_KEY       → z.ai GLM       (현재 메인)
+//   4. ZAI_API_KEY       → z.ai GLM-5.3-Flash (현재 메인, 실패 시 GLM-5.3 폴백)
 //
 // ⚠️ 책임분리: 어댑터 "구현 여부(implemented)"는 여기서 안 본다.
 //    이 모듈은 env→provider 결정만 한다. 미구현 어댑터 폴백 가드는 index.ts 책임.
@@ -56,7 +56,9 @@ export function resolveAllProviders(): ResolvedProvider[] {
   if (zai) {
     providers.push({
       id: 'zai',
-      model: process.env.ZAI_MODEL || 'glm-5-turbo',
+      // 코딩 플랜 지원 모델: glm-5.3 / glm-5.3-flash (https://docs.z.ai/devpack/overview)
+      model: process.env.ZAI_MODEL || 'glm-5.3-flash',
+      fallbackModel: process.env.ZAI_FALLBACK_MODEL || 'glm-5.3',
       apiKey: zai,
       baseURL:
         process.env.ZAI_BASE_URL ||

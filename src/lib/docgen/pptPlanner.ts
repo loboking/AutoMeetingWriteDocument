@@ -4,6 +4,7 @@
 // 청킹하고, 누적 예산 초과 시 분할 → 긴 단일 paragraph도 텅빈 과분할 없이 처리.
 // LLM patch(요약/메시지 생성)는 후반. v1은 구조적 분할만.
 import type { ContentBlock, ListItem, SemanticSection, SlidePlan, SourceRange } from './types';
+import { plainInlineText } from './inlineRuns';
 
 // 한국어 PPT 가독 한계. 8.6인치 16pt ≈ 26자/줄.
 // MAX_BULLET_CHARS(200)은 단일 bullet 상한(≈ 7줄) — 초과 시 청킹(400자 14줄 overflow 방지).
@@ -25,6 +26,8 @@ function extendRange(base: SourceRange, other: SourceRange): SourceRange {
 // 불릿/번호/들여쓰기 접두('· '/'1. '/'  ')는 첫 청크에 보존 — 접두가 떨어져 첫 슬라이드가 비는 것 방지.
 function chunkBullet(s: string, max: number): string[] {
   if (s.length <= max) return [s];
+  // Splitting markdown midway leaves unmatched emphasis delimiters on slides.
+  s = plainInlineText(s);
   const prefixMatch = s.match(/^(\s*(?:·|\d+\.)\s+)/);
   const prefix = prefixMatch ? prefixMatch[1] : '';
   const body = prefix ? s.slice(prefix.length) : s;
@@ -71,8 +74,11 @@ export function itemsToLines(items: ListItem[] = []): string[] {
       if (Number(k) > lv) delete counters[Number(k)];
     }
     const indent = '  '.repeat(lv);
-    if (it.ordered) {
-      counters[lv] = (counters[lv] || 0) + 1;
+    const task = it.text.match(/^\[([ xX])\]\s+([\s\S]*)$/);
+    if (task) {
+      lines.push(`${indent}${task[1].toLowerCase() === 'x' ? '☑' : '☐'} ${task[2]}`);
+    } else if (it.ordered) {
+      counters[lv] = it.ordinal ?? (counters[lv] || 0) + 1;
       lines.push(`${indent}${counters[lv]}. ${it.text}`);
     } else {
       counters[lv] = 0;

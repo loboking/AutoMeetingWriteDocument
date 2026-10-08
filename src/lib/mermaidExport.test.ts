@@ -42,3 +42,18 @@ describe('extractAllMermaid', () => {
     expect(blocks[0].raw).toBe('```mermaid\ngraph TD\nA-->B\n```');
   });
 });
+
+describe('모델별 코드펜스 형식', () => {
+  it.each([
+    '```mermaid\r\nflowchart TB\r\n A-->B\r\n```',
+    '``` mermaid\nflowchart BT\n A-->B\n```',
+    '~~~Mermaid\nflowchart LR\n A-->B\n~~~',
+    '````mermaid\nflowchart RL\n A-->B\n````',
+  ])('줄바꿈·공백·대소문자 차이에도 다이어그램을 찾는다', source => {
+    expect(extractAllMermaid(source)).toHaveLength(1);
+    expect(extractAllMermaid(source)[0].code).toContain('A-->B');
+  });
+  it('일반 코드 안의 mermaid 문자열은 다이어그램으로 오인하지 않는다', () => {
+    expect(extractAllMermaid('````text\n```mermaid\nA-->B\n```\n````')).toHaveLength(0);
+  });
+});

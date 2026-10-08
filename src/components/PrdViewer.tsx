@@ -7,9 +7,10 @@ import { saveAs } from 'file-saver';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { sanitizeHtml } from '@/lib/sanitize';
-import { normalizeCheckboxes, extractMermaidCode, docTypeToField, canGenerateDoc, getAllDependents, getDirectParentTitles, getStaleParents, DOCUMENTS, DEPENDENCIES, type DocType } from '@/lib/documentUtils';
+import { normalizeCheckboxes, docTypeToField, canGenerateDoc, getAllDependents, getDirectParentTitles, getStaleParents, DOCUMENTS, DEPENDENCIES, type DocType } from '@/lib/documentUtils';
+import { escapeDocumentHtml, type DocumentExportOptions } from '@/lib/documentTemplate';
 import { prerenderMermaid } from '@/lib/mermaidExport';
-import { contentToHtml, buildDocxBlob, buildXlsxBlob, buildPptxBlob, buildPdfBlob } from '@/lib/exportFormatters';
+import { contentToPlainText, buildDocumentHtml, PDF_EXPORT_CSS, buildDocxBlob, buildXlsxBlob, buildPptxBlob, buildPdfBlob } from '@/lib/exportFormatters';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -28,6 +29,8 @@ import { useBeforeUnload } from '@/hooks/useBeforeUnload';
 import { useMeetingStore } from '@/store/meetingStore';
 import { supabase } from '@/lib/supabase';
 import { authedFetch } from '@/lib/authFetch';
+import { DocumentDiagrams } from '@/components/DocumentDiagrams';
+import { extractAllMermaid } from '@/lib/mermaidSource';
 import { MermaidDiagram } from '@/components/MermaidDiagram';
 import { ScreenDiagram, StoryboardViewer } from '@/components/ScreenDiagram';
 import { MediaLightbox, type LightboxState } from '@/components/MediaLightbox';
@@ -588,14 +591,14 @@ export function PrdViewer() {
     s.replace(/\s+/g, '-').replace(/[/\\:*?"<>|]/g, '_').slice(0, 80);
 
   // 선택 포맷의 Blob 생성(ZIP 묶기 공용). 포맷별 build 헬퍼 재사용.
-  const buildBlobFor = async (format: ExportFormat, content: string): Promise<Blob> => {
+  const buildBlobFor = async (format: ExportFormat, content: string, options: DocumentExportOptions = {}): Promise<Blob> => {
     switch (format) {
       case 'md': return new Blob([content], { type: 'text/markdown' });
-      case 'txt': return new Blob([content], { type: 'text/plain' });
-      case 'docx': return buildDocxBlob(content);
+      case 'txt': return new Blob([contentToPlainText(content)], { type: 'text/plain' });
+      case 'docx': return buildDocxBlob(content, options);
       case 'xlsx': return buildXlsxBlob(content);
       case 'pptx': return buildPptxBlob(content);
-      case 'pdf': return buildPdfBlob(content);
+      case 'pdf': return buildPdfBlob(content, options);
     }
   };
 
@@ -618,7 +621,7 @@ export function PrdViewer() {
         const content = documents[doc.key];
         if (!content) continue;
         try {
-          const blob = await buildBlobFor(format, content);
+          const blob = await buildBlobFor(format, content, { title: doc.title, projectTitle: currentMeeting.title });
           zip.file(`${sanitizeFilename(doc.title)}.${format}`, blob);
         } catch (e) {
           console.error(`${doc.title} ${format} 변환 실패(건너뜀):`, e);
@@ -819,109 +822,18 @@ export function PrdViewer() {
   const handlePrint = async () => {
     if (!currentContent) return;
     // ★ mermaid 다이어그램 사전 래스터화 (인쇄 HTML에 <img>로 임베드)
-    const diagrams = await prerenderMermaid(currentContent);
     const printWindow = window.open('', '_blank');
     if (!printWindow) return;
+    const diagrams = await prerenderMermaid(currentContent);
 
     const docInfo = DOCUMENTS.find(d => d.key === activeDoc);
     const docTitle = docInfo?.title || activeDoc;
     const printTitle = `${docTitle}-${currentMeeting?.title || '문서'}-정리본`;
 
-    const htmlContent = `
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <meta charset="utf-8">
-        <title>${printTitle}</title>
-        <style>
-          @page { margin: 2cm; size: A4; }
-          body {
-            font-family: 'NanumGothic', 'NanumGothicCoding', Arial, sans-serif;
-            line-height: 1.8;
-            color: #333;
-            max-width: 21cm;
-            margin: 0 auto;
-            padding: 20px;
-          }
-          h1, h2, h3, h4, h5, h6 {
-            margin-top: 24px;
-            margin-bottom: 16px;
-            font-weight: 600;
-            line-height: 1.25;
-          }
-          h1 { font-size: 28px; color: #1e3a8a; border-bottom: 3px solid #2563eb; padding-bottom: 8px; }
-          h2 { font-size: 22px; color: #1e40af; border-left: 5px solid #2563eb; padding-left: 12px; }
-          h3 { font-size: 19px; color: #1f2937; }
-          h4 { font-size: 17px; color: #374151; }
-          h5 { font-size: 15px; }
-          h6 { font-size: 14px; }
-          ul, ol { margin: 12px 0; padding-left: 24px; }
-          li { margin: 4px 0; }
-          table {
-            border-collapse: collapse;
-            width: 100%;
-            margin: 16px 0;
-            box-shadow: 0 1px 3px rgba(0,0,0,.08);
-          }
-          th, td {
-            border: 1px solid #d1d5db;
-            padding: 8px 12px;
-            text-align: left;
-            font-size: 0.95em;
-          }
-          th, tr:first-child td {
-            background-color: #2563eb;
-            color: #ffffff;
-            font-weight: 600;
-          }
-          tbody tr:nth-child(even) { background-color: #f9fafb; }
-          .diagram { text-align: center; margin: 20px 0; page-break-inside: avoid; }
-          .diagram img { max-width: 100%; height: auto; }
-          code {
-            background-color: #f3f4f6;
-            padding: 2px 6px;
-            border-radius: 4px;
-            font-family: 'Consolas', 'Monaco', monospace;
-            font-size: 0.9em;
-          }
-          pre {
-            background-color: #1f2937;
-            color: #f9fafb;
-            padding: 16px;
-            border-radius: 8px;
-            overflow-x: auto;
-            margin: 16px 0;
-          }
-          pre code {
-            background-color: transparent;
-            padding: 0;
-            color: inherit;
-          }
-          p { margin: 8px 0; }
-          blockquote {
-            border-left: 4px solid #6b7280;
-            padding-left: 16px;
-            margin: 16px 0;
-            color: #6b7280;
-          }
-          hr {
-            border: none;
-            border-top: 1px solid #e5e7eb;
-            margin: 24px 0;
-          }
-          @media print {
-            body { padding: 0; }
-            h1 { page-break-before: auto; }
-            h1, h2, h3 { page-break-after: avoid; }
-            table, pre, blockquote { page-break-inside: avoid; }
-          }
-        </style>
-      </head>
-      <body>
-        ${contentToHtml(currentContent, diagrams)}
-      </body>
-      </html>
-    `;
+    const htmlContent = `<!doctype html><html lang="ko"><head><meta charset="utf-8">
+      <title>${escapeDocumentHtml(printTitle)}</title><style>${PDF_EXPORT_CSS}</style></head><body>
+      ${buildDocumentHtml(currentContent, diagrams, { title: docTitle, projectTitle: currentMeeting?.title })}
+      </body></html>`;
 
     printWindow.document.write(htmlContent);
     printWindow.document.close();
@@ -967,7 +879,7 @@ export function PrdViewer() {
         void downloadDocx(currentContent, `${baseName}.docx`).catch((e) => console.error('DOCX 실패:', e));
         break;
       case 'xlsx':
-        downloadXlsx(currentContent, `${baseName}.xlsx`);
+        void downloadXlsx(currentContent, `${baseName}.xlsx`).catch((e) => console.error('XLSX 실패:', e));
         break;
       case 'pptx':
         void downloadPptx(currentContent, `${baseName}.pptx`).catch((e) => console.error('PPTX 실패:', e));
@@ -981,15 +893,15 @@ export function PrdViewer() {
   };
 
   const downloadTxt = (content: string, filename: string) => {
-    const blob = new Blob([content], { type: 'text/plain' });
+    const blob = new Blob([contentToPlainText(content)], { type: 'text/plain' });
     saveAs(blob, filename);
   };
 
   // build* 함수는 @/lib/exportFormatters로 이동. saveAs 래퍼들만 PrdViewer에 남김.
   const downloadDocx = async (content: string, filename: string) =>
-    saveAs(await buildDocxBlob(content), filename);
-  const downloadXlsx = (content: string, filename: string) =>
-    saveAs(buildXlsxBlob(content), filename);
+    saveAs(await buildDocxBlob(content, { title: DOCUMENTS.find(d => d.key === activeDoc)?.title, projectTitle: currentMeeting?.title }), filename);
+  const downloadXlsx = async (content: string, filename: string) =>
+    saveAs(await buildXlsxBlob(content), filename);
 
   const downloadPptx = async (content: string, filename: string) =>
     saveAs(await buildPptxBlob(content), filename);
@@ -1995,7 +1907,10 @@ export function PrdViewer() {
                   <CardContent className="py-4 sm:py-6">
                     {activeDoc === 'ia' && (
                       <ZoomBox title="정보 구조도(IA)" onZoom={(el) => openHtmlLightbox('정보 구조도(IA)', el)}>
-                        <ScreenDiagram content={docContent} type="ia" />
+                        {extractAllMermaid(docContent).length > 0
+                          ? <DocumentDiagrams content={docContent} onZoom={openMermaidLightbox}
+                              onError={() => setDiagramBroken(true)} onSuccess={() => setDiagramBroken(false)} />
+                          : <ScreenDiagram content={docContent} type="ia" />}
                       </ZoomBox>
                     )}
                     {activeDoc === 'flowchart' && (
@@ -2006,23 +1921,24 @@ export function PrdViewer() {
                           <p className="text-sm">먼저 문서를 생성해주세요.</p>
                         </div>
                       ) : (
-                        <ZoomBox title="플로우차트" onZoom={() => openMermaidLightbox('플로우차트', extractMermaidCode(docContent))}>
-                          <MermaidDiagram
-                            chart={extractMermaidCode(docContent)}
-                            onRenderError={() => setDiagramBroken(true)}
-                            onRenderSuccess={() => setDiagramBroken(false)}
-                          />
-                        </ZoomBox>
+                        <DocumentDiagrams content={docContent} onZoom={openMermaidLightbox}
+                          onError={() => setDiagramBroken(true)} onSuccess={() => setDiagramBroken(false)} />
                       )
                     )}
                     {activeDoc === 'wireframe' && (
                       <ZoomBox title="화면 구성도" onZoom={(el) => openHtmlLightbox('화면 구성도', el)}>
-                        <ScreenDiagram content={docContent} type="wireframe" />
+                        {extractAllMermaid(docContent).length > 0
+                          ? <DocumentDiagrams content={docContent} onZoom={openMermaidLightbox}
+                              onError={() => setDiagramBroken(true)} onSuccess={() => setDiagramBroken(false)} />
+                          : <ScreenDiagram content={docContent} type="wireframe" />}
                       </ZoomBox>
                     )}
                     {activeDoc === 'storyboard' && (
                       <ZoomBox title="스토리보드" onZoom={(el) => openHtmlLightbox('스토리보드', el)}>
-                        <StoryboardViewer content={docContent} />
+                        {extractAllMermaid(docContent).length > 0
+                          ? <DocumentDiagrams content={docContent} onZoom={openMermaidLightbox}
+                              onError={() => setDiagramBroken(true)} onSuccess={() => setDiagramBroken(false)} />
+                          : <StoryboardViewer content={docContent} />}
                       </ZoomBox>
                     )}
                     {activeDoc === 'test-plan' && (
@@ -2127,7 +2043,7 @@ export function PrdViewer() {
                           code: ({ className, children, node }) => {
                             // mermaid 코드 블록 감지
                             const language = className?.replace('language-', '');
-                            if (language === 'mermaid') {
+                            if (language?.toLowerCase() === 'mermaid') {
                               let codeContent = String(children).replace(/\n$/, '');
                               // HTML 엔티티를 원래 기호로 변환
                               codeContent = codeContent.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').replace(/--&gt;/g, '-->');

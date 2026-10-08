@@ -29,6 +29,8 @@ export default function GenerationGuard() {
   useGenerationRecovery(); // 새로고침/재방문 시 미완성 잡 자동 재개
 
   const isGenerating = useMeetingStore((s) => s.isGenerating);
+  const activeJob = useMeetingStore((s) => s.activeJob);
+  const resumeGeneration = useMeetingStore((s) => s.resumeGeneration);
   const progress = useMeetingStore((s) => s.generationProgress);
   const cancelGeneration = useMeetingStore((s) => s.cancelGeneration);
   const [showCancelDialog, setShowCancelDialog] = useState(false);
@@ -41,6 +43,13 @@ export default function GenerationGuard() {
   );
 
   // 생성 중이거나, 종료됐어도 결과(완료/실패)를 잠깐 보여줄 progress가 있으면 렌더
+  if (!isGenerating && activeJob && (activeJob.status === 'running' || activeJob.status === 'error')) {
+    return <div className="fixed bottom-4 right-4 z-[100] max-w-[90vw] rounded-xl border bg-white p-4 shadow-xl dark:bg-slate-800">
+      <p className="text-sm">미완료 문서가 있습니다. 저장된 부분부터 이어서 생성할 수 있습니다.</p>
+      <button className="mt-3 rounded bg-blue-600 px-3 py-2 text-sm text-white" onClick={() => void resumeGeneration(true)}>이어서 생성</button>
+      <button className="ml-3 text-sm" onClick={cancelGeneration}>작업 종료</button>
+    </div>;
+  }
   if (!progress) return null;
   const isDone = !isGenerating && (progress.status === 'completed' || progress.status === 'error');
   if (!isGenerating && !isDone) return null;
@@ -189,7 +198,7 @@ export default function GenerationGuard() {
             <p className="text-xs text-amber-700 dark:text-amber-300 leading-relaxed">
               ⚠️ 다른 앱으로 나가면 생성이 멈출 수 있어요.
               <span className="font-medium"> 화면을 켜둔 채 기다리면</span> 가장 빠릅니다.
-              나갔다 돌아오면 남은 문서부터 자동으로 이어집니다.
+              완료한 문서와 PRD 섹션은 기기에 저장됩니다. 복귀하면 이어서 생성하며, 반복 실패 시 재개 버튼을 눌러주세요.
             </p>
           </div>
         </div>

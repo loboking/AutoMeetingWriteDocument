@@ -1,6 +1,7 @@
-// 인라인 마크다운 강조(**bold**/*italic*/`code`/~~del~~)를 Run[]로 파싱.
-// astParser.inlineText가 마커를 보존(strong→**..**)한 텍스트를 docx/pptx 렌더가
-// 각각 TextRun / addText options로 소비. 마커 평문화(서식 영구 누락) 회귀 복원.
+import { unified } from 'unified';
+import remarkParse from 'remark-parse';
+import remarkGfm from 'remark-gfm';
+
 export interface Run {
   text: string;
   bold?: boolean;
@@ -8,25 +9,71 @@ export interface Run {
   code?: boolean;
   strike?: boolean;
 }
+const parser = unified().use(remarkParse).use(remarkGfm);
+interface InlineNode {
+  type: string;
+  value?: string;
+  url?: string;
+  alt?: string;
+  children?: InlineNode[];
+  position?: { start: { offset?: number }; end: { offset?: number } };
+}
 
-// 마커를 Run 단위로 분해. astParser가 정확한 페어로 생성한다는 가정(불균형 리터럴은 통째 텍스트).
+/** Nested emphasis, links and escapes use the same grammar as the document. */
 export function parseInlineRuns(input: string): Run[] {
   if (!input) return [];
   const runs: Run[] = [];
-  // 순서: ** (strong) → ` (code) → ~~ (del) → * (em). ** 가 * 보다 먼저 매칭.
-  const re = /(\*\*([^*]+?)\*\*|`([^`]+?)`|~~([^~]+?)~~|\*([^*]+?)\*)/g;
-  let last = 0;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(input)) !== null) {
-    if (m.index > last) runs.push({ text: input.slice(last, m.index) });
-    if (m[2] !== undefined) runs.push({ text: m[2], bold: true });
-    else if (m[3] !== undefined) runs.push({ text: m[3], code: true });
-    else if (m[4] !== undefined) runs.push({ text: m[4], strike: true });
-    else if (m[5] !== undefined) runs.push({ text: m[5], italic: true });
-    last = m.index + m[0].length;
-  }
-  if (last < input.length) runs.push({ text: input.slice(last) });
-  // 빈 run 제거(단, 전체가 빈 입력이면 빈 배열).
-  const filtered = runs.filter((r) => r.text !== '');
-  return filtered.length ? filtered : [{ text: input }];
+  const visit = (node: InlineNode, style: Omit<Run, 'text'> = {}) => {
+    const add = (text: string) => { if (text) runs.push({ text, ...style }); };
+    switch (node.type) {
+      case 'text': {
+        const value = node.value ?? '';
+        const raw = (prefix + input).slice(node.position?.start.offset ?? 0, node.position?.end.offset ?? 0);
+        const pattern = /\\[\s\S]|\*\*([^*\n]+)\*\*/g;
+        const matches = [...raw.matchAll(pattern)].filter(match => match[1] !== undefined);
+        if (matches.length) {
+          const appendRaw = (part: string) => {
+            // A suffix prevents the parser trimming meaningful spaces next to emphasis.
+            const suffix = 'EXPORT_END';
+            const parsed = parseInlineRuns(part + suffix);
+            const last = parsed[parsed.length - 1];
+            if (last?.text.endsWith(suffix)) last.text = last.text.slice(0, -suffix.length);
+            runs.push(...parsed.filter(run => run.text).map(run => ({ ...style, ...run })));
+          };
+          let offset = 0;
+          for (const match of matches) {
+            if (match.index > offset) appendRaw(raw.slice(offset, match.index));
+            runs.push({ text: match[1], ...style, bold: true });
+            offset = match.index + match[0].length;
+          }
+          if (offset < raw.length) appendRaw(raw.slice(offset));
+        } else add(value);
+        return;
+      }
+      case 'inlineCode': runs.push({ text: node.value ?? '', ...style, code: true }); return;
+      case 'break': add('\n'); return;
+      case 'html': add(/^<br\s*\/?\s*>$/i.test(node.value ?? '') ? '\n' : node.value ?? ''); return;
+      case 'strong': style = { ...style, bold: true }; break;
+      case 'emphasis': style = { ...style, italic: true }; break;
+      case 'delete': style = { ...style, strike: true }; break;
+      case 'image': add(`${node.alt || '이미지'}${node.url ? ` (${node.url})` : ''}`); return;
+      case 'link': {
+        const start = runs.length;
+        node.children?.forEach(child => visit(child, style));
+        if (node.url && runs.slice(start).map(run => run.text).join('') !== node.url) add(` (${node.url})`);
+        return;
+      }
+    }
+    node.children?.forEach(child => visit(child, style));
+  };
+  // Prefix prevents leading numbering / # / > from becoming block syntax.
+  const prefix = 'EXPORT_INLINE ';
+  const tree = parser.parse(prefix + input) as unknown as InlineNode;
+  tree.children?.forEach((node, index) => {
+    if (index) runs.push({ text: '\n' });
+    visit(node);
+  });
+  if (runs[0]?.text.startsWith(prefix)) runs[0].text = runs[0].text.slice(prefix.length);
+  return runs.filter(run => run.text !== '');
 }
+export const plainInlineText = (text: string) => parseInlineRuns(text).map(run => run.text).join('');

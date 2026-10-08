@@ -100,13 +100,12 @@ export interface ActiveGenerationJob {
   // 회의록 모드: single(단일회의 자동래핑) / composite(다회의 합성).
   // single은 기존 흐름 유지. composite은 masterSummary + 합성 meetingInfo 사용.
   projectMode?: ProjectMode;
+  // 로컬 체크포인트: 입력이 달라지면 재사용하지 않는다.
+  prdCheckpoint?: { input: string; metadata?: MeetingMetadata; sections: Record<string, string> };
 }
 
-// error로 끝난 잡을 복귀 시 몇 번까지 자동 재개할지. 초과하면 사용자 수동 재생성에 위임.
+// 자동 재개 상한. 초과해도 체크포인트를 보존하고 수동 재개를 제공한다.
 const MAX_RESUME_ATTEMPTS = 3;
-// heartbeat(updatedAt)가 이 시간 이상 끊긴 잡은 죽은 좀비로 보고 폐기(무한 재개 방지).
-// PRD 타임아웃(600s)+재시도 여유 위로. 정상 진행 잡은 문서 완료마다 updatedAt을 갱신하므로 안전.
-const STALE_JOB_MS = 20 * 60 * 1000; // 20분
 // 문서당 보관할 버전 수 상한 (localStorage/jsonb 비대 방지)
 const MAX_DOC_VERSIONS = 30;
 // 회의당 보관할 DocHelper 대화 수 상한
@@ -129,6 +128,15 @@ type GetFn = () => MeetingStore;
 
 // 멀티탭 중복 생성 방지: navigator.locks로 한 탭(projectId별)만 루프 실행.
 // 직렬 정책: 한 projectId당 동시 잡 1개. 이름분리로 서로 다른 프로젝트는 병렬 생성 허용.
+// 복귀 시 정지됐던 타이머 대신 실제 경과 시간으로 요청 만료를 확인한다.
+let generationRun = 0;
+const requestDeadlines = new Map<AbortController, number>();
+export function recoverExpiredGenerationRequests(): void {
+  for (const [controller, deadline] of requestDeadlines) {
+    if (Date.now() >= deadline) controller.abort(new DOMException('timeout', 'TimeoutError'));
+  }
+}
+
 const LOCK_PREFIX = 'meeting-auto-docs:doc-generation';
 function lockNameFor(projectId: string): string {
   return `${LOCK_PREFIX}:${projectId}`;
@@ -186,6 +194,8 @@ async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
     return;
   }
 
+  const run = ++generationRun;
+  const isStopped = () => genAbort.cancelled || run !== generationRun;
   genAbort.cancelled = false;
   genAbort.controllers.clear();
 
@@ -275,7 +285,7 @@ async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
   // 단일 문서 생성 + 저장 + 체크포인트. 성공 true / 실패 false.
   // 같은 레벨은 상호 의존 없으므로 contextDocs는 레벨 시작 시점 generated 스냅샷만 참조.
   const processDoc = async (docType: DocType): Promise<boolean> => {
-    if (genAbort.cancelled || doneSet.has(docType)) return doneSet.has(docType);
+    if (isStopped() || doneSet.has(docType)) return doneSet.has(docType);
 
     const meta = DOCUMENTS.find((d) => d.key === docType);
     // 진행중 문서 표시(병렬이라 마지막 set이 보이지만 '생성 중'은 동일)
@@ -306,6 +316,7 @@ async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
       //   AbortError(reason=TimeoutError)로 떨어뜨려 재시도/실패 경로를 타게 한다.
       //   PRD는 내부 청킹으로 길어 별도 상향. 서버 maxDuration=300s를 살짝 넘겨 잡음.
       const TIMEOUT_MS = docType === 'prd' ? 600_000 : 320_000;
+      requestDeadlines.set(controller, Date.now() + TIMEOUT_MS);
       const to = setTimeout(() => controller.abort(new DOMException('timeout', 'TimeoutError')), TIMEOUT_MS);
       try {
         const res = await authedFetch('/api/generate-doc', {
@@ -334,6 +345,7 @@ async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
       } finally {
         clearTimeout(to);
         genAbort.controllers.delete(controller);
+        requestDeadlines.delete(controller);
       }
     };
 
@@ -344,9 +356,10 @@ async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
       const MAX = 3;
       let err: unknown = null;
       for (let a = 0; a < MAX; a++) {
-        if (genAbort.cancelled) throw new Error('취소됨');
+        if (isStopped()) throw new Error('취소됨');
         const controller = new AbortController();
         genAbort.controllers.add(controller);
+        requestDeadlines.set(controller, Date.now() + timeoutMs);
         const to = setTimeout(() => controller.abort(new DOMException('timeout', 'TimeoutError')), timeoutMs);
         try {
           const res = await authedFetch('/api/generate-doc', {
@@ -363,7 +376,7 @@ async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
           return await res.json() as Record<string, unknown>;
         } catch (e) {
           err = e;
-          if (genAbort.cancelled) throw e;
+          if (isStopped()) throw e;
           if ((e as { status?: number })?.status === 402) throw e; // 한도초과는 재시도 무의미
           if (a < MAX - 1) {
             const is429 = (e as { status?: number })?.status === 429;
@@ -372,16 +385,31 @@ async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
         } finally {
           clearTimeout(to);
           genAbort.controllers.delete(controller);
+        requestDeadlines.delete(controller);
         }
       }
       throw err;
     };
 
     const generatePrdViaSections = async (): Promise<{ content: string; partial?: boolean }> => {
-      let metadata: MeetingMetadata | undefined;
+      const input = JSON.stringify({ summary, transcript, meetingInfo });
+      const saved = get().activeJob?.prdCheckpoint;
+      const checkpoint = saved?.input === input ? saved : { input, sections: {} };
+      const saveCheckpoint = () => {
+        if (isStopped()) return;
+        set((st) => ({ activeJob: st.activeJob?.projectId === projectId
+          ? { ...st.activeJob, prdCheckpoint: { ...checkpoint, sections: { ...checkpoint.sections } }, updatedAt: Date.now() }
+          : st.activeJob }));
+      };
+      saveCheckpoint();
+      let metadata: MeetingMetadata | undefined = checkpoint.metadata;
       try {
-        const prep = await prdSectionFetch({ prdPhase: 'prepare' }, 90_000);
-        metadata = prep.metadata as MeetingMetadata | undefined;
+        if (!metadata) {
+          const prep = await prdSectionFetch({ prdPhase: 'prepare' }, 90_000);
+          metadata = prep.metadata as MeetingMetadata | undefined;
+          checkpoint.metadata = metadata;
+          saveCheckpoint();
+        }
       } catch (e) {
         if ((e as { status?: number })?.status === 402) throw e; // 한도초과는 문서 실패로 전파(사유 limit)
         console.warn('PRD prepare 실패 → 메타데이터 없이 섹션 생성 진행:', e);
@@ -395,22 +423,33 @@ async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
         : {});
       setSub();
 
-      const completedSections: Record<string, string> = {};
+      const completedSections: Record<string, string> = { ...checkpoint.sections };
       const results: ({ id: string; content: string; failed: boolean } | null)[] = [];
       for (const level of getSectionLevels()) {
         const batch = await mapWithConcurrency(level, PRD_SECTION_CONCURRENCY, async (section) => {
-          if (genAbort.cancelled) return { id: section.id, content: '', failed: true };
+          if (isStopped()) return { id: section.id, content: '', failed: true };
           try {
+            if (checkpoint.sections[section.id]) {
+              return { id: section.id, content: checkpoint.sections[section.id], failed: false };
+            }
             const previousSections = getSectionContext(section.id, completedSections);
             const body = await prdSectionFetch({ prdSection: section.id, metadata, previousSections }, 320_000);
             const c = typeof body.content === 'string' ? body.content : '';
-            return { id: section.id, content: c, failed: !c || c.includes('생성 실패') };
+            if (isStopped()) throw new Error('취소됨');
+            const failed = !c || c.includes('생성 실패');
+            if (!failed) {
+              checkpoint.sections[section.id] = c;
+              saveCheckpoint();
+            }
+            return { id: section.id, content: c, failed };
           } catch (e) {
             console.warn(`PRD 섹션 실패(${section.id}):`, e);
             return { id: section.id, content: `## ${section.title}\n\n생성 실패`, failed: true };
           } finally {
-            done++;
-            setSub();
+            if (!isStopped()) {
+              done++;
+              setSub();
+            }
           }
         });
         results.push(...batch);
@@ -419,9 +458,10 @@ async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
         }
       }
 
+      if (isStopped()) throw new Error('취소됨');
       // subProgress 정리(다음 단계로 이월 방지)
       set((st) => st.generationProgress ? { generationProgress: { ...st.generationProgress, subProgress: undefined } } : {});
-      if (genAbort.cancelled) throw new Error('취소됨');
+      if (isStopped()) throw new Error('취소됨');
 
       const map: Record<string, string> = {};
       let okCount = 0;
@@ -430,7 +470,7 @@ async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
         map[r.id] = r.content;
         if (!r.failed && r.content) okCount++;
       }
-      if (okCount === 0) throw new Error('PRD 전 섹션 생성 실패'); // 상위 실패 집계로
+      if (okCount < total) throw new Error('PRD 일부 섹션 미완료 — 저장된 섹션부터 재개 가능');
 
       return { content: assemblePRD(map, meetingInfo), partial: okCount < total };
     };
@@ -450,7 +490,7 @@ async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
     } else {
       const MAX_ATTEMPTS = 3;
       for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-        if (genAbort.cancelled) break;
+        if (isStopped()) break;
         try {
           result = await attemptOnce();
           break;
@@ -458,7 +498,7 @@ async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
           lastErr = e;
           // 사용자 취소(cancel 버튼)만 즉시 중단. 타임아웃 abort(TimeoutError)·네트워크 끊김
           // (TypeError: Load failed) 등은 일시 실패로 보고 재시도로 흘려 복귀 후 자동 복구.
-          if (genAbort.cancelled) { result = null; break; }
+          if (isStopped()) { result = null; break; }
           // 402(사용량 한도 초과)는 재시도해도 안 풀림 → 즉시 실패 처리(사유 'limit'으로 노출).
           if ((e as { status?: number })?.status === 402) break;
           if (attempt < MAX_ATTEMPTS - 1) {
@@ -472,6 +512,7 @@ async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
       }
     }
 
+    if (isStopped()) return false;
     if (result) {
       const { content, partial: isPartial } = result;
       generated[docType] = content;
@@ -520,7 +561,7 @@ async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
       }
       // ★ 체크포인트: 문서 완료마다 갱신(재개 정합). 함수형 set.
       set((st) => ({
-        activeJob: st.activeJob ? { ...st.activeJob, completedDocs: [...doneSet], updatedAt: Date.now() } : null,
+        activeJob: st.activeJob ? { ...st.activeJob, completedDocs: [...doneSet], ...(docType === 'prd' ? { prdCheckpoint: undefined } : {}), updatedAt: Date.now() } : null,
         generationProgress: st.generationProgress
           ? { ...st.generationProgress, completedDocs: [...doneSet] }
           : null,
@@ -562,7 +603,7 @@ async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
     // regen(일괄 재생성)은 job.order(targets)에 속한 문서만의 부분 레벨로 생성.
     const levels = job.mode === 'regen' ? levelsFor(job.order) : topoSortLevels();
     for (const level of levels) {
-      if (genAbort.cancelled) break;
+      if (isStopped()) break;
       // 최초 생성도 대상이 지정되면 해당 문서만 실행한다.
       const pending = level.filter((dt) => order.includes(dt) && !doneSet.has(dt));
       if (pending.length === 0) continue;
@@ -571,7 +612,7 @@ async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
       if (pending.includes('prd')) {
         await processDoc('prd');
         const rest = pending.filter((dt) => dt !== 'prd');
-        if (rest.length > 0 && !genAbort.cancelled) {
+        if (rest.length > 0 && !isStopped()) {
           await mapWithConcurrency(rest, LEVEL_CONCURRENCY, (dt) => processDoc(dt));
         }
       } else {
@@ -586,6 +627,7 @@ async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
       }
     }
 
+    if (isStopped()) return;
     // 완료 판정:
     // - single: 14종 전부 완료(doneSet.size >= order.length) — 종전 불변.
     // - composite: 핵심 3개 완료면 allDone(나머지는 pending으로 사용자 개별 생성에 위임).
@@ -597,7 +639,7 @@ async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
     // - 전부 완료: completed
     // - 실패가 있어 미완료로 끝남: error (★running 유지하면 매 마운트마다 무한 재개되므로 금지)
     // - 그 외(실패 0인데 미완료 — 정상적으론 발생 안 함): completed로 종료
-    const jobStatus: ActiveGenerationJob['status'] = genAbort.cancelled
+    const jobStatus: ActiveGenerationJob['status'] = isStopped()
       ? 'cancelled'
       : allDone
         ? 'completed'
@@ -634,26 +676,28 @@ async function runGenerationLoop(set: SetFn, get: GetFn): Promise<void> {
       }
     }
   } finally {
-    set({ isGenerating: false, generatingMeetingId: null });
-    // 잡 정리 정책:
-    // - completed/cancelled: 즉시 정리(재개 안 함, 좀비 방지).
-    // - error: 보존 → 복귀 시 자동 재개(남은/실패 문서 재시도). 단 resumeAttempts가 상한을
-    //   넘었으면 무한 재개 방지 위해 정리(사용자 수동 재생성에 위임).
-    {
-      const st = get();
-      const job = st.activeJob;
-      if (job && job.status !== 'running') {
-        const keepForResume =
-          job.status === 'error' && (job.resumeAttempts ?? 0) < MAX_RESUME_ATTEMPTS;
-        if (!keepForResume) set({ activeJob: null });
+    if (run === generationRun) {
+      set({ isGenerating: false, generatingMeetingId: null });
+      // 잡 정리 정책:
+      // - completed/cancelled: 즉시 정리(재개 안 함, 좀비 방지).
+      // - error: 보존 → 복귀 시 자동 재개(남은/실패 문서 재시도). 단 resumeAttempts가 상한을
+      //   넘으면 자동 재개만 멈추고 수동 재개를 기다린다.
+      {
+        const st = get();
+        const job = st.activeJob;
+        if (job && job.status !== 'running') {
+          const keepForResume =
+            job.status === 'error';
+          if (!keepForResume) set({ activeJob: null });
+        }
       }
+      // 진행바는 사용자가 완료/실패 결과를 읽을 수 있도록 정리 지연.
+      // 실패가 있으면 더 오래(실패 문서명 확인), 아니면 짧게.
+      const hadFailure = (get().generationProgress?.failedDocs?.length ?? 0) > 0;
+      setTimeout(() => {
+        if (run === generationRun && !get().isGenerating) set({ generationProgress: null });
+      }, hadFailure ? 12000 : 5000);
     }
-    // 진행바는 사용자가 완료/실패 결과를 읽을 수 있도록 정리 지연.
-    // 실패가 있으면 더 오래(실패 문서명 확인), 아니면 짧게.
-    const hadFailure = (get().generationProgress?.failedDocs?.length ?? 0) > 0;
-    setTimeout(() => {
-      if (!get().isGenerating) set({ generationProgress: null });
-    }, hadFailure ? 12000 : 5000);
   }
 }
 
@@ -760,7 +804,7 @@ interface MeetingStore {
   // sourceNoteIds 선택: project가 아직 없을 때(좀비 방지 — 합성 성공 후 createProject) 직접 전달.
   synthesizeNotes: (projectId: string, sourceNoteIds?: string[]) => Promise<MeetingSummary | null>;
   cancelGeneration: () => void;
-  resumeGeneration: () => Promise<void>; // 미완성 잡 재개 (새로고침/재방문)
+  resumeGeneration: (manual?: boolean) => Promise<void>; // 미완성 잡 재개 (새로고침/재방문)
   // 일부 문서만 의존 순서대로 일괄 재생성 (영향배너 '순서대로 모두 갱신').
   // 전체생성과 같은 잡/락/재개 인프라(activeJob, lockNameFor, genAbort) 재사용.
   regenerateDocs: (meetingId: string, targets: DocType[]) => Promise<void>;
@@ -1618,21 +1662,15 @@ export const useMeetingStore = create<MeetingStore>()(
       // 미완성 잡 재개 (새로고침/재방문/화면 복귀).
       // status='running'(정상 진행 중 끊김) 또는 'error'(일부 실패 미완)인 잡을 이어서 생성.
       // ★ 무한 재개 방지: status와 무관하게 "진전 없는 재개"만 카운트한다. running 잡도
-      //   매번 끊기며(모바일 백그라운드/탭 종료 등) completedDocs가 안 늘면 상한에서 폐기.
+      //   매번 끊기며(모바일 백그라운드/탭 종료 등) completedDocs가 안 늘면 상한에서 자동 재개를 멈춘다.
       //   (기존엔 error만 카운트해 running이 영원히 재개되는 무한 프로그레스 버그가 있었음.)
-      resumeGeneration: async () => {
+      resumeGeneration: async (manual = false) => {
         if (get().isGenerating) return;
         const job = get().activeJob;
         if (!job) return;
         if (job.status !== 'running' && job.status !== 'error') return;
-        // 상한 초과 또는 heartbeat 끊긴 stale 잡 → 폐기(사용자 수동 재생성에 위임).
-        if (
-          (job.resumeAttempts ?? 0) >= MAX_RESUME_ATTEMPTS ||
-          (!!job.updatedAt && Date.now() - job.updatedAt > STALE_JOB_MS)
-        ) {
-          set({ activeJob: null });
-          return;
-        }
+        // 자동 재시도만 제한하고 체크포인트는 수동 재개를 위해 보존한다.
+        if (!manual && (job.resumeAttempts ?? 0) >= MAX_RESUME_ATTEMPTS) return;
         // ★ job.projectId로 Project를 찾는다(getProject가 single은 Meeting 자동 래핑).
         //   composite는 projects 배열에서, single은 meetings에서.
         const projectMode = job.projectMode ?? 'single'; // 구 persist 잡은 single로 간주
@@ -1659,9 +1697,9 @@ export const useMeetingStore = create<MeetingStore>()(
           return;
         }
         // 진전 판정: 직전 재개 시점보다 완료 수가 늘었으면 정상 진행 → 카운터 리셋.
-        // 늘지 않았으면(같은 지점에서 또 끊김) 무진전 재개 → 카운터++ (상한서 폐기).
+        // 늘지 않았으면(같은 지점에서 또 끊김) 무진전 재개 → 카운터++ (상한에서 자동 재개 중지).
         const madeProgress = completed.length > (job.lastResumeCompletedCount ?? -1);
-        const resumeAttempts = madeProgress ? 0 : (job.resumeAttempts ?? 0) + 1;
+        const resumeAttempts = manual || madeProgress ? 0 : (job.resumeAttempts ?? 0) + 1;
         set({
           activeJob: {
             ...job,
@@ -1680,6 +1718,7 @@ export const useMeetingStore = create<MeetingStore>()(
         // ★ isGenerating 여부와 무관하게 종료. 재방문 시 isGenerating=false인데도 activeJob이
         //   살아있어 다음 재개(visibilitychange)에 부활하던 문제(종료 눌러도 안 멈춤)를 막는다.
         //   잡·프로그레스를 즉시 완전 폐기해 부활 트리거를 제거한다.
+        generationRun++;
         genAbort.cancelled = true;
         // 병렬 in-flight 전부 취소
         genAbort.controllers.forEach((c) => c.abort());
@@ -1719,19 +1758,9 @@ export const useMeetingStore = create<MeetingStore>()(
           state.isGenerating = false;
           state.generationProgress = null;
           state.generatingMeetingId = null;
-          // running/error: resumeAttempts 상한 내면 재개 보존, 초과면 정리.
-          // cancelled/completed: 정리. (running도 무진전 상한 초과 시 폐기 → 무한 재개 차단.)
-          // + stale 가드: heartbeat(updatedAt)가 STALE_JOB_MS 이상 끊긴 잡은 죽은 좀비로 폐기.
-          //   구버전에서 무제한 재개로 박제된 running 잡을 배포 후 재방문 1회에 즉시 정리.
+          // 장시간 이탈·자동 재시도 상한 도달에도 미완료 체크포인트를 보존한다.
           const job = state.activeJob;
-          if (job) {
-            const isStale = !!job.updatedAt && Date.now() - job.updatedAt > STALE_JOB_MS;
-            const keep =
-              !isStale &&
-              (job.status === 'running' || job.status === 'error') &&
-              (job.resumeAttempts ?? 0) < MAX_RESUME_ATTEMPTS;
-            if (!keep) state.activeJob = null;
-          }
+          if (job && job.status !== 'running' && job.status !== 'error') state.activeJob = null;
           // 죽은 'regenerating' 좀비 정리: 일괄갱신 중 탭 강제종료/크래시로 docStatuses에
           // 'regenerating'이 박제될 수 있다. 새로고침 시 'outdated'로만 강등(아직 안 끝난 갱신
           // = 여전히 오래됨). latest/outdated/frozen은 불변. 재개 잡이 다시 regenerating으로 올림.

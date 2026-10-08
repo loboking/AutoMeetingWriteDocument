@@ -63,25 +63,25 @@ describe('contentToHtml', () => {
   });
 });
 
-describe('buildXlsxBlob', () => {
-  it('Blob을 반환한다', () => {
-    const blob = buildXlsxBlob('# 제목\n\n- 항목1\n- 항목2');
+describe('buildXlsxBlob', async () => {
+  it('Blob을 반환한다', async () => {
+    const blob = await buildXlsxBlob('# 제목\n\n- 항목1\n- 항목2');
     expect(blob).toBeInstanceOf(Blob);
   });
 
-  it('size > 0이다', () => {
-    const blob = buildXlsxBlob('# 제목\n내용');
+  it('size > 0이다', async () => {
+    const blob = await buildXlsxBlob('# 제목\n내용');
     expect(blob.size).toBeGreaterThan(0);
   });
 
-  it('XLSX MIME 타입이다', () => {
-    const blob = buildXlsxBlob('내용');
+  it('XLSX MIME 타입이다', async () => {
+    const blob = await buildXlsxBlob('내용');
     expect(blob.type).toBe('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   });
 
-  it('테이블 마크다운도 처리한다', () => {
+  it('테이블 마크다운도 처리한다', async () => {
     const md = '| 이름 | 값 |\n|------|----|\n| A | 1 |';
-    const blob = buildXlsxBlob(md);
+    const blob = await buildXlsxBlob(md);
     expect(blob.size).toBeGreaterThan(0);
   });
 });

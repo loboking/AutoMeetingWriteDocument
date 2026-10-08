@@ -39,18 +39,18 @@ describe('resolveProvider', () => {
     expect(() => resolveProvider()).toThrow(/API 키가 없습니다/);
   });
 
-  it('ZAI만 있으면 zai/glm-5-turbo (현행 메인)', () => {
+  it('ZAI만 있으면 zai/glm-5.3-flash (현행 메인)', () => {
     process.env.ZAI_API_KEY = 'zk';
-    process.env.ZAI_MODEL = 'glm-5-turbo';
+    process.env.ZAI_MODEL = 'glm-5.3-flash';
     const r = resolveProvider();
     expect(r.id).toBe('zai');
-    expect(r.model).toBe('glm-5-turbo');
+    expect(r.model).toBe('glm-5.3-flash');
     expect(r.baseURL).toContain('coding/paas/v4');
   });
 
-  it('ZAI_MODEL 미설정 시 zai 기본값 glm-5-turbo', () => {
+  it('ZAI_MODEL 미설정 시 zai 기본값 glm-5.3-flash', () => {
     process.env.ZAI_API_KEY = 'zk';
-    expect(resolveProvider().model).toBe('glm-5-turbo');
+    expect(resolveProvider().model).toBe('glm-5.3-flash');
   });
 
   it('OPENAI+ZAI면 OpenAI 우선 (현행 호환 — 회귀 방지)', () => {

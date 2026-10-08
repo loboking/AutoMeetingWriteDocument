@@ -44,11 +44,20 @@ export async function llmComplete(req: LLMRequest): Promise<LLMResult> {
   const ctx = resolveImplementedProvider();
   const adapter = ADAPTERS[ctx.id];
   const startedAt = Date.now();
-  const result = await adapter.complete(req, ctx);
+  let result: LLMResult;
+  try {
+    result = await adapter.complete(req, ctx);
+  } catch (err) {
+    // 같은 provider 폴백 모델(zai: glm-5.3-flash → glm-5.3). timeout은 라우트 시간 예산 초과라 재시도 안 함.
+    const fallback = ctx.fallbackModel;
+    if (!fallback || fallback === ctx.model || (err as Error)?.name === 'APIConnectionTimeoutError') throw err;
+    console.warn(`[llm] '${ctx.model}' 실패 → '${fallback}' 폴백:`, (err as Error)?.message);
+    result = await adapter.complete(req, { ...ctx, model: fallback });
+  }
   if (process.env.LLM_MEASUREMENT_LOGGING === 'true') {
     console.log('[llm-measurement]', JSON.stringify({
       provider: ctx.id, requestedModel: ctx.model, reportedModel: result.model,
-      reasoningEffort: ctx.id === 'openai' && /^gpt-5/.test(ctx.model)
+      reasoningEffort: ctx.id === 'openai' && /^(gpt-5|gpt-6|o\d)/.test(ctx.model)
         ? process.env.OPENAI_REASONING_EFFORT || 'low' : null,
       elapsedMs: Date.now() - startedAt, usage: result.usage ?? null,
     }));

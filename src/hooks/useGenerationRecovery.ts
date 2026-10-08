@@ -7,7 +7,7 @@
 // resumeGeneration은 내부에 isGenerating 가드 + status==='running' 체크 +
 // navigator.locks(ifAvailable)가 있어 중복/좀비 없이 안전하게 반복 호출 가능.
 import { useEffect, useRef } from 'react';
-import { useMeetingStore } from '@/store/meetingStore';
+import { recoverExpiredGenerationRequests, useMeetingStore } from '@/store/meetingStore';
 
 export function useGenerationRecovery() {
   const resumeGeneration = useMeetingStore((s) => s.resumeGeneration);
@@ -19,6 +19,7 @@ export function useGenerationRecovery() {
     // 모바일은 알림/키보드/시스템 다이얼로그로 visibilitychange가 연속 발화할 수 있어
     // 1.5초 디바운스로 중복 호출/미세 race를 차단.
     const tryResume = () => {
+      recoverExpiredGenerationRequests();
       const now = Date.now();
       if (now - lastRun.current < 1500) return;
       const { activeJob, isGenerating } = useMeetingStore.getState();

@@ -88,14 +88,14 @@ describe('resumeGeneration — 무한재개 방지 회귀', () => {
   });
 
   // ── 1. resumeAttempts 상한 ────────────────────────────────────────
-  it('resumeAttempts=3(=MAX_RESUME_ATTEMPTS)이면 즉시폐기(루프 미진입)한다', async () => {
+  it('자동 재시도 상한에서는 작업을 보존하고 호출하지 않는다', async () => {
     // 즉시폐기 → 루프 미진입 → fetch 없음 → fake timer 불필요
     const job = mkJob({ resumeAttempts: 3, status: 'error' });
     useMeetingStore.setState({ meetings: [mkMeeting('m1')], activeJob: job });
 
     await useMeetingStore.getState().resumeGeneration();
 
-    expect(useMeetingStore.getState().activeJob).toBeNull();
+    expect(useMeetingStore.getState().activeJob).toEqual(job);
     expect(useMeetingStore.getState().isGenerating).toBe(false);
   });
 
@@ -119,7 +119,7 @@ describe('resumeGeneration — 무한재개 방지 회귀', () => {
   });
 
   // ── 2. stale 가드 ────────────────────────────────────────────────
-  it('heartbeat가 20분 이상 끊긴 stale 잡은 즉시폐기(루프 미진입)한다', async () => {
+  it('20분 이상 이탈해도 미완료 작업은 재개한다', async () => {
     const STALE_JOB_MS = 20 * 60 * 1000;
     const job = mkJob({
       status: 'running',
@@ -128,10 +128,10 @@ describe('resumeGeneration — 무한재개 방지 회귀', () => {
     });
     useMeetingStore.setState({ meetings: [mkMeeting('m1')], activeJob: job });
 
-    await useMeetingStore.getState().resumeGeneration();
+    await resumeWithFakeTimers();
 
     // stale → 즉시폐기 (루프 미진입)
-    expect(useMeetingStore.getState().activeJob).toBeNull();
+    expect(useMeetingStore.getState().activeJob).not.toBeNull();
     expect(useMeetingStore.getState().isGenerating).toBe(false);
   });
 

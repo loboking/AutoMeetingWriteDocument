@@ -34,35 +34,46 @@ interface InlineNode {
   children?: InlineNode[];
   url?: string;
   alt?: string;
+  position?: Pos;
 }
-function inlineText(node: unknown): string {
+function inlineText(node: unknown, source = ''): string {
   if (!node || typeof node !== 'object') return '';
   const n = node as InlineNode;
   switch (n.type) {
-    case 'text':
-      return typeof n.value === 'string' ? n.value : '';
+    case 'text': {
+      if (n.position?.start.offset != null && n.position?.end.offset != null) {
+        return source.slice(n.position.start.offset, n.position.end.offset);
+      }
+      return n.value ?? '';
+    }
     case 'break':
       return '\n'; // 하드 브레이크(줄 끝 2스페이스) — 멀티라인 보존
+    case 'html':
+      return /^<br\s*\/?\s*>$/i.test(n.value ?? '') ? '\n' : n.value ?? '';
     case 'strong':
-      return '**' + (n.children || []).map(inlineText).join('') + '**';
+      return '**' + (n.children || []).map(child => inlineText(child, source)).join('') + '**';
     case 'emphasis':
-      return '*' + (n.children || []).map(inlineText).join('') + '*';
+      return '*' + (n.children || []).map(child => inlineText(child, source)).join('') + '*';
     case 'delete':
-      return '~~' + (n.children || []).map(inlineText).join('') + '~~';
-    case 'inlineCode':
-      return '`' + (typeof n.value === 'string' ? n.value : '') + '`';
+      return '~~' + (n.children || []).map(child => inlineText(child, source)).join('') + '~~';
+    case 'inlineCode': {
+      const value = n.value ?? '';
+      const fence = '`'.repeat(Math.max(0, ...(value.match(/`+/g) ?? []).map(s => s.length)) + 1);
+      const pad = /^`|`$/.test(value) || (/^ .+ $/.test(value) && value.trim()) ? ' ' : '';
+      return `${fence}${pad}${value}${pad}${fence}`;
+    }
     case 'image': {
       const alt = n.alt ?? '';
       const url = n.url ?? '';
-      return url ? `![${alt}](${url})` : alt; // 이미지 — 최소 alt/url 보존(silent loss 방지)
+      return url ? `![${alt}](${url})` : alt;
     }
     case 'link': {
-      const inner = (n.children || []).map(inlineText).join('');
+      const inner = (n.children || []).map(child => inlineText(child, source)).join('');
       const url = n.url ?? '';
       return url && url !== inner ? `${inner} (${url})` : inner; // href 보존(외부 참조 소거 방지)
     }
     default:
-      if (Array.isArray(n.children)) return n.children.map(inlineText).join('');
+      if (Array.isArray(n.children)) return n.children.map(child => inlineText(child, source)).join('');
       return '';
   }
 }
@@ -74,9 +85,9 @@ const EMPTY_RANGE: SourceRange = {
 // 중첩 리스트를 평탄 배열로. listItem.children = [paragraph, list?] 구조에서
 // paragraph는 항목 텍스트, 자식 list는 level+1 재귀. loose list(항목 본문 여러 단락)는
 // 공백으로 결합(단락이 \n 없이 붙는 시각 손상 방지).
-function flattenListItems(list: List, level: number): ListItem[] {
+function flattenListItems(list: List, level: number, source: string): ListItem[] {
   const out: ListItem[] = [];
-  for (const li of list.children) {
+  for (const [index, li] of list.children.entries()) {
     // GFM task list 체크박스 상태([ ]/[x]) 보존 — 손실 시 완료 여부 사라짐.
     const checkbox = typeof li.checked === 'boolean' ? (li.checked ? '[x] ' : '[ ] ') : '';
     const parts: string[] = [];
@@ -84,13 +95,13 @@ function flattenListItems(list: List, level: number): ListItem[] {
     for (const child of li.children) {
       if (child.type === 'list') childList = child;
       else {
-        const t = inlineText(child);
+        const t = inlineText(child, source);
         if (t) parts.push(t);
       }
     }
     const text = parts.join(' ').trim();
-    if (text) out.push({ text: checkbox + text, level, ordered: !!list.ordered });
-    if (childList) out.push(...flattenListItems(childList, level + 1));
+    if (text) out.push({ text: checkbox + text, level, ordered: !!list.ordered, ...(list.ordered ? { ordinal: (list.start ?? 1) + index } : {}) });
+    if (childList) out.push(...flattenListItems(childList, level + 1, source));
   }
   return out;
 }
@@ -115,35 +126,35 @@ export function parseMarkdownToBlocks(md: string): ContentBlock[] {
 
     switch (node.type) {
       case 'heading':
-        blocks.push({ type: 'heading', level: node.depth, text: inlineText(node), range });
+        blocks.push({ type: 'heading', level: node.depth, text: inlineText(node, md), range });
         break;
       case 'paragraph':
-        blocks.push({ type: 'paragraph', text: inlineText(node), range });
+        blocks.push({ type: 'paragraph', text: inlineText(node, md), range });
         break;
       case 'list':
         blocks.push({
           type: 'list',
           ordered: !!node.ordered,
-          items: flattenListItems(node, 0),
+          items: flattenListItems(node, 0, md),
           range,
         });
         break;
       case 'table': {
         const rawRows = node.children.map((row) =>
-          row.children.map((cell) => inlineText(cell))
+          row.children.map((cell) => inlineText(cell, md))
         );
         blocks.push({ type: 'table', rows: normalizeTableRows(rawRows), range });
         break;
       }
       case 'code':
-        if (node.lang === 'mermaid') {
+        if (node.lang?.toLowerCase() === 'mermaid') {
           blocks.push({ type: 'mermaid', code: node.value, range });
         } else {
           blocks.push({ type: 'code', lang: node.lang || '', code: node.value, range });
         }
         break;
       case 'blockquote': {
-        const text = node.children.map((c) => inlineText(c)).join(' ').trim();
+        const text = node.children.map((c) => inlineText(c, md)).join(' ').trim();
         blocks.push({ type: 'quote', text, range });
         break;
       }

@@ -53,6 +53,18 @@ export interface RetryOptions {
 }
 
 // transient 오류(429/5xx/timeout/abort)에 한해 지수 backoff로 재시도. 그 외 오류는 즉시 throw.
+// 429 응답에서 서버 권장 대기(ms). 헤더(retry-after-ms / retry-after) → 메시지("try again in 7.887s") 순. 없으면 null. 상한 60s.
+export function retryAfterMs(err: unknown): number | null {
+  const e = err as { headers?: { get?: (k: string) => string | null } | Record<string, string>; message?: string };
+  const h = e?.headers;
+  const get = (k: string) => (typeof (h as { get?: unknown })?.get === 'function' ? (h as { get: (k: string) => string | null }).get(k) : (h as Record<string, string> | undefined)?.[k]) ?? null;
+  const ms = parseFloat(get('retry-after-ms') ?? '');
+  const sec = parseFloat(get('retry-after') ?? '');
+  const m = typeof e?.message === 'string' ? e.message.match(/try again in ([\d.]+)s/i) : null;
+  const raw = !Number.isNaN(ms) ? ms : !Number.isNaN(sec) ? sec * 1000 : m ? parseFloat(m[1]) * 1000 : null;
+  return raw === null ? null : Math.min(raw + 500, 60_000);
+}
+
 export async function withRetry<T>(
   fn: () => Promise<T>,
   { retries = 3, baseDelayMs = 1000 }: RetryOptions = {}
@@ -66,8 +78,10 @@ export async function withRetry<T>(
       if (!isTransientError(err) || attempt === retries) {
         throw err;
       }
-      // 지수 backoff: baseDelay * 2^attempt
-      await sleep(baseDelayMs * Math.pow(2, attempt));
+      // 429는 서버가 알려준 대기시간(retry-after / "try again in 7.9s")을 따른다 — 지수 backoff(2s·4s)로는
+      // OpenAI TPM 한도 회복(보통 5~20s) 전에 재시도해 그대로 실패했음(2026-10 gpt-6-luna 실측: PRD 9섹션 연쇄 실패).
+      const hinted = isRateLimitError(err) ? retryAfterMs(err) : null;
+      await sleep(hinted ?? baseDelayMs * Math.pow(2, attempt));
     }
   }
   throw lastErr;

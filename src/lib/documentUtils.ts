@@ -1,3 +1,4 @@
+import { extractAllMermaid, decodeMermaid } from './mermaidSource';
 // 문서 관련 유틸리티와 상수
 
 // DocType은 types/index.ts가 단일 출처(canonical). 여기서는 re-export해 호환 유지.
@@ -190,15 +191,10 @@ export const DOCUMENT_TREE: TreeNode[] = [
 // 유틸리티 함수
 
 export function extractMermaidCode(content: string): string {
-  const codeBlockMatch = content.match(/```mermaid\n([\s\S]+?)```/);
-  if (codeBlockMatch) {
-    let code = codeBlockMatch[1].trim();
-    // HTML 엔티티를 원래 기호로 변환
-    code = code.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').replace(/--&gt;/g, '-->');
-    return code;
-  }
+  const first = extractAllMermaid(content)[0];
+  if (first) return first.code;
 
-  const trimmedContent = content.trim();
+  const trimmedContent = decodeMermaid(content.trim());
   const hasMermaidKeyword = /\b(flowchart|graph|sequenceDiagram|classDiagram|stateDiagram|erDiagram|gantt|pie|mindmap)\b/i.test(trimmedContent);
 
   if (hasMermaidKeyword) {

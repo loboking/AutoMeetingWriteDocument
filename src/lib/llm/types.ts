@@ -33,6 +33,7 @@ export interface ResolvedProvider {
   model: string;
   apiKey: string;
   baseURL?: string; // OpenAI호환 전용. anthropic은 undefined.
+  fallbackModel?: string; // 같은 provider 내 폴백 모델(zai 전용). 1차 실패 시 1회 재시도.
 }
 
 export interface LLMAdapter {

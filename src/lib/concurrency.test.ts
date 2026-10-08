@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { mapWithConcurrency, withRetry, isRateLimitError, isTransientError } from './concurrency';
+import { retryAfterMs, mapWithConcurrency, withRetry, isRateLimitError, isTransientError } from './concurrency';
 
 describe('mapWithConcurrency', () => {
   it('모든 항목을 입력 순서대로 처리하여 결과를 반환한다', async () => {
@@ -138,5 +138,18 @@ describe('withRetry', () => {
     await expect(withRetry(fn, { retries: 2, baseDelayMs: 1 })).rejects.toMatchObject({ status: 429 });
     // 최초 1회 + 재시도 2회 = 3회
     expect(fn).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe('retryAfterMs', () => {
+  it('OpenAI 429 메시지의 "try again in Ns"를 ms(+0.5s)로 읽는다', () => {
+    expect(retryAfterMs({ status: 429, message: 'Rate limit reached ... Please try again in 7.887s. Visit' })).toBe(8387);
+  });
+  it('retry-after 헤더가 있으면 우선하고 60s를 넘지 않는다', () => {
+    expect(retryAfterMs({ headers: { get: (k: string) => (k === 'retry-after' ? '3' : null) }, message: 'x' })).toBe(3500);
+    expect(retryAfterMs({ headers: { 'retry-after-ms': '999999' }, message: 'x' })).toBe(60000);
+  });
+  it('힌트가 없으면 null', () => {
+    expect(retryAfterMs({ status: 429, message: 'rate limit' })).toBeNull();
   });
 });

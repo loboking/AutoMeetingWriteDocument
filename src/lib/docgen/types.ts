@@ -35,6 +35,7 @@ export interface ContentBlock {
 // 리스트 항목 — 중첩 리스트를 평탄 배열로(level로 들여쓰기 단위 표현).
 // 회의록 액션아이템 하위 태스크·의사결정 근거-후속 등 계층이 흔해 level 보존이 필수.
 export interface ListItem {
+  ordinal?: number;
   text: string;
   level: number;             // 0 = 최상위, 1 = 1단계 중첩, ...
   ordered?: boolean;         // 이 항목이 속한 (자식) list가 ordered면 true → 번호 매김
