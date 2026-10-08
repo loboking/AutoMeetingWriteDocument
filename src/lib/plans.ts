@@ -12,8 +12,8 @@ export interface Plan {
 
 export const PLANS: Record<PlanId, Plan> = {
   free: { id: 'free', name: 'Free', priceKRW: 0, monthlyMeetings: 1, seats: 1 },
-  pro: { id: 'pro', name: 'Pro', priceKRW: 9900, monthlyMeetings: 10, seats: 1 },
-  team: { id: 'team', name: 'Team', priceKRW: 49900, monthlyMeetings: 55, seats: 5 },
+  pro: { id: 'pro', name: 'Pro', priceKRW: 9900, monthlyMeetings: 6, seats: 1 },
+  team: { id: 'team', name: 'Team', priceKRW: 49900, monthlyMeetings: 30, seats: 5 },
 };
 
 // 결제 가능한(유료) 플랜만. UI 구독 버튼/금액 검증에 사용.
