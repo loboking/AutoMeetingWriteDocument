@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import PortOne from '@portone/browser-sdk/v2';
 import { PLANS, PAID_PLAN_IDS, type PlanId } from '@/lib/plans';
 import { authedFetch } from '@/lib/authFetch';
 import { Button } from '@/components/ui/button';
@@ -15,13 +14,30 @@ interface Status {
   cancelAtPeriodEnd?: boolean;
 }
 
-const STORE_ID = process.env.NEXT_PUBLIC_PORTONE_STORE_ID;
-const CHANNEL_KEY = process.env.NEXT_PUBLIC_PORTONE_CHANNEL_KEY;
+// Paddle.js를 필요할 때 한 번만 로드(결제 버튼 클릭 시).
+/* eslint-disable @typescript-eslint/no-explicit-any */
+// Paddle.Initialize는 페이지당 1회만 허용(두 번 호출하면 throw). 콜백은 컴포넌트가 바꿔 끼운다.
+let paddleReady = false;
+let onPaddleEvent: (name: string) => void = () => {};
+
+function loadPaddle(): Promise<any> {
+  const w = window as any;
+  if (w.Paddle) return Promise.resolve(w.Paddle);
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = 'https://cdn.paddle.com/paddle/v2/paddle.js';
+    s.onload = () => resolve(w.Paddle);
+    s.onerror = () => reject(new Error('결제 모듈을 불러오지 못했습니다.'));
+    document.head.appendChild(s);
+  });
+}
 
 export default function PricingPlans() {
   const [status, setStatus] = useState<Status | null>(null);
   const [busy, setBusy] = useState<PlanId | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // 결제창 완료 후 웹훅 반영을 기다리는 중(이중 결제 방지 안내).
+  const [confirming, setConfirming] = useState<'waiting' | 'slow' | null>(null);
 
   const loadStatus = async () => {
     try {
@@ -35,36 +51,51 @@ export default function PricingPlans() {
     loadStatus();
   }, []);
 
-  const subscribe = async (plan: PlanId) => {
-    setError(null);
-    if (!STORE_ID || !CHANNEL_KEY) {
-      setError('결제가 아직 설정되지 않았습니다.');
+  // 결제 완료 후 유료 플랜으로 바뀔 때까지 3초마다 확인(최대 60초). 웹훅이 늦어도 사용자가 다시 결제하지 않게 안내.
+  useEffect(() => {
+    if (!confirming) return;
+    if (status && status.plan !== 'free') {
+      setConfirming(null);
       return;
     }
+    const poll = setInterval(loadStatus, 3000);
+    const slow = setTimeout(() => setConfirming('slow'), 60000);
+    return () => {
+      clearInterval(poll);
+      clearTimeout(slow);
+    };
+  }, [confirming, status]);
+
+  const subscribe = async (plan: PlanId) => {
+    setError(null);
     setBusy(plan);
     try {
-      // 1) 빌링키 발급(카드 등록) — 카드정보는 PortOne 결제창에서만 입력(서버 미경유).
-      const issue = await PortOne.requestIssueBillingKey({
-        storeId: STORE_ID,
-        channelKey: CHANNEL_KEY,
-        billingKeyMethod: 'CARD',
-      });
-      if (!issue || issue.code !== undefined) {
-        setError(issue?.message || '카드 등록이 취소되었습니다.');
-        return;
-      }
-      // 2) 서버에 빌링키 전달 → 첫 결제 + 구독 활성화(금액은 서버가 결정).
-      const res = await authedFetch('/api/billing/issue', {
+      // 서버가 Price ID·userId를 결정해 내려준다(클라 신뢰 금지).
+      const res = await authedFetch('/api/billing/checkout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ billingKey: issue.billingKey, plan }),
+        body: JSON.stringify({ plan }),
       });
+      const cfg = await res.json().catch(() => ({}));
       if (!res.ok) {
-        const e = await res.json().catch(() => ({}));
-        setError(e.error || '결제에 실패했습니다.');
+        setError(cfg.error || '결제를 시작하지 못했습니다.');
         return;
       }
-      await loadStatus();
+      const Paddle = await loadPaddle();
+      onPaddleEvent = (name) => {
+        // 권한 지급은 웹훅이 처리 — 완료 후 상태가 바뀔 때까지 폴링한다.
+        if (name === 'checkout.completed') setConfirming('waiting');
+      };
+      if (!paddleReady) {
+        if (cfg.env === 'sandbox') Paddle.Environment.set('sandbox');
+        Paddle.Initialize({ token: cfg.token, eventCallback: (ev: { name: string }) => onPaddleEvent(ev.name) });
+        paddleReady = true;
+      }
+      Paddle.Checkout.open({
+        items: [{ priceId: cfg.priceId, quantity: 1 }],
+        customData: cfg.customData,
+        ...(cfg.email ? { customer: { email: cfg.email } } : {}),
+      });
     } catch (e) {
       setError(e instanceof Error ? e.message : '오류가 발생했습니다.');
     } finally {
@@ -84,6 +115,13 @@ export default function PricingPlans() {
 
   return (
     <div>
+      {confirming && (
+        <p className="mb-4 rounded-md bg-blue-50 px-4 py-2 text-sm text-blue-700">
+          {confirming === 'waiting'
+            ? '결제를 확인하고 있습니다. 잠시만 기다려 주세요. 다시 결제하지 마세요.'
+            : '결제는 접수되었지만 반영이 늦어지고 있습니다. 다시 결제하지 마시고, 몇 분 뒤에도 그대로면 wisemanroot@gmail.com 으로 문의해 주세요.'}
+        </p>
+      )}
       {error && (
         <p className="mb-4 rounded-md bg-red-50 px-4 py-2 text-sm text-red-600">{error}</p>
       )}
@@ -107,7 +145,7 @@ export default function PricingPlans() {
               <CardContent className="space-y-3">
                 <ul className="space-y-1 text-sm text-muted-foreground">
                   <li className="flex items-center gap-2">
-                    <Check className="h-4 w-4 text-primary" /> 월 회의 {plan.monthlyMeetings}건
+                    <Check className="h-4 w-4 text-primary" /> 월 프로젝트 {plan.monthlyMeetings}건
                   </li>
                   <li className="flex items-center gap-2">
                     <Check className="h-4 w-4 text-primary" /> 문서 14종 전부
@@ -121,7 +159,7 @@ export default function PricingPlans() {
                     </li>
                   )}
                 </ul>
-                {isPaid && !isCurrent && (
+                {isPaid && !isCurrent && currentPlan === 'free' && (
                   <Button className="w-full" disabled={busy !== null} onClick={() => subscribe(plan.id)}>
                     {busy === plan.id ? <Loader2 className="h-4 w-4 animate-spin" /> : '구독하기'}
                   </Button>

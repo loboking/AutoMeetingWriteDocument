@@ -34,7 +34,15 @@ export default function TermsPage() {
           <p>베타 기간 중 데이터 손실·오류·서비스 중단으로 인한 손해에 대해 운영자는 책임을 지지 않습니다. 중요한 데이터는 별도 백업을 권장합니다.</p>
         </div>
         <div>
-          <h2 className="font-semibold text-base mb-1">제6조 (문의)</h2>
+          <h2 className="font-semibold text-base mb-1">제6조 (요금 및 결제)</h2>
+          <p>유료 상품의 가격과 이용 한도는 <Link href="/pricing" className="text-primary underline">요금제 페이지</Link>에 표시된 바에 따릅니다. 결제는 Merchant of Record인 Paddle을 통해 처리되며, 구독은 해지하기 전까지 매월 자동 갱신됩니다.</p>
+        </div>
+        <div>
+          <h2 className="font-semibold text-base mb-1">제7조 (해지 및 환불)</h2>
+          <p>구독 해지와 환불 기준은 <Link href="/refund" className="text-primary underline">환불정책</Link>을 따릅니다.</p>
+        </div>
+        <div>
+          <h2 className="font-semibold text-base mb-1">제8조 (문의)</h2>
           <p>문의: wisemanroot@gmail.com</p>
         </div>
       </section>
